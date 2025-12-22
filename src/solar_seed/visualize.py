@@ -89,55 +89,64 @@ def plot_null_model_decomposition(
     # Colors: gradient from light to dark
     colors = ['#bdc3c7', '#95a5a6', '#7f8c8d', '#2c3e50']
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(11, 7))
 
     x = np.arange(len(labels))
     bars = ax.bar(x, values, yerr=errors, capsize=5, color=colors,
                   edgecolor='black', linewidth=1.5, alpha=0.9)
 
-    # Add value labels on bars
-    for bar, val, err in zip(bars, values, errors):
+    # Add value labels inside bars (white text)
+    for bar, val in zip(bars, values):
         height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height + err + 0.02,
-                f'{val:.3f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+        y_pos = height / 2 if height > 0.15 else height + 0.03
+        color = 'white' if height > 0.15 else 'black'
+        ax.text(bar.get_x() + bar.get_width()/2., y_pos,
+                f'{val:.3f}', ha='center', va='center', fontsize=12, fontweight='bold', color=color)
 
-    # Add delta annotations
-    deltas = [
-        (0, 1, f'Δ = {values[1] - values[0]:.2f}', 'Radial\nstructure'),
-        (1, 2, f'Δ = {values[2] - values[1]:.3f}', 'Azimuthal\nstructure'),
-        (2, 3, f'Δ = {values[3] - values[2]:.2f}', 'Local\ncoupling'),
+    # Add delta annotations - positioned above with clear spacing
+    delta_info = [
+        (0, 1, values[1] - values[0], 'Radial'),
+        (1, 2, values[2] - values[1], 'Azimuthal'),
+        (2, 3, values[3] - values[2], 'Local'),
     ]
 
-    for i, (start, end, delta_text, component) in enumerate(deltas):
-        y_pos = max(values[start], values[end]) + 0.12 + i * 0.08
-        ax.annotate('', xy=(end, values[end] + errors[end] + 0.05),
-                   xytext=(start, values[start] + errors[start] + 0.05),
-                   arrowprops=dict(arrowstyle='<->', color='#e74c3c', lw=2))
-        ax.text((start + end) / 2, y_pos, f'{delta_text}\n({component})',
-               ha='center', va='bottom', fontsize=9, color='#c0392b', fontweight='bold')
+    # Draw connecting brackets above bars
+    bracket_y = 0.88
+    for start, end, delta, label in delta_info:
+        mid_x = (start + end) / 2
+        # Horizontal line
+        ax.plot([start, end], [bracket_y, bracket_y], color='#c0392b', lw=2)
+        # Vertical ticks
+        ax.plot([start, start], [bracket_y - 0.02, bracket_y], color='#c0392b', lw=2)
+        ax.plot([end, end], [bracket_y - 0.02, bracket_y], color='#c0392b', lw=2)
+        # Delta label above
+        ax.text(mid_x, bracket_y + 0.03, f'Δ={delta:.2f}\n({label})',
+               ha='center', va='bottom', fontsize=10, color='#c0392b', fontweight='bold')
+        bracket_y += 0.18  # Increase for next bracket
 
     ax.set_ylabel('Mutual Information (bits)', fontsize=12)
     ax.set_xlabel('Null Model', fontsize=12)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=11)
-    ax.set_ylim(0, 1.0)
+    ax.set_ylim(0, 1.45)
     ax.grid(True, alpha=0.3, axis='y')
 
-    # Add explanation box
+    # Add explanation box - bottom right to avoid overlap
     explanation = (
-        "Hierarchy removes structure progressively:\n"
-        "• Global: destroys all spatial structure\n"
-        "• Ring: preserves radial intensity profile\n"
-        "• Sector: preserves coarse angular structure\n"
-        "• Original: full local coupling"
+        "Hierarchy removes structure:\n"
+        "• Global → destroys all\n"
+        "• Ring → keeps radial\n"
+        "• Sector → keeps angular\n"
+        "• Original → full structure"
     )
-    ax.text(0.02, 0.98, explanation, transform=ax.transAxes, fontsize=9,
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    ax.text(0.98, 0.02, explanation, transform=ax.transAxes, fontsize=9,
+            verticalalignment='bottom', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
-    # Highlight ΔMI_sector
-    ax.axhspan(values[2], values[3], alpha=0.2, color='#e74c3c',
+    # Highlight ΔMI_sector band
+    ax.axhspan(values[2], values[3], alpha=0.15, color='#e74c3c',
                label=f'ΔMI_sector = {values[3] - values[2]:.2f} bits')
-    ax.legend(loc='upper right', fontsize=10)
+    ax.legend(loc='upper left', fontsize=10)
 
     ax.set_title('Null Model Decomposition of Mutual Information',
                 fontsize=13, fontweight='bold')
