@@ -159,9 +159,19 @@ src/solar_seed/
 
 ## Citation
 
-If you use this code, please cite:
+If you use this work, please cite:
 
-> Geometry-controlled mutual information reveals temperature-ordered coupling in the solar atmosphere. (2025)
+> **Geometry-controlled mutual information reveals temperature-ordered coupling in the solar atmosphere (2025)**
+> https://github.com/lubeschanin/solar-seed
+
+```bibtex
+@software{solar_seed_2025,
+  author = {Lubeschanin},
+  title = {Solar Seed: Geometry-controlled mutual information analysis of SDO/AIA},
+  year = {2025},
+  url = {https://github.com/lubeschanin/solar-seed}
+}
+```
 
 ## License
 
