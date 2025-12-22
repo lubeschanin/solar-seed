@@ -1,0 +1,28 @@
+{
+  "run_timestamp": "2025-12-21T19:18:39.482257",
+  "duration_seconds": 5.7619969844818115,
+  "config": {
+    "wavelength_1": 193,
+    "wavelength_2": 211,
+    "start_time": null,
+    "hours": 6.0,
+    "cadence_minutes": 12,
+    "output_dir": "results/real_run",
+    "bins": 64,
+    "n_shuffles": 100,
+    "seed": 42
+  },
+  "summary": {
+    "n_timepoints": 30,
+    "mean_mi_ratio": 0.30826400027471934,
+    "std_mi_ratio": 0.006907623689156551,
+    "mean_delta_mi_ring": 0.19163185208677744,
+    "mean_delta_mi_sector": 0.16655731830614198,
+    "controls_passed": false
+  },
+  "interpretation": {
+    "mi_ratio_meaning": "MI_residual / MI_original - wie viel MI bleibt nach Geometrie-Subtraktion",
+    "delta_mi_ring_meaning": "MI_residual - MI_ring_shuffle - Struktur jenseits radialer Statistik",
+    "delta_mi_sector_meaning": "MI_residual - MI_sector_shuffle - echte lokale Struktur"
+  }
+}

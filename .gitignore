@@ -52,10 +52,8 @@ data/
 *.jpeg
 *.png
 
-# Results
-results/
-!results/.gitkeep
-*.json
+# Results (tracked for reproducibility)
+# results/ now tracked
 
 # OS
 .DS_Store

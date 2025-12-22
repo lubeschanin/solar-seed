@@ -1,0 +1,32 @@
+{
+  "c1_time_shift": {
+    "mi_original": 0.7364664020575216,
+    "mi_shifted": 0.029895868317577623,
+    "reduction_percent": 95.94063378396417,
+    "passed": true
+  },
+  "c2_ring_shuffle": {
+    "mi_original": 0.7364664020575216,
+    "mi_ring_shuffled": 0.5614966837413045,
+    "mi_global_shuffled": 0.024222999176330973,
+    "ring_reduction_percent": 23.758004143487206,
+    "global_reduction_percent": 96.71091592112589
+  },
+  "c3_blur_match": {
+    "mi_original": 0.7364664020575216,
+    "mi_blurred": 0.8952226364371283,
+    "change_percent": 21.55648023264571,
+    "blur_sigma": 2.0,
+    "stable": false
+  },
+  "c4_co_alignment": {
+    "mi_at_zero": 0.7364664020575216,
+    "mi_at_max": 0.7364664020575216,
+    "max_shift": [
+      0,
+      0
+    ],
+    "centered": true
+  },
+  "all_passed": false
+}

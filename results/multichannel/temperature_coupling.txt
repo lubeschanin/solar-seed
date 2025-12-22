@@ -1,0 +1,30 @@
+TEMPERATUR-KOPPLUNGS-ANALYSE
+======================================================================
+
+Hypothese: Benachbarte Temperaturschichten sollten stärker gekoppelt sein.
+
+Paare sortiert nach ΔMI_sector (höchste Kopplung zuerst):
+----------------------------------------------------------------------
+Paar            ΔT (MK)    ΔMI_sector   Interpretation
+----------------------------------------------------------------------
+304-211     1.95       0.4762       
+304-193     1.15       0.4522       
+304-335     2.45       0.4457       
+304-171     0.55       0.3470       ← benachbart
+211-94      4.30       0.3104       
+193-94      5.10       0.3099       ← weit entfernt
+335-94      3.80       0.3055       
+193-131     8.80       0.2993       ← weit entfernt
+335-131     7.50       0.2985       ← weit entfernt
+211-131     8.00       0.2967       ← weit entfernt
+171-193     0.60       0.2964       ← benachbart
+171-211     1.40       0.2855       
+211-335     0.50       0.2780       ← benachbart
+193-335     1.30       0.2770       
+193-211     0.80       0.2752       ← benachbart
+171-335     1.90       0.2732       
+171-131     9.40       0.2192       ← weit entfernt
+171-94      5.70       0.2139       ← weit entfernt
+94-131     3.70       0.2047       
+304-94      6.25       0.1817       ← weit entfernt
+304-131     9.95       0.1736       ← weit entfernt

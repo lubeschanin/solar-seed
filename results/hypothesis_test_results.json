@@ -1,0 +1,79 @@
+[
+  {
+    "label": "Reines Rauschen",
+    "mi_real": 0.2700198671917029,
+    "nmi_real": 0.06007270015060251,
+    "mi_null_mean": 0.2738552665253936,
+    "mi_null_std": 0.008536476240730787,
+    "z_score": -0.4492953796779225,
+    "p_value": 1.0,
+    "status": "\u2717 NICHT SIGNIFIKANT",
+    "interpretation": "MI liegt im erwarteten Bereich des Nullmodells. Keine Evidenz f\u00fcr zus\u00e4tzliche Struktur."
+  },
+  {
+    "label": "Korreliert (r=0.5)",
+    "mi_real": 0.24424867458723387,
+    "nmi_real": 0.08814627763151338,
+    "mi_null_mean": 0.062300281464046176,
+    "mi_null_std": 0.0038399357227839,
+    "z_score": 47.383187182955666,
+    "p_value": 0.0,
+    "status": "\u2713 SIGNIFIKANT",
+    "interpretation": "MI ist hochsignifikant h\u00f6her als erwartet (p < 0.01). Die Kan\u00e4le teilen Information, die nicht durch Zufall erkl\u00e4rbar ist."
+  },
+  {
+    "label": "Sonne (Geometrie)",
+    "mi_real": 2.4312653694606876,
+    "nmi_real": 0.49787779747073796,
+    "mi_null_mean": 0.5195719775127651,
+    "mi_null_std": 0.007228800728492439,
+    "z_score": 264.45512385103535,
+    "p_value": 0.0,
+    "status": "\u2713 SIGNIFIKANT",
+    "interpretation": "MI ist hochsignifikant h\u00f6her als erwartet (p < 0.01). Die Kan\u00e4le teilen Information, die nicht durch Zufall erkl\u00e4rbar ist."
+  },
+  {
+    "label": "Sonne (extra r=0.5)",
+    "mi_real": 2.4602958529415453,
+    "nmi_real": 0.491075654280742,
+    "mi_null_mean": 0.5499723502866543,
+    "mi_null_std": 0.01027746474945813,
+    "z_score": 185.87497493052567,
+    "p_value": 0.0,
+    "status": "\u2713 SIGNIFIKANT",
+    "interpretation": "MI ist hochsignifikant h\u00f6her als erwartet (p < 0.01). Die Kan\u00e4le teilen Information, die nicht durch Zufall erkl\u00e4rbar ist."
+  },
+  {
+    "label": "Residual (Geometrie)",
+    "mi_real": 0.8835645470941875,
+    "nmi_real": 0.2961722000216495,
+    "mi_null_mean": 0.16744689804403243,
+    "mi_null_std": 0.007812946085798926,
+    "z_score": 91.65782550986684,
+    "p_value": 0.0,
+    "status": "\u2713 SIGNIFIKANT",
+    "interpretation": "MI ist hochsignifikant h\u00f6her als erwartet (p < 0.01). Die Kan\u00e4le teilen Information, die nicht durch Zufall erkl\u00e4rbar ist."
+  },
+  {
+    "label": "Residual (extra r=0.5)",
+    "mi_real": 1.0464471182182313,
+    "nmi_real": 0.3345388815983027,
+    "mi_null_mean": 0.1769522931279905,
+    "mi_null_std": 0.0078008150069865615,
+    "z_score": 111.46204906942471,
+    "p_value": 0.0,
+    "status": "\u2713 SIGNIFIKANT",
+    "interpretation": "MI ist hochsignifikant h\u00f6her als erwartet (p < 0.01). Die Kan\u00e4le teilen Information, die nicht durch Zufall erkl\u00e4rbar ist."
+  },
+  {
+    "label": "AIA Sample",
+    "mi_real": 0.977965173047882,
+    "nmi_real": 0.4758967296604751,
+    "mi_null_mean": 0.011356128939180135,
+    "mi_null_std": 0.0010810257280103857,
+    "z_score": 894.1591481710002,
+    "p_value": 0.0,
+    "status": "\u2713 SIGNIFIKANT",
+    "interpretation": "MI ist hochsignifikant h\u00f6her als erwartet (p < 0.01). Die Kan\u00e4le teilen Information, die nicht durch Zufall erkl\u00e4rbar ist."
+  }
+]
