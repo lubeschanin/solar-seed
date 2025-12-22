@@ -214,4 +214,4 @@ Careful separation of geometric, statistical, and local contributions is essenti
 
 ![Figure 4](figures/figure4_coupling_matrix.png)
 
-*Geometry-controlled local coupling matrix (ΔMI_sector) for seven AIA EUV channels spanning chromospheric to flare temperatures. Strong coupling is observed between thermally adjacent channels, while distant temperature pairs exhibit weaker coupling. The temperature-ordered structure is consistent with magnetically mediated interactions between neighboring atmospheric layers.*
+*Geometry-controlled local coupling matrix (ΔMI_sector) for seven AIA EUV channels. Channels ordered by characteristic formation temperature. Stronger coupling is observed between thermally adjacent channels, consistent with magnetically mediated interactions between neighboring layers.*
