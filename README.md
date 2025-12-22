@@ -55,24 +55,6 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 *Geometry-controlled local coupling matrix (ΔMI_sector) for seven AIA EUV channels spanning chromospheric to flare temperatures. Stronger coupling is observed between thermally adjacent channels, consistent with magnetically mediated interactions between neighboring layers.*
 
-### Temperature-Ordered Coupling
-
-![Temperature Coupling](figures/temperature_coupling.png)
-
-*Left: Coupling strength vs temperature distance. Right: Top channel pairs ranked by coupling.*
-
-### Null Model Hierarchy
-
-![Null Model Hierarchy](figures/null_model_hierarchy.png)
-
-*Schematic of the geometry-removal hierarchy used to isolate local coupling.*
-
-### AIA Channel Overview
-
-![AIA Channels](figures/aia_channels.png)
-
-*SDO/AIA EUV channels by peak formation temperature.*
-
 ## Methods
 
 ### Hierarchy of Null Models
