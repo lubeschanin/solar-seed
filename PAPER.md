@@ -208,7 +208,7 @@ Careful separation of geometric, statistical, and local contributions is essenti
 
 ![Figure 3](figures/figure3_null_model_decomposition.png)
 
-*Mutual information values under progressively restrictive null models. Global shuffle destroys all spatial structure; ring-wise shuffle preserves radial statistics; sector–ring shuffle preserves coarse geometry. The remaining difference (ΔMI_sector) quantifies local coupling beyond geometric and statistical effects. Error bars represent standard deviation across timepoints.*
+*Mutual information values under progressively restrictive null models: global shuffle (destroys all structure), ring shuffle (preserves radial statistics), sector shuffle (preserves coarse geometry). The difference ΔMI_sector quantifies local coupling beyond geometry. Error bars indicate standard deviation over time.*
 
 ### Figure 4 — Coupling Matrix
 

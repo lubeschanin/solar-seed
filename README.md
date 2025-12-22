@@ -47,7 +47,7 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 ![Figure 3 — Null model decomposition](figures/figure3_null_model_decomposition.png)
 
-*Mutual information values under progressively restrictive null models: global shuffle (destroys all structure), ring shuffle (preserves radial statistics), sector shuffle (preserves coarse geometry). The difference ΔMI_sector quantifies local coupling beyond geometry. Error bars show standard deviation.*
+*Mutual information values under progressively restrictive null models: global shuffle (destroys all structure), ring shuffle (preserves radial statistics), sector shuffle (preserves coarse geometry). The difference ΔMI_sector quantifies local coupling beyond geometry. Error bars indicate standard deviation over time.*
 
 ### Figure 4 — Coupling Matrix
 
