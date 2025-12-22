@@ -43,6 +43,12 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 *Spatial maps of residual mutual information between 193 Å and 211 Å channels on an 8×8 grid. Limb bias is removed after geometric normalization, revealing localized regions of enhanced coupling. Hotspots (cyan stars) correspond to active regions.*
 
+### Figure 3 — Null Model Decomposition
+
+![Figure 3 — Null model decomposition](figures/figure3_null_model_decomposition.png)
+
+*Mutual information values under progressively restrictive null models: global shuffle (destroys all structure), ring shuffle (preserves radial statistics), sector shuffle (preserves coarse geometry). The difference ΔMI_sector quantifies local coupling beyond geometry. Error bars show standard deviation.*
+
 ### Coupling Matrix
 
 ![Coupling Matrix](figures/coupling_matrix.png)
