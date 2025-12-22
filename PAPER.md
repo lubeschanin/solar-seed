@@ -192,18 +192,26 @@ Careful separation of geometric, statistical, and local contributions is essenti
 
 ## Figures
 
-### Figure 1 | Effect of geometric normalization on multichannel mutual information
+### Figure 1 — Effect of Geometric Normalization
 
-Global mutual information (MI) between AIA EUV channels before and after geometric normalization. Left: MI computed on original images, dominated by disk geometry and limb brightening. Right: MI computed on residual images after radial profile normalization. Approximately 70% of apparent MI is removed, while a stable residual component remains. Error bars indicate standard deviation across 30 timepoints.
+![Figure 1](figures/figure1_geometric_normalization.png)
 
-### Figure 2 | Spatial distribution of multichannel coupling
+*Global mutual information (MI) between AIA EUV channels before and after geometric normalization. Left: MI computed on original images, dominated by disk geometry and limb brightening. Right: MI computed on residual images after radial profile normalization. Approximately 70% of apparent MI is removed, while a stable residual component remains.*
 
-Spatial maps of mutual information between AIA channels (193 Å and 211 Å). Left: MI computed on original images, showing strong limb-dominated structure. Right: MI computed on geometry-normalized residuals. Limb bias is removed, revealing localized regions of enhanced coupling. Values are shown in bits. Hotspots correspond to active regions and persist across timepoints.
+### Figure 2 — Spatial Distribution
 
-### Figure 3 | Decomposition of multichannel coupling using null models
+![Figure 2](figures/figure2_spatial_distribution.png)
 
-Mutual information values under progressively restrictive null models. Global shuffle destroys all spatial structure; ring-wise shuffle preserves radial statistics; sector–ring shuffle preserves coarse geometry. The remaining difference ($\Delta\text{MI}_{\text{sector}}$) quantifies local coupling beyond geometric and statistical effects. Error bars represent standard deviation across timepoints.
+*Spatial maps of mutual information between AIA channels (193 Å and 211 Å) on an 8×8 grid. Left: MI computed on original images, showing strong limb-dominated structure. Right: MI computed on geometry-normalized residuals. Limb bias is removed, revealing localized regions of enhanced coupling. Hotspots (cyan stars) correspond to active regions.*
 
-### Figure 4 | Coupling matrix of the solar atmosphere
+### Figure 3 — Null Model Decomposition
 
-Geometry-controlled local coupling matrix ($\Delta\text{MI}_{\text{sector}}$) for seven AIA EUV channels spanning chromospheric to flare temperatures. Values represent mean $\Delta\text{MI}_{\text{sector}}$ over the analysis window. Strong coupling is observed between thermally adjacent channels, while distant temperature pairs exhibit weaker coupling. The temperature-ordered structure is consistent with magnetically mediated interactions between neighboring atmospheric layers.
+![Figure 3](figures/figure3_null_model_decomposition.png)
+
+*Mutual information values under progressively restrictive null models. Global shuffle destroys all spatial structure; ring-wise shuffle preserves radial statistics; sector–ring shuffle preserves coarse geometry. The remaining difference (ΔMI_sector) quantifies local coupling beyond geometric and statistical effects. Error bars represent standard deviation across timepoints.*
+
+### Figure 4 — Coupling Matrix
+
+![Figure 4](figures/figure4_coupling_matrix.png)
+
+*Geometry-controlled local coupling matrix (ΔMI_sector) for seven AIA EUV channels spanning chromospheric to flare temperatures. Strong coupling is observed between thermally adjacent channels, while distant temperature pairs exhibit weaker coupling. The temperature-ordered structure is consistent with magnetically mediated interactions between neighboring atmospheric layers.*
