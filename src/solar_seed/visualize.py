@@ -188,15 +188,16 @@ def plot_spatial_distribution(
     residual_mi[0, 1] = 1.26  # Hotspot 5
     residual_mi = np.clip(residual_mi, 0.18, 1.42)
 
-    # Create figure
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    # Create figure with space for colorbar
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    plt.subplots_adjust(right=0.88, top=0.88, wspace=0.25)
 
     # Common colormap settings
     cmap = 'YlOrRd'
+    vmax = max(original_mi.max(), residual_mi.max())
 
     # Left: Original MI
     ax1 = axes[0]
-    vmax = max(original_mi.max(), residual_mi.max())
     im1 = ax1.imshow(original_mi, cmap=cmap, vmin=0, vmax=vmax, aspect='equal')
 
     # Add grid lines
@@ -252,18 +253,18 @@ def plot_spatial_distribution(
     for idx, (row, col) in enumerate(hotspots[:3]):
         ax2.plot(col, row, 'c*', markersize=15, markeredgecolor='white', markeredgewidth=1)
 
-    # Colorbar
-    cbar = fig.colorbar(im2, ax=axes, orientation='vertical', fraction=0.02, pad=0.04)
+    # Colorbar - positioned manually to avoid overlap
+    cbar_ax = fig.add_axes([0.91, 0.15, 0.02, 0.65])
+    cbar = fig.colorbar(im2, cax=cbar_ax)
     cbar.set_label('Mutual Information (bits)', fontsize=10)
 
     # Main title
     fig.suptitle(
         'Spatial Distribution of Mutual Information\n'
         '(Limb bias removed after geometric normalization)',
-        fontsize=13, fontweight='bold', y=1.02
+        fontsize=13, fontweight='bold'
     )
 
-    plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  Saved: {output_path}")
