@@ -159,7 +159,7 @@ src/solar_seed/
 
 If you use this code, please cite:
 
-> Geometry-controlled mutual information reveals temperature-ordered coupling in the solar atmosphere. (2024)
+> Geometry-controlled mutual information reveals temperature-ordered coupling in the solar atmosphere. (2025)
 
 ## License
 
