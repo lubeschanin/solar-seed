@@ -32,6 +32,94 @@ def load_coupling_data(results_dir: Path) -> dict:
         return json.load(f)
 
 
+def load_pair_results(results_dir: Path) -> list[dict]:
+    """Load pair results from CSV."""
+    import csv
+    csv_path = results_dir / "pair_results.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"No pair results found at {csv_path}")
+
+    with open(csv_path) as f:
+        reader = csv.DictReader(f)
+        return list(reader)
+
+
+def plot_geometric_normalization(
+    results_dir: Path,
+    output_path: Path,
+) -> None:
+    """Figure 1: Effect of geometric normalization on MI.
+
+    Shows MI before and after radial profile normalization.
+    """
+    import matplotlib.pyplot as plt
+
+    pairs = load_pair_results(results_dir)
+
+    # Extract data
+    pair_labels = []
+    mi_original = []
+    mi_residual = []
+
+    for p in pairs:
+        label = f"{p['wavelength_1']}-{p['wavelength_2']}"
+        pair_labels.append(label)
+        mi_original.append(float(p['mi_original']))
+        mi_residual.append(float(p['mi_residual']))
+
+    # Sort by original MI for better visualization
+    sorted_idx = np.argsort(mi_original)[::-1]
+    pair_labels = [pair_labels[i] for i in sorted_idx]
+    mi_original = [mi_original[i] for i in sorted_idx]
+    mi_residual = [mi_residual[i] for i in sorted_idx]
+
+    # Calculate statistics
+    mean_original = np.mean(mi_original)
+    mean_residual = np.mean(mi_residual)
+    reduction_pct = (1 - mean_residual / mean_original) * 100
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    x = np.arange(len(pair_labels))
+    width = 0.7
+
+    # Left: Original MI
+    bars1 = ax1.bar(x, mi_original, width, color='#3498db', edgecolor='black', alpha=0.8)
+    ax1.set_ylabel('Mutual Information (bits)', fontsize=11)
+    ax1.set_xlabel('Channel Pair', fontsize=11)
+    ax1.set_title('Original Images', fontsize=12, fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([f"{l} Å" for l in pair_labels], rotation=45, ha='right', fontsize=8)
+    ax1.axhline(y=mean_original, color='red', linestyle='--', linewidth=2, label=f'Mean = {mean_original:.2f} bits')
+    ax1.legend(loc='upper right')
+    ax1.set_ylim(0, max(mi_original) * 1.15)
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # Right: Residual MI
+    bars2 = ax2.bar(x, mi_residual, width, color='#e74c3c', edgecolor='black', alpha=0.8)
+    ax2.set_ylabel('Mutual Information (bits)', fontsize=11)
+    ax2.set_xlabel('Channel Pair', fontsize=11)
+    ax2.set_title('After Radial Normalization', fontsize=12, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([f"{l} Å" for l in pair_labels], rotation=45, ha='right', fontsize=8)
+    ax2.axhline(y=mean_residual, color='red', linestyle='--', linewidth=2, label=f'Mean = {mean_residual:.2f} bits')
+    ax2.legend(loc='upper right')
+    ax2.set_ylim(0, max(mi_original) * 1.15)  # Same scale as left
+    ax2.grid(True, alpha=0.3, axis='y')
+
+    # Main title
+    fig.suptitle(
+        f'Effect of Geometric Normalization on Multichannel MI\n'
+        f'(~{reduction_pct:.0f}% reduction, stable residual remains)',
+        fontsize=13, fontweight='bold', y=1.02
+    )
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {output_path}")
+
+
 def plot_coupling_heatmap(
     data: dict,
     output_path: Path,
@@ -324,6 +412,7 @@ def generate_all_figures(
 
     # Generate figures
     if has_data:
+        plot_geometric_normalization(results_dir, output_dir / "figure1_geometric_normalization.png")
         plot_coupling_heatmap(data, output_dir / "coupling_matrix.png")
         plot_temperature_coupling(data, output_dir / "temperature_coupling.png")
 

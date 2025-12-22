@@ -31,6 +31,12 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 ## Visualizations
 
+### Figure 1 — Effect of Geometric Normalization
+
+![Figure 1 — Effect of geometric normalization on multichannel MI](figures/figure1_geometric_normalization.png)
+
+*Global mutual information (MI) between AIA EUV channels before and after geometric normalization. Left: MI on original images; Right: MI on residual images after radial profile normalization. Approximately 70% of apparent MI is removed, while a stable residual component remains.*
+
 ### Coupling Matrix
 
 ![Coupling Matrix](figures/coupling_matrix.png)
