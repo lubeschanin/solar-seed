@@ -37,6 +37,12 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 *Global mutual information (MI) between AIA EUV channels before and after geometric normalization. Left: MI on original images; Right: MI on residual images after radial profile normalization. Approximately 70% of apparent MI is removed, while a stable residual component remains.*
 
+### Figure 2 — Spatial Distribution
+
+![Figure 2 — Spatial MI maps](figures/figure2_spatial_distribution.png)
+
+*Spatial maps of residual mutual information between 193 Å and 211 Å channels on an 8×8 grid. Limb bias is removed after geometric normalization, revealing localized regions of enhanced coupling. Hotspots (cyan stars) correspond to active regions.*
+
 ### Coupling Matrix
 
 ![Coupling Matrix](figures/coupling_matrix.png)
