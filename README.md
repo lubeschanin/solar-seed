@@ -49,11 +49,11 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 *Mutual information values under progressively restrictive null models: global shuffle (destroys all structure), ring shuffle (preserves radial statistics), sector shuffle (preserves coarse geometry). The difference ΔMI_sector quantifies local coupling beyond geometry. Error bars show standard deviation.*
 
-### Coupling Matrix
+### Figure 4 — Coupling Matrix
 
-![Coupling Matrix](figures/coupling_matrix.png)
+![Figure 4 — Coupling matrix of solar atmosphere](figures/figure4_coupling_matrix.png)
 
-*7×7 local coupling matrix (ΔMI_sector) showing strongest coupling between 193-211 Å.*
+*Geometry-controlled local coupling matrix (ΔMI_sector) for seven AIA EUV channels spanning chromospheric to flare temperatures. Stronger coupling is observed between thermally adjacent channels, consistent with magnetically mediated interactions between neighboring layers.*
 
 ### Temperature-Ordered Coupling
 

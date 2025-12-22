@@ -640,7 +640,7 @@ def generate_all_figures(
         plot_geometric_normalization(results_dir, output_dir / "figure1_geometric_normalization.png")
         plot_spatial_distribution(output_dir / "figure2_spatial_distribution.png", results_dir)
         plot_null_model_decomposition(output_dir / "figure3_null_model_decomposition.png", results_dir)
-        plot_coupling_heatmap(data, output_dir / "coupling_matrix.png")
+        plot_coupling_heatmap(data, output_dir / "figure4_coupling_matrix.png")
         plot_temperature_coupling(data, output_dir / "temperature_coupling.png")
 
     # These don't need data
