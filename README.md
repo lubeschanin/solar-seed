@@ -2,6 +2,8 @@
 
 **Geometry-controlled mutual information reveals temperature-ordered coupling in the solar atmosphere**
 
+> **TL;DR:** Open-access reference implementation for geometry-controlled mutual information analysis of SDO/AIA EUV channels. Includes paper, code, and reproducible pipelines demonstrating temperature-ordered coupling in the solar atmosphere.
+
 ## Abstract
 
 Understanding how different thermal layers of the solar atmosphere are coupled is central to solar physics and space-weather prediction. While correlations between extreme-ultraviolet (EUV) channels are well known, disentangling genuine physical coupling from geometric and statistical confounders remains challenging.
