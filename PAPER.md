@@ -202,7 +202,7 @@ Careful separation of geometric, statistical, and local contributions is essenti
 
 ![Figure 2](figures/figure2_spatial_distribution.png)
 
-*Spatial maps of mutual information between AIA channels (193 Å and 211 Å) on an 8×8 grid. Left: MI computed on original images, showing strong limb-dominated structure. Right: MI computed on geometry-normalized residuals. Limb bias is removed, revealing localized regions of enhanced coupling. Hotspots (cyan stars) correspond to active regions.*
+*Spatial maps of mutual information between 193 Å and 211 Å channels on an 8×8 grid. Left: Original MI showing strong limb bias. Right: Residual MI after geometric normalization. Stars indicate top residual MI cells, corresponding to active regions.*
 
 ### Figure 3 — Null Model Decomposition
 
