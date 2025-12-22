@@ -344,8 +344,8 @@ def plot_geometric_normalization(
 
     # Main title
     fig.suptitle(
-        f'Effect of Geometric Normalization on Multichannel MI\n'
-        f'(~{reduction_pct:.0f}% reduction, stable residual remains)',
+        f'Effect of geometric normalization on multichannel mutual information\n'
+        f'({reduction_pct:.0f}% reduction, stable residual remains)',
         fontsize=13, fontweight='bold', y=1.02
     )
 
