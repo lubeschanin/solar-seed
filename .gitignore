@@ -48,9 +48,12 @@ CLAUDE.md
 data/
 !data/.gitkeep
 *.fits
+
+# Images (except figures/)
 *.jpg
 *.jpeg
 *.png
+!figures/*.png
 
 # Results (tracked for reproducibility)
 # results/ now tracked

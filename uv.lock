@@ -1778,6 +1778,7 @@ dependencies = [
 all = [
     { name = "aiapy" },
     { name = "astropy" },
+    { name = "matplotlib" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -1793,6 +1794,9 @@ sunpy = [
     { name = "astropy" },
     { name = "sunpy" },
 ]
+viz = [
+    { name = "matplotlib" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1805,15 +1809,16 @@ dev = [
 requires-dist = [
     { name = "aiapy", marker = "extra == 'sunpy'", specifier = ">=0.10.0" },
     { name = "astropy", marker = "extra == 'sunpy'", specifier = ">=6.0.0" },
+    { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "scipy", specifier = ">=1.11.0" },
-    { name = "solar-seed", extras = ["sunpy", "dev"], marker = "extra == 'all'" },
+    { name = "solar-seed", extras = ["sunpy", "viz", "dev"], marker = "extra == 'all'" },
     { name = "sunpy", marker = "extra == 'sunpy'", specifier = ">=5.0.0" },
 ]
-provides-extras = ["sunpy", "dev", "all"]
+provides-extras = ["sunpy", "viz", "dev", "all"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -29,6 +29,32 @@ Strongest local coupling between thermally adjacent layers:
 
 Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dependent coupling.
 
+## Visualizations
+
+### Coupling Matrix
+
+![Coupling Matrix](figures/coupling_matrix.png)
+
+*7×7 local coupling matrix (ΔMI_sector) showing strongest coupling between 193-211 Å.*
+
+### Temperature-Ordered Coupling
+
+![Temperature Coupling](figures/temperature_coupling.png)
+
+*Left: Coupling strength vs temperature distance. Right: Top channel pairs ranked by coupling.*
+
+### Null Model Hierarchy
+
+![Null Model Hierarchy](figures/null_model_hierarchy.png)
+
+*Schematic of the geometry-removal hierarchy used to isolate local coupling.*
+
+### AIA Channel Overview
+
+![AIA Channels](figures/aia_channels.png)
+
+*SDO/AIA EUV channels by peak formation temperature.*
+
 ## Methods
 
 ### Hierarchy of Null Models
@@ -100,6 +126,9 @@ uv run python -m solar_seed.multichannel --real --hours 1 --start "2024-01-15T12
 
 # Final analyses
 uv run python -m solar_seed.final_analysis
+
+# Generate figures
+uv run python -m solar_seed.visualize --output figures/
 ```
 
 ## Control Tests

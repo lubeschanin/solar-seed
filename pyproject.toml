@@ -28,22 +28,25 @@ sunpy = [
     "aiapy>=0.10.0",
     "astropy>=6.0.0",
 ]
+viz = [
+    "matplotlib>=3.8.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
 ]
 all = [
-    "solar-seed[sunpy,dev]",
+    "solar-seed[sunpy,viz,dev]",
 ]
 
 [project.scripts]
 solar-seed = "solar_seed.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/4free/solar-seed"
-Documentation = "https://github.com/4free/solar-seed#readme"
-Repository = "https://github.com/4free/solar-seed.git"
+Homepage = "https://github.com/lubeschanin/solar-seed"
+Documentation = "https://github.com/lubeschanin/solar-seed#readme"
+Repository = "https://github.com/lubeschanin/solar-seed.git"
 
 [build-system]
 requires = ["hatchling"]
