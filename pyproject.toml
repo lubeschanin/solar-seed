@@ -1,0 +1,72 @@
+[project]
+name = "solar-seed"
+version = "0.1.0"
+description = "Suche nach Informationsmustern in Sonnenlicht"
+readme = "README.md"
+license = { text = "GPL-3.0" }
+requires-python = ">=3.12"
+authors = [
+    { name = "4free", email = "info@lij.de" }
+]
+keywords = ["solar", "astrophysics", "information-theory", "mutual-information"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+
+dependencies = [
+    "numpy>=1.26.0",
+    "scipy>=1.11.0",
+]
+
+[project.optional-dependencies]
+sunpy = [
+    "sunpy>=5.0.0",
+    "aiapy>=0.10.0",
+    "astropy>=6.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+]
+all = [
+    "solar-seed[sunpy,dev]",
+]
+
+[project.scripts]
+solar-seed = "solar_seed.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/4free/solar-seed"
+Documentation = "https://github.com/4free/solar-seed#readme"
+Repository = "https://github.com/4free/solar-seed.git"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/solar_seed"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
