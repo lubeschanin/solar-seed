@@ -716,13 +716,18 @@ def plot_flare_phases(
     y_pos = np.arange(len(changes))
     bars = ax2.barh(y_pos, changes, color=colors, edgecolor='black', alpha=0.8)
 
-    # Add value labels
+    # Add value labels - inside bars to avoid zero line overlap
     for i, (bar, change) in enumerate(zip(bars, changes)):
         x_pos = bar.get_width()
-        ha = 'left' if x_pos >= 0 else 'right'
-        offset = 2 if x_pos >= 0 else -2
-        ax2.text(x_pos + offset, bar.get_y() + bar.get_height()/2,
-                 f"{change:+.1f}%", ha=ha, va='center', fontsize=10, fontweight='bold')
+        if x_pos >= 0:
+            # Positive: label to the right of bar
+            ax2.text(x_pos + 2, bar.get_y() + bar.get_height()/2,
+                     f"{change:+.1f}%", ha='left', va='center', fontsize=10, fontweight='bold')
+        else:
+            # Negative: label inside bar (white text)
+            ax2.text(x_pos / 2, bar.get_y() + bar.get_height()/2,
+                     f"{change:+.1f}%", ha='center', va='center', fontsize=10,
+                     fontweight='bold', color='white')
 
     ax2.set_yticks(y_pos)
     ax2.set_yticklabels(pair_labels, fontsize=11)
