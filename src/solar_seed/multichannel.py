@@ -295,7 +295,8 @@ def load_aia_multichannel(
     time_str: str,
     wavelengths: List[int] = None,
     data_dir: str = "data/aia",
-    cleanup: bool = True
+    cleanup: bool = True,
+    max_retries: int = 3
 ) -> Tuple[Optional[Dict[int, NDArray]], dict]:
     """
     Lädt echte AIA-Daten für alle Kanäle zu einem Zeitpunkt.
@@ -305,6 +306,7 @@ def load_aia_multichannel(
         wavelengths: Liste der Wellenlängen (default: alle 7)
         data_dir: Verzeichnis für Downloads
         cleanup: FITS-Dateien nach Laden löschen (default: True)
+        max_retries: Maximale Anzahl Versuche bei Download-Fehlern
 
     Returns:
         (channels_dict, metadata) oder (None, {}) bei Fehler
@@ -317,6 +319,8 @@ def load_aia_multichannel(
         import sunpy.map
         import astropy.units as u
         import gc
+        import time
+        import warnings
 
         # Parse time
         t = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
@@ -346,15 +350,63 @@ def load_aia_multichannel(
                         pass
                 return None, {}
 
-            # Lade erstes Ergebnis
-            files = Fido.fetch(result[0, 0], path=data_dir + "/{file}")
-            if not files:
+            # Download mit Retry-Logik
+            aia_map = None
+            for attempt in range(max_retries):
+                try:
+                    # Lade erstes Ergebnis
+                    files = Fido.fetch(result[0, 0], path=data_dir + "/{file}")
+                    if not files:
+                        continue
+
+                    file_path = files[0]
+
+                    # Prüfe Dateigröße (AIA FITS ~7.5MB)
+                    file_size = Path(file_path).stat().st_size
+                    if file_size < 5_000_000:  # Mindestens 5MB erwartet
+                        print(f"    ⚠️  Datei zu klein ({file_size/1e6:.1f}MB), Retry...")
+                        Path(file_path).unlink()
+                        time.sleep(2)
+                        continue
+
+                    # Lade Map mit Unterdrückung von Truncation-Warnings
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings('error')  # Warnings als Exceptions
+                        try:
+                            aia_map = sunpy.map.Map(file_path)
+                        except Warning as w:
+                            if "truncated" in str(w).lower():
+                                print(f"    ⚠️  Truncated file, Retry...")
+                                Path(file_path).unlink()
+                                time.sleep(2)
+                                continue
+                            raise
+
+                    files_to_delete.append(file_path)
+                    break  # Erfolg!
+
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        print(f"    ⚠️  Retry {attempt+1}/{max_retries}: {e}")
+                        # Lösche fehlerhafte Datei falls vorhanden
+                        try:
+                            if 'file_path' in locals():
+                                Path(file_path).unlink()
+                        except Exception:
+                            pass
+                        time.sleep(2)
+                    else:
+                        raise
+
+            if aia_map is None:
+                print(f"    ✗ Download fehlgeschlagen für {wl} Å nach {max_retries} Versuchen")
+                for f in files_to_delete:
+                    try:
+                        Path(f).unlink()
+                    except Exception:
+                        pass
                 return None, {}
 
-            file_path = files[0]
-            files_to_delete.append(file_path)
-
-            aia_map = sunpy.map.Map(file_path)
             channels[wl] = aia_map.data.astype(np.float64)
             metadata["files"][wl] = str(file_path)
 
