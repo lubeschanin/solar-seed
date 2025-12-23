@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Suche nach Informationsmustern in Sonnenlicht"
 readme = "README.md"
 license = { text = "GPL-3.0" }
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 authors = [
     { name = "4free", email = "info@lij.de" }
 ]
