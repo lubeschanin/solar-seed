@@ -222,4 +222,4 @@ Careful separation of geometric, statistical, and local contributions is essenti
 
 ![Figure 5](figures/figure5_flare_phases.png)
 
-*Coupling evolution during X9.0 flare (October 3, 2024). Left: ΔMI_sector across Pre-Flare, Flare, and Post-Flare phases for key channel pairs. Right: Percentage change during flare peak. Most pairs show reduced coupling (red bars), reflecting breakdown of coherent multichannel organization during rapid magnetic reconfiguration.*
+*Geometry-controlled coupling during an X9.0 solar flare (2024-10-03). Time evolution of the local coupling metric ΔMI_sector for selected EUV channel pairs across pre-flare, flare, and post-flare phases (left). The flare peak is marked by the dashed line. Contrary to a naive expectation of uniformly increased coupling during extreme activity, most channel pairs exhibit reduced coupling during the flare peak. Percentage changes from pre-flare to flare conditions are shown on the right. Only a small subset of thermally adjacent channels (e.g. 171–211 Å) shows enhanced coupling, indicating selective reorganization rather than global amplification of multichannel structure.*
