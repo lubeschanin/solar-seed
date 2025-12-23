@@ -217,3 +217,9 @@ Careful separation of geometric, statistical, and local contributions is essenti
 ![Figure 4](figures/figure4_coupling_matrix.png)
 
 *Geometry-controlled local coupling matrix (ΔMI_sector) for seven AIA EUV channels. Channels ordered by characteristic formation temperature. Stronger coupling is observed between thermally adjacent channels, consistent with magnetically mediated interactions between neighboring layers.*
+
+### Figure 5 — Flare Event Analysis
+
+![Figure 5](figures/figure5_flare_phases.png)
+
+*Coupling evolution during X9.0 flare (October 3, 2024). Left: ΔMI_sector across Pre-Flare, Flare, and Post-Flare phases for key channel pairs. Right: Percentage change during flare peak. Most pairs show reduced coupling (red bars), reflecting breakdown of coherent multichannel organization during rapid magnetic reconfiguration.*

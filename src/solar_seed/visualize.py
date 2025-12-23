@@ -620,6 +620,142 @@ def plot_channel_overview(output_path: Path) -> None:
     print(f"  Saved: {output_path}")
 
 
+def plot_flare_phases(
+    output_path: Path,
+    flare_data_path: Path | None = None,
+) -> None:
+    """Figure 5: Pre-Flare → Flare → Post-Flare coupling comparison.
+
+    Shows how ΔMI_sector changes across flare phases for key channel pairs.
+    """
+    import matplotlib.pyplot as plt
+
+    # Load flare data or use defaults from X9.0 analysis
+    if flare_data_path and flare_data_path.exists():
+        with open(flare_data_path) as f:
+            flare_data = json.load(f)
+    else:
+        # Default values from X9.0 flare (2024-10-03)
+        flare_data = {
+            "flare_id": "X9.0",
+            "peak_time": "2024-10-03T12:18:00",
+            "phases": {
+                "before": {"pair_values": {
+                    "193-211": 0.603, "171-193": 0.362, "94-131": 0.098,
+                    "171-211": 0.214, "193-131": 0.266, "335-131": 0.172,
+                }},
+                "during": {"pair_values": {
+                    "193-211": 0.426, "171-193": 0.338, "94-131": 0.073,
+                    "171-211": 0.255, "193-131": 0.167, "335-131": 0.091,
+                }},
+                "after": {"pair_values": {
+                    "193-211": 0.395, "171-193": 0.304, "94-131": 0.022,
+                    "171-211": 0.218, "193-131": 0.088, "335-131": 0.050,
+                }},
+            }
+        }
+
+    # Select key pairs to display
+    key_pairs = ["193-211", "171-193", "94-131", "171-211", "193-131", "335-131"]
+    phases = ["before", "during", "after"]
+    phase_labels = ["Pre-Flare", "Flare", "Post-Flare"]
+
+    # Extract data
+    pair_data = {}
+    for pair in key_pairs:
+        pair_data[pair] = [
+            flare_data["phases"][phase]["pair_values"].get(pair, 0)
+            for phase in phases
+        ]
+
+    # Colors for pairs
+    pair_colors = {
+        "193-211": "#e74c3c",   # Red - strongest coronal
+        "171-193": "#3498db",   # Blue - coronal
+        "94-131": "#f39c12",    # Orange - flare channels
+        "171-211": "#9b59b6",   # Purple
+        "193-131": "#1abc9c",   # Teal
+        "335-131": "#34495e",   # Dark gray
+    }
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Left: Line plot showing phase evolution
+    x = np.arange(len(phases))
+    for pair in key_pairs:
+        values = pair_data[pair]
+        ax1.plot(x, values, 'o-', label=f"{pair} Å", color=pair_colors[pair],
+                 linewidth=2.5, markersize=10, markeredgecolor='white', markeredgewidth=1.5)
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(phase_labels, fontsize=12)
+    ax1.set_ylabel("ΔMI_sector (bits)", fontsize=12)
+    ax1.set_xlabel("Flare Phase", fontsize=12)
+    ax1.set_title("Coupling Evolution During X9.0 Flare", fontsize=13, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=9)
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim(0, 0.7)
+
+    # Add vertical line at flare peak
+    ax1.axvline(x=1, color='red', linestyle='--', alpha=0.5, linewidth=2)
+    ax1.text(1.05, 0.65, "Flare Peak", color='red', fontsize=10, rotation=90, va='top')
+
+    # Right: Bar chart showing % change (before → during)
+    changes = []
+    pair_labels = []
+    colors = []
+    for pair in key_pairs:
+        before = pair_data[pair][0]
+        during = pair_data[pair][1]
+        if before > 0:
+            pct_change = ((during - before) / before) * 100
+            changes.append(pct_change)
+            pair_labels.append(f"{pair} Å")
+            colors.append('#2ecc71' if pct_change > 0 else '#e74c3c')
+
+    y_pos = np.arange(len(changes))
+    bars = ax2.barh(y_pos, changes, color=colors, edgecolor='black', alpha=0.8)
+
+    # Add value labels
+    for i, (bar, change) in enumerate(zip(bars, changes)):
+        x_pos = bar.get_width()
+        ha = 'left' if x_pos >= 0 else 'right'
+        offset = 2 if x_pos >= 0 else -2
+        ax2.text(x_pos + offset, bar.get_y() + bar.get_height()/2,
+                 f"{change:+.1f}%", ha=ha, va='center', fontsize=10, fontweight='bold')
+
+    ax2.set_yticks(y_pos)
+    ax2.set_yticklabels(pair_labels, fontsize=11)
+    ax2.set_xlabel("Coupling Change (%)", fontsize=12)
+    ax2.set_title("Change During Flare (Before → During)", fontsize=13, fontweight='bold')
+    ax2.axvline(x=0, color='black', linewidth=1)
+    ax2.set_xlim(-55, 30)
+    ax2.grid(True, alpha=0.3, axis='x')
+
+    # Add interpretation box
+    interpretation = (
+        "Most pairs show reduced coupling\n"
+        "during flare peak, reflecting\n"
+        "breakdown of coherent organization\n"
+        "during magnetic reconfiguration."
+    )
+    ax2.text(0.02, 0.02, interpretation, transform=ax2.transAxes, fontsize=9,
+             verticalalignment='bottom', horizontalalignment='left',
+             bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+
+    # Main title
+    fig.suptitle(
+        f"X9.0 Flare Event Analysis (October 3, 2024)\n"
+        f"Coupling breakdown during rapid magnetic reconfiguration",
+        fontsize=14, fontweight='bold', y=1.02
+    )
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {output_path}")
+
+
 def generate_all_figures(
     results_dir: str | Path = "results/multichannel_real",
     output_dir: str | Path = "figures",
@@ -651,6 +787,10 @@ def generate_all_figures(
         plot_spatial_distribution(output_dir / "figure2_spatial_distribution.png", results_dir)
         plot_null_model_decomposition(output_dir / "figure3_null_model_decomposition.png", results_dir)
         plot_coupling_heatmap(data, output_dir / "figure4_coupling_matrix.png")
+
+    # Generate flare figure (uses embedded data or loads from file)
+    flare_path = Path("results/flare/flare_analysis.json")
+    plot_flare_phases(output_dir / "figure5_flare_phases.png", flare_path)
 
     print(f"\nDone! Generated figures in {output_dir}/")
 

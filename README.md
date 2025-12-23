@@ -55,6 +55,32 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 *Geometry-controlled local coupling matrix (ΔMI_sector) for seven AIA EUV channels. Channels ordered by characteristic formation temperature. Stronger coupling is observed between thermally adjacent channels, consistent with magnetically mediated interactions between neighboring layers.*
 
+### Figure 5 — Flare Event Analysis
+
+![Figure 5 — Flare phase analysis](figures/figure5_flare_phases.png)
+
+*Coupling evolution during X9.0 flare (October 3, 2024). Left: ΔMI_sector across Pre-Flare, Flare, and Post-Flare phases. Right: Percentage change during flare peak. Most channel pairs show reduced coupling, reflecting breakdown of coherent organization during rapid magnetic reconfiguration.*
+
+## Flare Analysis
+
+Analysis of the X9.0 flare (October 3, 2024) reveals a key insight: **extreme events reduce coupling rather than increasing it**.
+
+| Phase | n | 94Å Intensity | ΔMI_sector (94-131) |
+|-------|---|---------------|---------------------|
+| Pre-Flare | 13 | 5.4 | 0.098 bits |
+| Flare | 4 | 4.1 | 0.073 bits |
+| Post-Flare | 13 | 4.3 | 0.022 bits |
+
+**Key Changes During Flare:**
+| Pair | Change | Interpretation |
+|------|--------|----------------|
+| 171-211 Å | +19.4% | Exception: enhanced coronal coupling |
+| 193-211 Å | −29.4% | Coronal organization breakdown |
+| 94-131 Å | −25.1% | Flare channel decoupling |
+| 335-131 Å | −47.2% | Hot plasma disruption |
+
+**Interpretation:** Reduced coupling during flares does not contradict physical expectations—it reflects the breakdown of coherent multichannel organization during rapid magnetic reconfiguration. The metric measures structural organization, not activity intensity.
+
 ## Methods
 
 ### Hierarchy of Null Models
