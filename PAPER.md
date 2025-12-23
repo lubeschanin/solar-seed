@@ -149,6 +149,8 @@ The framework complements correlation- and emission-measure-based diagnostics by
 
 Chromospheric 304 Å shows weaker coupling to coronal channels, consistent with different plasma regimes. Flare channels (94, 131) show moderate, activity-dependent coupling patterns, consistent with episodic heating rather than persistent structural organization.
 
+Analysis of an X9.0 flare event (October 3, 2024) reveals that most channel pairs exhibit *reduced* local coupling during the flare peak, with decreases of 25–47% across many pairs. We emphasize that reduced coupling during flares does not contradict physical expectations; rather, it reflects the breakdown of coherent multichannel organization during rapid magnetic reconfiguration. The metric measures structural organization, not activity intensity—extreme events disrupt the ordered layering that produces high $\Delta\text{MI}_{\text{sector}}$ under quiescent conditions.
+
 ### 5.4 Temporal Stability and Implications
 
 The stability of $\Delta\text{MI}_{\text{sector}}$ suggests a measurable baseline of atmospheric organization. This study does not claim predictivity; however, deviations from baseline may be informative for event-focused analyses.
