@@ -286,7 +286,8 @@ def generate_multichannel_timeseries(
 def load_aia_multichannel(
     time_str: str,
     wavelengths: List[int] = None,
-    data_dir: str = "data/aia"
+    data_dir: str = "data/aia",
+    cleanup: bool = True
 ) -> Tuple[Optional[Dict[int, NDArray]], dict]:
     """
     Lädt echte AIA-Daten für alle Kanäle zu einem Zeitpunkt.
@@ -295,6 +296,7 @@ def load_aia_multichannel(
         time_str: Zeitpunkt (ISO format)
         wavelengths: Liste der Wellenlängen (default: alle 7)
         data_dir: Verzeichnis für Downloads
+        cleanup: FITS-Dateien nach Laden löschen (default: True)
 
     Returns:
         (channels_dict, metadata) oder (None, {}) bei Fehler
@@ -306,6 +308,7 @@ def load_aia_multichannel(
         from sunpy.net import Fido, attrs as a
         import sunpy.map
         import astropy.units as u
+        import gc
 
         # Parse time
         t = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
@@ -316,6 +319,7 @@ def load_aia_multichannel(
 
         channels = {}
         metadata = {"timestamp": time_str, "wavelengths": wavelengths, "files": {}}
+        files_to_delete = []
 
         for wl in wavelengths:
             result = Fido.search(
@@ -326,6 +330,12 @@ def load_aia_multichannel(
 
             if len(result) == 0 or len(result[0]) == 0:
                 print(f"    ⚠️  Keine Daten für {wl} Å gefunden")
+                # Cleanup bei Fehler
+                for f in files_to_delete:
+                    try:
+                        Path(f).unlink()
+                    except Exception:
+                        pass
                 return None, {}
 
             # Lade erstes Ergebnis
@@ -333,9 +343,26 @@ def load_aia_multichannel(
             if not files:
                 return None, {}
 
-            aia_map = sunpy.map.Map(files[0])
+            file_path = files[0]
+            files_to_delete.append(file_path)
+
+            aia_map = sunpy.map.Map(file_path)
             channels[wl] = aia_map.data.astype(np.float64)
-            metadata["files"][wl] = str(files[0])
+            metadata["files"][wl] = str(file_path)
+
+            # Explizit Map freigeben
+            del aia_map
+
+        # Cleanup: FITS-Dateien löschen um Speicherplatz zu sparen
+        if cleanup:
+            for f in files_to_delete:
+                try:
+                    Path(f).unlink()
+                except Exception:
+                    pass
+
+        # Garbage Collection erzwingen
+        gc.collect()
 
         return channels, metadata
 
@@ -353,7 +380,8 @@ def load_aia_multichannel_timeseries(
     cadence_minutes: int = 12,
     wavelengths: List[int] = None,
     data_dir: str = "data/aia",
-    verbose: bool = True
+    verbose: bool = True,
+    cleanup: bool = True
 ) -> List[Tuple[Optional[Dict[int, NDArray]], str]]:
     """
     Lädt Zeitreihe echter AIA-Daten für alle Kanäle.
@@ -365,15 +393,20 @@ def load_aia_multichannel_timeseries(
         wavelengths: Wellenlängen (default: alle 7)
         data_dir: Download-Verzeichnis
         verbose: Ausgabe
+        cleanup: FITS-Dateien nach Laden löschen
 
     Returns:
         Liste von (channels_dict, timestamp) Tupeln
     """
+    import gc
+
     if wavelengths is None:
         wavelengths = WAVELENGTHS
 
     results = []
     t = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+    failed_count = 0
+    max_consecutive_failures = 10
 
     for i in range(n_points):
         timestamp = t.isoformat()
@@ -384,16 +417,31 @@ def load_aia_multichannel_timeseries(
         channels, metadata = load_aia_multichannel(
             timestamp,
             wavelengths=wavelengths,
-            data_dir=data_dir
+            data_dir=data_dir,
+            cleanup=cleanup
         )
 
         if channels is not None:
             results.append((channels, timestamp))
+            failed_count = 0  # Reset bei Erfolg
         else:
+            failed_count += 1
             if verbose:
                 print(f"    ⚠️  Überspringe Zeitpunkt {timestamp}")
 
+            # Abbruch bei zu vielen aufeinanderfolgenden Fehlern
+            if failed_count >= max_consecutive_failures:
+                if verbose:
+                    print(f"    ✗ Abbruch: {max_consecutive_failures} aufeinanderfolgende Fehler")
+                break
+
         t += timedelta(minutes=cadence_minutes)
+
+        # Periodisches Garbage Collection alle 50 Zeitpunkte
+        if (i + 1) % 50 == 0:
+            gc.collect()
+            if verbose:
+                print(f"    🧹 Speicher bereinigt ({len(results)} Zeitpunkte geladen)")
 
     return results
 
