@@ -666,6 +666,36 @@ class RotationAnalysisResult:
     pair_rankings: Dict[Tuple[int, int], int]
 
 
+def load_checkpoint(checkpoint_path: Path) -> Tuple[Dict, List[str], int]:
+    """Lädt Checkpoint falls vorhanden."""
+    if checkpoint_path.exists():
+        with open(checkpoint_path) as f:
+            data = json.load(f)
+        # Konvertiere String-Keys zurück zu Tupeln
+        pair_timeseries = {}
+        for key, values in data.get("pair_timeseries", {}).items():
+            wl1, wl2 = map(int, key.split("-"))
+            pair_timeseries[(wl1, wl2)] = values
+        return pair_timeseries, data.get("timestamps", []), data.get("last_index", 0)
+    return {}, [], 0
+
+
+def save_checkpoint(
+    checkpoint_path: Path,
+    pair_timeseries: Dict[Tuple[int, int], List[float]],
+    timestamps: List[str],
+    last_index: int
+) -> None:
+    """Speichert Checkpoint für Resume."""
+    data = {
+        "pair_timeseries": {f"{p[0]}-{p[1]}": v for p, v in pair_timeseries.items()},
+        "timestamps": timestamps,
+        "last_index": last_index
+    }
+    with open(checkpoint_path, "w") as f:
+        json.dump(data, f)
+
+
 def run_rotation_analysis(
     hours: float = 648.0,  # 27 Tage
     cadence_minutes: int = 60,  # Stündliche Kadenz
@@ -673,7 +703,8 @@ def run_rotation_analysis(
     output_dir: str = "results/rotation",
     use_real_data: bool = True,
     start_time_str: Optional[str] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    resume: bool = True  # Automatisch fortsetzen falls Checkpoint existiert
 ) -> RotationAnalysisResult:
     """
     Führt 27-Tage-Rotationsanalyse mit echten AIA-Daten durch.
@@ -727,24 +758,93 @@ def run_rotation_analysis(
         print(f"  Zeitraum:     {start_time_str[:10]} bis {end_time.isoformat()[:10]}")
         print()
 
-    # Lade oder generiere Daten
+    # Checkpoint-Pfad
+    checkpoint_path = out_path / "checkpoint.json"
+
+    # Prüfe ob Resume möglich
+    pair_timeseries: Dict[Tuple[int, int], List[float]] = {
+        pair: [] for pair in combinations(WAVELENGTHS, 2)
+    }
+    timestamps: List[str] = []
+    start_index = 0
+
+    if resume and checkpoint_path.exists():
+        pair_timeseries, timestamps, start_index = load_checkpoint(checkpoint_path)
+        if start_index > 0 and verbose:
+            print(f"  🔄 Resume von Checkpoint: {start_index}/{n_points} bereits verarbeitet")
+            print(f"     Fortfahren ab Zeitpunkt {start_index + 1}...")
+            print()
+
+    # Verarbeite Zeitpunkte einzeln (streaming statt batch)
     if use_real_data:
-        if verbose:
-            print(f"  📡 Lade {n_points} Zeitpunkte echter AIA-Daten...")
+        import gc
+        from solar_seed.multichannel import load_aia_multichannel
 
-        timeseries = load_aia_multichannel_timeseries(
-            start_time=start_time_str,
-            n_points=n_points,
-            cadence_minutes=cadence_minutes,
-            verbose=verbose
-        )
+        if verbose and start_index == 0:
+            print(f"  📡 Lade und analysiere {n_points} Zeitpunkte...")
+        elif verbose:
+            print(f"  📡 Lade und analysiere verbleibende {n_points - start_index} Zeitpunkte...")
 
-        if len(timeseries) == 0:
+        t = start_time + timedelta(minutes=cadence_minutes * start_index)
+        failed_count = 0
+
+        for i in range(start_index, n_points):
+            timestamp = t.isoformat()
+
+            if verbose:
+                print(f"    📥 [{i+1}/{n_points}] {timestamp[:19]}...", end=" ", flush=True)
+
+            channels, metadata = load_aia_multichannel(
+                timestamp,
+                data_dir="data/aia",
+                cleanup=True
+            )
+
+            if channels is not None:
+                # Analysiere alle Paare
+                for wl1, wl2 in combinations(WAVELENGTHS, 2):
+                    result = analyze_pair(
+                        channels[wl1], channels[wl2],
+                        wl1, wl2,
+                        bins=64,
+                        seed=seed + i
+                    )
+                    pair_timeseries[(wl1, wl2)].append(result.delta_mi_sector)
+
+                timestamps.append(timestamp)
+                failed_count = 0
+
+                if verbose:
+                    print("✓")
+
+                # Checkpoint alle 10 Zeitpunkte
+                if (i + 1) % 10 == 0:
+                    save_checkpoint(checkpoint_path, pair_timeseries, timestamps, i + 1)
+                    if verbose and (i + 1) % 50 == 0:
+                        print(f"    💾 Checkpoint gespeichert ({i + 1}/{n_points})")
+                        gc.collect()
+            else:
+                failed_count += 1
+                if verbose:
+                    print("⚠️ übersprungen")
+
+                if failed_count >= 10:
+                    if verbose:
+                        print(f"    ✗ Abbruch: 10 aufeinanderfolgende Fehler")
+                    break
+
+            t += timedelta(minutes=cadence_minutes)
+
+        # Finaler Checkpoint
+        save_checkpoint(checkpoint_path, pair_timeseries, timestamps, n_points)
+
+        if len(timestamps) == 0:
             print("  ✗ Keine Daten geladen.")
             raise RuntimeError("Keine AIA-Daten verfügbar")
 
         if verbose:
-            print(f"  ✓ {len(timeseries)} Zeitpunkte geladen")
+            print(f"\n  ✓ {len(timestamps)} Zeitpunkte erfolgreich verarbeitet")
+
     else:
         if verbose:
             print(f"  📊 Generiere synthetische Daten...")
@@ -756,30 +856,20 @@ def run_rotation_analysis(
             cadence_minutes=cadence_minutes
         )
 
-    if verbose:
-        print(f"\n  🔬 Analysiere {len(timeseries)} Zeitpunkte × 21 Paare...")
+        for t_idx, (channels, timestamp) in enumerate(timeseries):
+            if verbose and (t_idx + 1) % 50 == 0:
+                print(f"     Zeitpunkt {t_idx + 1}/{len(timeseries)}...")
 
-    # Sammle Zeitreihen für alle Paare
-    pair_timeseries: Dict[Tuple[int, int], List[float]] = {
-        pair: [] for pair in combinations(WAVELENGTHS, 2)
-    }
+            timestamps.append(timestamp)
 
-    timestamps = []
-
-    for t_idx, (channels, timestamp) in enumerate(timeseries):
-        if verbose and (t_idx + 1) % 50 == 0:
-            print(f"     Zeitpunkt {t_idx + 1}/{len(timeseries)}...")
-
-        timestamps.append(timestamp)
-
-        for wl1, wl2 in combinations(WAVELENGTHS, 2):
-            result = analyze_pair(
-                channels[wl1], channels[wl2],
-                wl1, wl2,
-                bins=64,
-                seed=seed + t_idx
-            )
-            pair_timeseries[(wl1, wl2)].append(result.delta_mi_sector)
+            for wl1, wl2 in combinations(WAVELENGTHS, 2):
+                result = analyze_pair(
+                    channels[wl1], channels[wl2],
+                    wl1, wl2,
+                    bins=64,
+                    seed=seed + t_idx
+                )
+                pair_timeseries[(wl1, wl2)].append(result.delta_mi_sector)
 
     if verbose:
         print("\n  📈 Berechne Statistiken...")
@@ -1105,6 +1195,8 @@ Beispiele:
                         help="Startzeit für Rotationsanalyse (ISO format)")
     parser.add_argument("--cadence", type=int, default=60,
                         help="Kadenz in Minuten für Rotationsanalyse (default: 60)")
+    parser.add_argument("--no-resume", action="store_true",
+                        help="Nicht von Checkpoint fortsetzen, neu starten")
 
     args = parser.parse_args()
 
@@ -1115,7 +1207,8 @@ Beispiele:
             output_dir="results/rotation",
             use_real_data=True,  # Immer echte Daten für Rotation
             start_time_str=args.start,
-            verbose=True
+            verbose=True,
+            resume=not args.no_resume
         )
     elif args.timescale_only:
         run_timescale_comparison(
