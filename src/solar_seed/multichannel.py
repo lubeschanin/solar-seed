@@ -17,6 +17,14 @@ Kanäle (nach Temperatur sortiert):
     131 Å  →  10 MK    →  Flares (sehr heiß)
 """
 
+# Fix für macOS: Fork-Crash vermeiden bei async-Bibliotheken (SunPy/aiohttp)
+# Muss VOR allen anderen Imports stehen!
+import multiprocessing
+try:
+    multiprocessing.set_start_method('spawn', force=False)
+except RuntimeError:
+    pass  # Bereits gesetzt
+
 import numpy as np
 from numpy.typing import NDArray
 from dataclasses import dataclass, field
