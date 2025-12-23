@@ -153,6 +153,9 @@ uv run python -m solar_seed.multichannel --real --hours 1 --start "2024-01-15T12
 # Final analyses
 uv run python -m solar_seed.final_analysis
 
+# 27-day rotation analysis (with checkpoint/resume)
+uv run python -m solar_seed.final_analysis --rotation --start "2024-01-01"
+
 # Generate figures
 uv run python -m solar_seed.visualize --output figures/
 ```
