@@ -835,8 +835,9 @@ def run_rotation_analysis(
 
             t += timedelta(minutes=cadence_minutes)
 
-        # Finaler Checkpoint
-        save_checkpoint(checkpoint_path, pair_timeseries, timestamps, n_points)
+        # Finaler Checkpoint nur wenn Daten vorhanden
+        if len(timestamps) > 0:
+            save_checkpoint(checkpoint_path, pair_timeseries, timestamps, len(timestamps))
 
         if len(timestamps) == 0:
             print("  ✗ Keine Daten geladen.")
