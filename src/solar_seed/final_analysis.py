@@ -666,6 +666,49 @@ class RotationAnalysisResult:
     pair_rankings: Dict[Tuple[int, int], int]
 
 
+def _compute_interim_result(
+    pair_timeseries: Dict[Tuple[int, int], List[float]],
+    timestamps: List[str],
+    hours: float,
+    cadence_minutes: int,
+    start_time: str,
+    end_time: str
+) -> "RotationAnalysisResult":
+    """Berechnet Zwischenergebnis aus aktuellen Daten."""
+    # Mittelwerte und Standardabweichungen
+    pair_means = {pair: float(np.mean(vals)) if vals else 0.0
+                  for pair, vals in pair_timeseries.items()}
+    pair_stds = {pair: float(np.std(vals)) if vals else 0.0
+                 for pair, vals in pair_timeseries.items()}
+
+    # Autokorrelation
+    temporal_correlations = {}
+    for pair, values in pair_timeseries.items():
+        if len(values) > 2:
+            vals = np.array(values)
+            corr = np.corrcoef(vals[:-1], vals[1:])[0, 1]
+            temporal_correlations[pair] = float(corr) if not np.isnan(corr) else 0.0
+        else:
+            temporal_correlations[pair] = 0.0
+
+    # Rankings
+    sorted_pairs = sorted(pair_means.items(), key=lambda x: -x[1])
+    pair_rankings = {pair: rank + 1 for rank, (pair, _) in enumerate(sorted_pairs)}
+
+    return RotationAnalysisResult(
+        hours=hours,
+        n_points=len(timestamps),
+        cadence_minutes=cadence_minutes,
+        start_time=start_time,
+        end_time=end_time,
+        pair_timeseries=pair_timeseries,
+        pair_means=pair_means,
+        pair_stds=pair_stds,
+        temporal_correlations=temporal_correlations,
+        pair_rankings=pair_rankings
+    )
+
+
 def load_checkpoint(checkpoint_path: Path) -> Tuple[Dict, List[str], int]:
     """Lädt Checkpoint falls vorhanden."""
     if checkpoint_path.exists():
@@ -817,12 +860,17 @@ def run_rotation_analysis(
                 if verbose:
                     print("✓")
 
-                # Checkpoint alle 10 Zeitpunkte
+                # Bei jedem Zeitpunkt: Ergebnisse + Checkpoint speichern
+                interim_result = _compute_interim_result(
+                    pair_timeseries, timestamps, hours, cadence_minutes,
+                    start_time_str, end_time.isoformat()
+                )
+                save_rotation_results(interim_result, out_path, timestamps)
+                save_checkpoint(checkpoint_path, pair_timeseries, timestamps, i + 1)
+
+                # Garbage Collection alle 10 Zeitpunkte
                 if (i + 1) % 10 == 0:
-                    save_checkpoint(checkpoint_path, pair_timeseries, timestamps, i + 1)
-                    if verbose and (i + 1) % 50 == 0:
-                        print(f"    💾 Checkpoint gespeichert ({i + 1}/{n_points})")
-                        gc.collect()
+                    gc.collect()
             else:
                 failed_count += 1
                 if verbose:
@@ -895,7 +943,7 @@ def run_rotation_analysis(
 
     result = RotationAnalysisResult(
         hours=hours,
-        n_points=len(timeseries),
+        n_points=len(timestamps),
         cadence_minutes=cadence_minutes,
         start_time=start_time_str,
         end_time=end_time.isoformat(),
