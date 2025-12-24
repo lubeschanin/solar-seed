@@ -224,20 +224,35 @@ results/
 ├── real_run/
 │   ├── timeseries.csv          # MI time series
 │   ├── controls_summary.json   # C1-C4 results
+│   ├── run_metadata.json       # Run configuration
 │   └── spatial_maps.txt        # MI maps + hotspots
 ├── multichannel/
 │   ├── coupling_matrices.txt   # 7×7 coupling matrix
+│   ├── coupling_matrices.json  # Machine-readable
 │   ├── pair_results.csv        # All 21 pairs ranked
 │   └── temperature_coupling.txt
+├── multichannel_real/          # Same structure, real AIA data
+├── flare/
+│   ├── flare_analysis.txt      # X9.0 flare phase comparison
+│   └── flare_analysis.json
+├── rotation/
+│   ├── rotation_analysis.txt   # 27-day analysis results
+│   ├── rotation_analysis.json
+│   ├── coupling_evolution.csv  # Time series for all pairs
+│   └── checkpoint.json         # Resume checkpoint
 └── final/
     ├── timescale_comparison.txt
-    └── activity_conditioning.txt
+    ├── timescale_comparison.json
+    ├── activity_conditioning.txt
+    └── activity_conditioning.json
 ```
 
 ## Project Structure
 
 ```
 src/solar_seed/
+├── cli.py               # Interactive CLI menu
+├── render_sun.py        # Sun image rendering with timezone
 ├── mutual_info.py       # MI computation (pure NumPy)
 ├── null_model.py        # Shuffle-based null models
 ├── radial_profile.py    # Radial profile subtraction
@@ -246,8 +261,11 @@ src/solar_seed/
 ├── real_run.py          # Reproducible pipeline
 ├── hypothesis_test.py   # Main test runner
 ├── collector.py         # Time series collector
-├── multichannel.py      # 7-channel coupling matrix
-└── final_analysis.py    # Timescale + activity analysis
+├── multichannel.py      # 7-channel coupling matrix, AIA loading
+├── flare_analysis.py    # X9.0 flare event analysis
+├── final_analysis.py    # Timescale + activity + rotation
+├── visualize.py         # Publication figures
+└── data_loader.py       # Data loading utilities
 ```
 
 ## Limitations
