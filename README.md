@@ -194,6 +194,12 @@ uv run python -m solar_seed.final_analysis
 # 27-day rotation analysis (with checkpoint/resume)
 uv run python -m solar_seed.final_analysis --rotation --start "2024-01-01"
 
+# Flare analysis (X9.0 event)
+uv run python -m solar_seed.flare_analysis --real
+
+# Render sun images (with timezone support)
+uv run python -m solar_seed.render_sun --date "08.03.2012" --time "14:00" --timezone Europe/Berlin
+
 # Generate figures
 uv run python -m solar_seed.visualize --output figures/
 ```
