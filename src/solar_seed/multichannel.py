@@ -339,7 +339,7 @@ def load_aia_multichannel(
     wavelengths: List[int] = None,
     data_dir: str = "data/aia",
     cleanup: bool = True,
-    max_retries: int = 3
+    max_retries: int = 4  # Try JSOC + 3 mirrors (ROB, SDAC, CfA)
 ) -> Tuple[Optional[Dict[int, NDArray]], dict]:
     """
     Lädt echte AIA-Daten für alle Kanäle zu einem Zeitpunkt.
@@ -393,12 +393,19 @@ def load_aia_multichannel(
                         pass
                 return None, {}
 
-            # Download mit Retry-Logik
+            # Download mit Retry-Logik und Mirror-Fallback
             aia_map = None
+            # Sites to try: default (JSOC), then mirrors
+            sites_to_try = [None, 'rob', 'sdac', 'cfa']  # ROB=Belgium, SDAC=NASA, CfA=Harvard
+
             for attempt in range(max_retries):
+                site = sites_to_try[min(attempt, len(sites_to_try) - 1)]
                 try:
-                    # Lade erstes Ergebnis
-                    files = Fido.fetch(result[0, 0], path=data_dir + "/{file}")
+                    # Lade erstes Ergebnis (mit optionalem Mirror)
+                    if site:
+                        files = Fido.fetch(result[0, 0], path=data_dir + "/{file}", site=site)
+                    else:
+                        files = Fido.fetch(result[0, 0], path=data_dir + "/{file}")
                     if not files:
                         continue
 
@@ -430,7 +437,9 @@ def load_aia_multichannel(
 
                 except Exception as e:
                     if attempt < max_retries - 1:
-                        print(f"    ⚠️  Retry {attempt+1}/{max_retries}: {e}")
+                        next_site = sites_to_try[min(attempt + 1, len(sites_to_try) - 1)]
+                        mirror_info = f" (trying {next_site} mirror)" if next_site else ""
+                        print(f"    ⚠️  Retry {attempt+1}/{max_retries}{mirror_info}: {str(e)[:60]}")
                         # Lösche fehlerhafte Datei falls vorhanden
                         try:
                             if 'file_path' in locals():

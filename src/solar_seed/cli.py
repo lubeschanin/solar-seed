@@ -49,9 +49,11 @@ def print_menu():
   │                                                                     │
   │   [4]  Flare Analysis (X9.0 Event)                                  │
   │                                                                     │
-  │   [5]  Status: Check running analysis                               │
+  │   [5]  Render Sun Images (download + visualize)                     │
   │                                                                     │
-  │   [6]  View Results                                                 │
+  │   [6]  Status: Check running analysis                               │
+  │                                                                     │
+  │   [7]  View Results                                                 │
   │                                                                     │
   │   [q]  Quit                                                         │
   │                                                                     │
@@ -340,6 +342,151 @@ def run_flare():
         print("\n  Cancelled.")
 
 
+def get_time(prompt: str, default: str = "12:00") -> str:
+    """Get a time from the user."""
+    while True:
+        value = input(f"  {prompt} [{default}]: ").strip()
+        if not value:
+            return default
+        try:
+            datetime.strptime(value, "%H:%M")
+            return value
+        except ValueError:
+            print("  ⚠ Please use format HH:MM (e.g. 14:30)")
+
+
+def get_timezone() -> str:
+    """Get timezone from user with common options."""
+    from solar_seed.render_sun import COMMON_TIMEZONES
+
+    print("\n  Select location/timezone:")
+    print()
+    cities = list(COMMON_TIMEZONES.keys())
+    for i, city in enumerate(cities, 1):
+        print(f"    [{i:2}] {city}")
+    print(f"    [o]  Other (enter manually)")
+
+    options = [str(i) for i in range(1, len(cities) + 1)] + ["o"]
+    choice = get_choice("Choose:", options)
+
+    if choice == "o":
+        while True:
+            tz = input("  Enter timezone (e.g. Europe/Berlin): ").strip()
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(tz)  # Validate
+                return tz
+            except:
+                print("  ⚠ Invalid timezone. Examples: Europe/Berlin, America/New_York")
+    else:
+        city = cities[int(choice) - 1]
+        return COMMON_TIMEZONES[city]
+
+
+def run_render():
+    """Render Sun Images."""
+    clear_screen()
+    print_header()
+    print("""
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                  RENDER SUN IMAGES                                  │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  Downloads real AIA data and creates beautiful sun images
+  for all 7 wavelength channels + RGB composite.
+
+  The image will show both local time and UTC time.
+""")
+
+    print("\n  What would you like to render?")
+    print("    [1] Recent sun (24 hours ago)")
+    print("    [2] Specific date/time with timezone")
+    print("    [3] Cancel")
+
+    action = get_choice("Choose [1/2/3]:", ["1", "2", "3"])
+
+    if action == "3":
+        print("\n  Cancelled.")
+        return
+
+    local_dt = None
+    timezone = None
+
+    if action == "1":
+        utc_timestamp = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%dT12:00:00")
+        display_date = utc_timestamp[:10]
+    else:
+        print("\n  ── Enter birth/event date and time ──\n")
+
+        # Get date in DD.MM.YYYY format
+        while True:
+            date_input = input("  Date (DD.MM.YYYY, e.g. 08.03.2012): ").strip()
+            if not date_input:
+                print("  ⚠ Please enter a date")
+                continue
+            try:
+                # Validate format
+                if "." in date_input:
+                    parts = date_input.split(".")
+                    if len(parts) == 3:
+                        day, month, year = parts
+                        datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+                        break
+                print("  ⚠ Please use format DD.MM.YYYY (e.g. 08.03.2012)")
+            except ValueError:
+                print("  ⚠ Invalid date. Please use format DD.MM.YYYY")
+
+        time_input = get_time("Time (HH:MM)", "12:00")
+        timezone = get_timezone()
+
+        # Convert to UTC
+        from solar_seed.render_sun import parse_local_datetime
+        local_dt, utc_dt = parse_local_datetime(date_input, time_input, timezone)
+        utc_timestamp = utc_dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+        tz_city = timezone.split("/")[-1].replace("_", " ")
+        print(f"\n  ✓ Local:  {local_dt.strftime('%d.%m.%Y %H:%M')} {tz_city}")
+        print(f"  ✓ UTC:    {utc_dt.strftime('%d.%m.%Y %H:%M')} UTC")
+
+        display_date = local_dt.strftime("%d.%m.%Y")
+
+    print("\n  Render options:")
+    print("    [1] All channels + composite (recommended)")
+    print("    [2] Composite only")
+    print("    [3] Grid view (all in one image)")
+
+    option = get_choice("Choose [1/2/3]:", ["1", "2", "3"])
+
+    render_individual = option == "1"
+    render_grid = option == "3"
+
+    print(f"""
+  ────────────────────────────────────────────────────────────────────────
+
+  Configuration:
+    Date:       {display_date}
+    Timezone:   {timezone or "UTC"}
+    Channels:   {"All 7" if render_individual else "Composite only" if not render_grid else "Grid view"}
+    Output:     images/
+
+""")
+
+    if get_choice("Start? [y/n]:", ["y", "n"]) == "y":
+        print("\n  🚀 Downloading and rendering...\n")
+        from solar_seed.render_sun import load_and_render
+        load_and_render(
+            timestamp=utc_timestamp,
+            output_dir="images",
+            render_individual=render_individual,
+            render_comp=True,
+            render_all_grid=render_grid,
+            local_datetime=local_dt,
+            timezone=timezone,
+        )
+    else:
+        print("\n  Cancelled.")
+
+
 def show_status():
     """Show status of running analyses."""
     clear_screen()
@@ -499,7 +646,7 @@ def main():
         print_header()
         print_menu()
 
-        choice = get_choice("Your choice:", ["1", "2", "3", "4", "5", "6", "q"])
+        choice = get_choice("Your choice:", ["1", "2", "3", "4", "5", "6", "7", "q"])
 
         if choice == "1":
             run_quicktest()
@@ -514,8 +661,11 @@ def main():
             run_flare()
             input("\n  [Enter] Back to menu")
         elif choice == "5":
-            show_status()
+            run_render()
+            input("\n  [Enter] Back to menu")
         elif choice == "6":
+            show_status()
+        elif choice == "7":
             show_results()
         elif choice == "q":
             clear_screen()

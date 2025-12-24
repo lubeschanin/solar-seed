@@ -135,7 +135,37 @@ uv sync
 uv pip install sunpy aiapy
 ```
 
-## Usage
+## Quick Start (Interactive CLI)
+
+The easiest way to use Solar Seed is through the interactive menu:
+
+```bash
+./solar-seed
+```
+
+This opens a user-friendly menu:
+
+```
+╔════════════════════════════════════════════════════════════╗
+║                    SOLAR SEED                              ║
+║         Multichannel Coupling Analysis                     ║
+╚════════════════════════════════════════════════════════════╝
+
+  [1] Quick Analysis (6 hours)
+  [2] Extended Analysis (24 hours)
+  [3] Rotation Analysis (27 days)
+  [4] Render Sun Images
+  [5] Generate Figures
+  [6] Resume Rotation Analysis
+  [7] Exit
+```
+
+Features:
+- **Checkpoint/Resume**: Long analyses save progress automatically
+- **Timezone Support**: Enter birth times with automatic UTC conversion
+- **Mirror Fallback**: Automatic failover to backup data sources (ROB, SDAC, CfA)
+
+## Usage (Command Line)
 
 ```bash
 # Hypothesis test with controls
