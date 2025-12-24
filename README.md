@@ -170,6 +170,7 @@ This opens a user-friendly menu:
 
 Features:
 - **Checkpoint/Resume**: Long analyses save progress automatically
+- **Auto-Push**: Git push checkpoints for cross-system resume (`--auto-push`)
 - **Timezone Support**: Enter local times with automatic UTC conversion
 - **Mirror Fallback**: Automatic failover to backup data sources (ROB, SDAC, CfA)
 
@@ -193,6 +194,9 @@ uv run python -m solar_seed.final_analysis
 
 # 27-day rotation analysis (with checkpoint/resume)
 uv run python -m solar_seed.final_analysis --rotation --start "2024-01-01"
+
+# With auto-push for cross-system resume
+uv run python -m solar_seed.final_analysis --rotation --start "2024-01-01" --auto-push
 
 # Flare analysis (X9.0 event)
 uv run python -m solar_seed.flare_analysis --real
