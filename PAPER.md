@@ -284,6 +284,22 @@ Together with the operator-based regime switching, the network analysis establis
 
 These results suggest that solar flares can be interpreted as nonequilibrium phase transitions in a dynamically coupled, magnetically mediated network, with lasting consequences for the organization of the solar atmosphere.
 
+### 5.7 Redundancy, Functional Clustering, and Structural Memory
+
+Beyond pairwise coupling strengths, the redundancy analysis reveals a higher-order organization of the solar atmospheric coupling structure. Multiple channel pairs exhibit correlated coupling behavior despite lacking shared wavelengths or overlapping temperature sensitivity, indicating that these relationships are not driven by common radiative response functions.
+
+In particular, statistically significant correlations between chromospheric–coronal pairs (e.g., 304–171 Å) and coronal–flare-channel pairs (e.g., 193–131 Å) point to indirect coupling pathways linking thermally separated layers. The existence of 22 such correlated pair combinations suggests coordinated modulation of coupling strengths across the atmosphere, rather than independent local interactions.
+
+Hierarchical clustering of the coupling matrix identifies four functional clusters: a low-amplitude but stable chromospheric bridge, a dominant coronal backbone, an activity-dependent flare-channel group, and an intermediate transition zone. The coronal backbone cluster, characterized by the pairs 171–193–211 Å and their links to 131 Å, emerges as the most stable and reliable structure across time and activity levels.
+
+A subset of six channel pairs forms a stability backbone, exhibiting both high mutual information and reliability exceeding 90%. These pairs persist across quiet, active, and eruptive conditions, suggesting that they encode fundamental structural relationships within the solar atmosphere. Their persistence mirrors the role of redundancy in biological information systems, where duplicated or correlated pathways provide robustness and error tolerance.
+
+Importantly, this redundancy does not imply static behavior. Instead, correlated coupling pairs evolve coherently during regime transitions, indicating that the system preserves relational structure even as absolute coupling strengths change. In this sense, the redundancy pattern constitutes a form of structural memory: information about prior organizational states is retained in the pattern of interdependencies among layers rather than in any single channel.
+
+From a physical perspective, such redundancy is naturally explained by magnetically mediated connectivity spanning multiple temperature regimes. Magnetic field topology provides a substrate through which information about structural organization is distributed redundantly across layers, enabling coordinated reconfiguration during flares while maintaining global coherence.
+
+These findings complement the operator-based and network-level analyses by demonstrating that solar atmospheric organization is not only hierarchical and dynamic, but also redundantly encoded, enhancing robustness and continuity across regime transitions.
+
 ---
 
 ## 6. Conclusion
@@ -345,3 +361,9 @@ Beyond solar physics, the methodology is directly applicable to other multichann
 ![Figure 7](figures/figure7_phase_transitions.png)
 
 *Network-level phase transitions in solar atmospheric coupling during the X1.9 flare. (A) Number of significant coupling pairs (above thresholds 0.2, 0.3, 0.4) as a function of time, showing abrupt collapse during flare onset and subsequent recovery. (B) Network topology metrics: density (fraction of active edges) and clustering coefficient, both exhibiting sharp transitions coincident with flare dynamics. (C) Phase space trajectory in network coordinates (density vs. total coupling weight), demonstrating pronounced hysteresis—the post-flare state does not return to the pre-flare region but occupies a new attractor with higher connectivity. (D) Rate of change of network metrics, highlighting the timing of phase transitions: collapse onset precedes the X-ray peak, while reconnection occurs approximately one hour later. The network analysis independently confirms the regime-switching dynamics identified through operator methods (Figure 6) and establishes that major flares constitute nonequilibrium phase transitions with lasting topological consequences.*
+
+### Figure 8 — Redundancy Structure and Functional Clustering
+
+![Figure 8](figures/figure8_redundancy_structure.png)
+
+*Redundancy structure in solar atmospheric coupling. (A) Pair-pair correlation matrix showing correlations between the temporal evolution of different coupling pairs. Green boxes highlight unexpected correlations between pairs that share no common wavelength, indicating indirect coupling pathways. (B) Hierarchical clustering dendrogram of coupling pairs based on correlation distance, revealing four functional clusters: chromospheric bridge, coronal backbone, flare-channel group, and transition zone. (C) Stability backbone identification: reliability (fraction of time above 0.1 bits) versus mean coupling strength. Six pairs in the upper-right quadrant form a persistent backbone across all activity levels. Colors indicate thermal category (blue: coronal, orange: chromospheric, red: flare-active). (D) Redundancy network connecting coupling pairs with significant correlation (|r| > 0.25) despite no shared wavelength. Edge width proportional to correlation strength. The presence of 22 such connections demonstrates coordinated modulation of coupling across thermally separated layers, consistent with magnetically mediated structural memory.*
