@@ -140,7 +140,11 @@ uv pip install sunpy aiapy
 The easiest way to use Solar Seed is through the interactive menu:
 
 ```bash
+# Linux / macOS
 ./solar-seed
+
+# Windows
+solar-seed.bat
 ```
 
 This opens a user-friendly menu:
