@@ -149,6 +149,41 @@ This behavior mirrors the coupling dynamics observed for the X9.0 flare analyzed
 
 These results demonstrate that geometry-controlled mutual information captures aspects of flare-driven coronal restructuring that are not directly visible in traditional intensity-based diagnostics such as X-ray flux, highlighting its potential as a complementary tool for studying the dynamical organization of the solar atmosphere.
 
+### 4.7 Regime-Switching Dynamics and Operator Identification
+
+To formalize the dynamical behavior of multichannel coupling, we define a five-component state vector:
+
+$$
+\mathbf{S}(t) = (I_1, I_2, I_3, I_4, I_5)
+$$
+
+where:
+- $I_1$: Ranking stability (Kendall $\tau$ to reference ranking)
+- $I_2$: Corona ratio ($\Delta\text{MI}_{193-211} / \Delta\text{MI}_{171-193}$)
+- $I_3$: Chromosphere decoupling (mean chromospheric / mean coronal coupling)
+- $I_4$: Core stability ($\Delta\text{MI}_{171-193} / \Delta\text{MI}_{193-211}$)
+- $I_5$: Scale structure ($\Delta\text{MI}_{171-211} / \Delta\text{MI}_{171-193}$)
+
+We model the system as a discrete linear dynamical system with regime-dependent operators:
+
+$$
+\mathbf{S}(t+\Delta t) \approx A_R \mathbf{S}(t) + b_R + \epsilon
+$$
+
+where $R \in \{N, F\}$ denotes the normal or flare regime, and $A_R$, $b_R$ are estimated via ridge regression.
+
+**Operator Identification.** We identify two distinct regimes based on the ranking stability component ($I_1 < -0.5\sigma$ defining the flare regime). The Frobenius norm of the operator difference is $\|A_F - A_N\|_F = 2.9 \pm 0.5$ (95% CI: [2.5, 6.3] from 100 bootstrap samples), confirming that the two regimes exhibit fundamentally different dynamics.
+
+**Residual-Based Event Detection.** Defining the residual as $r(t) = \|\mathbf{S}(t+\Delta t) - (A_N \mathbf{S}(t) + b_N)\|$, we observe that $r(t)$ exceeds the 2$\sigma$ threshold during the flare event, with flare-phase residuals 2.2× higher than pre-flare values. This provides an event detection signal derived purely from coupling dynamics, without reference to external diagnostics.
+
+**Hysteresis.** Comparing transition operators for the normal-to-flare ($A_{NF}$) and flare-to-normal ($A_{FN}$) phases, we find $\|A_{NF} - A_{FN}\|_F = 4.9$, indicating significant hysteresis. The system does not return to its pre-event state via the same dynamical path.
+
+**Post-Event Attractor Shift.** The most striking finding is a persistent shift in the scale structure component $I_5$, which increases by +62% to +108% (depending on post-window selection) relative to pre-flare values and remains elevated across all tested time windows (12–120 minutes post-peak). This suggests that the flare induces a reorganization of the atmospheric coupling structure that persists beyond the event itself.
+
+**Eigenmodes.** Eigenvalue decomposition of $A_N$ reveals a dominant slow mode ($\lambda \approx 0.9$, 10% damping per timestep) coupling $I_2$, $I_4$, and $I_5$, representing the conserved thermal structure of the corona. A fast mode ($\lambda \approx 0.1$, 89% damping) is dominated by $I_3$, consistent with the interpretation that chromospheric coupling represents high-frequency fluctuations decoupled from coronal organization.
+
+These results establish that the multichannel coupling system exhibits regime-switching dynamics with distinct operators, hysteresis, and post-event attractor shifts—hallmarks of a complex dynamical system responding to external perturbation.
+
 ---
 
 ## 5. Discussion
@@ -243,3 +278,9 @@ Careful separation of geometric, statistical, and local contributions is essenti
 ![Figure 5](figures/figure5_flare_phases.png)
 
 *Geometry-controlled coupling during an X9.0 solar flare (2024-10-03). Time evolution of the local coupling metric ΔMI_sector for selected EUV channel pairs across pre-flare, flare, and post-flare phases (left). The flare peak is marked by the dashed line. Contrary to a naive expectation of uniformly increased coupling during extreme activity, most channel pairs exhibit reduced coupling during the flare peak. Percentage changes from pre-flare to flare conditions are shown on the right. Only a small subset of thermally adjacent channels (e.g. 171–211 Å) shows enhanced coupling, indicating selective reorganization rather than global amplification of multichannel structure.*
+
+### Figure 6 — Regime-Switching Dynamics
+
+![Figure 6](figures/figure6_operator_dynamics.png)
+
+*Operator dynamics and regime-switching behavior during the X1.9 flare (2025-12-01). (A) Residual r(t) over time, showing departure from normal-regime dynamics during the flare; the 2σ anomaly threshold is marked. (B) Operator difference heatmap (A_F − A_N), highlighting components with significant regime-dependent changes (marked with asterisks). (C) Eigenvalue spectrum of A_N showing the slow mode (λ ≈ 0.9, hierarchy-conserving) and fast mode (λ ≈ 0.1, chromospheric fluctuations). (D) Trajectory in reduced state space (I₁, I₂, I₅) showing the pre-flare → flare → post-flare path with hysteresis: the system returns to a different attractor with elevated I₅.*
