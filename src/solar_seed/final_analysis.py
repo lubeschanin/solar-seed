@@ -38,8 +38,85 @@ from scipy import stats
 from solar_seed.multichannel import (
     AIA_CHANNELS, WAVELENGTHS, WAVELENGTH_TO_TEMP,
     generate_multichannel_sun, analyze_pair, PairResult,
-    load_aia_multichannel_timeseries
+    load_aia_multichannel_timeseries, AIA_DATA_SOURCE
 )
+
+
+# ============================================================================
+# PARALLEL PROCESSING
+# ============================================================================
+
+def _analyze_pair_worker(args: Tuple) -> Tuple[Tuple[int, int], float]:
+    """
+    Worker function for parallel pair analysis.
+    Must be at module level for pickling.
+
+    Args:
+        args: Tuple of (image_1, image_2, wl1, wl2, bins, seed)
+
+    Returns:
+        Tuple of ((wl1, wl2), delta_mi_sector)
+    """
+    image_1, image_2, wl1, wl2, bins, seed = args
+    result = analyze_pair(image_1, image_2, wl1, wl2, bins=bins, seed=seed)
+    return ((wl1, wl2), result.delta_mi_sector)
+
+
+def analyze_pairs_parallel(
+    channels: Dict[int, NDArray[np.float64]],
+    bins: int = 64,
+    seed: int = 42,
+    n_workers: Optional[int] = None
+) -> Dict[Tuple[int, int], float]:
+    """
+    Analyze all 21 wavelength pairs in parallel (for small images) or
+    sequentially (for large images to avoid memory issues).
+
+    Args:
+        channels: Dict mapping wavelength -> image data
+        bins: Number of bins for MI calculation
+        seed: Base random seed
+        n_workers: Number of parallel workers (default: CPU count - 1)
+
+    Returns:
+        Dict mapping (wl1, wl2) -> delta_mi_sector
+    """
+    pairs = list(combinations(WAVELENGTHS, 2))
+
+    # For large images (>1024x1024), use sequential to avoid memory issues
+    # with process serialization of ~500MB per timepoint
+    first_channel = next(iter(channels.values()))
+    use_sequential = first_channel.shape[0] > 1024
+
+    if use_sequential:
+        # Sequential for large (real AIA) images
+        results = {}
+        for i, (wl1, wl2) in enumerate(pairs):
+            result = analyze_pair(
+                channels[wl1], channels[wl2], wl1, wl2,
+                bins=bins, seed=seed + i
+            )
+            results[(wl1, wl2)] = result.delta_mi_sector
+        return results
+
+    # Parallel processing for smaller (synthetic) images
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+
+    if n_workers is None:
+        n_workers = max(1, os.cpu_count() - 1)
+
+    args_list = [
+        (channels[wl1], channels[wl2], wl1, wl2, bins, seed + i)
+        for i, (wl1, wl2) in enumerate(pairs)
+    ]
+
+    results = {}
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        for pair, delta_mi in executor.map(_analyze_pair_worker, args_list):
+            results[pair] = delta_mi
+
+    return results
 
 
 # ============================================================================
@@ -774,25 +851,31 @@ def run_rotation_analysis(
     Returns:
         RotationAnalysisResult
     """
+    import os
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     n_points = max(1, int(hours * 60 / cadence_minutes))
     days = hours / 24
+    n_workers = max(1, os.cpu_count() - 1)
+
+    # Parallel only for synthetic (256x256), sequential for real AIA (4096x4096)
+    parallel_info = f"{n_workers} workers" if not use_real_data else "sequential (4096² images)"
 
     if verbose:
         print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║            🌞 27-TAGE-ROTATIONSANALYSE 🌱                               ║
+║            🌞 ROTATION ANALYSIS 🌱                                      ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Sonnenrotationsperiode: ~27.3 Tage (Carrington-Rotation)
+  Solar rotation period: ~27.3 days (Carrington rotation)
 
-  Konfiguration:
-    Zeitraum:     {hours}h ({days:.1f} Tage)
-    Kadenz:       {cadence_minutes} min
-    Datenpunkte:  {n_points}
-    Datenquelle:  {'Echte AIA-Daten' if use_real_data else 'Synthetische Daten'}
+  Configuration:
+    Period:       {hours}h ({days:.1f} days)
+    Cadence:      {cadence_minutes} min
+    Datapoints:   {n_points}
+    Data source:  {'Real AIA data' if use_real_data else 'Synthetic data'}
+    Processing:   {parallel_info}
 """)
 
     # Bestimme Start- und Endzeit
@@ -806,7 +889,7 @@ def run_rotation_analysis(
     end_time = start_time + timedelta(hours=hours)
 
     if verbose:
-        print(f"  Zeitraum:     {start_time_str[:10]} bis {end_time.isoformat()[:10]}")
+        print(f"  Period:       {start_time_str[:10]} to {end_time.isoformat()[:10]}")
         print()
 
     # Checkpoint-Pfad
@@ -822,19 +905,19 @@ def run_rotation_analysis(
     if resume and checkpoint_path.exists():
         pair_timeseries, timestamps, start_index = load_checkpoint(checkpoint_path)
         if start_index > 0 and verbose:
-            print(f"  🔄 Resume von Checkpoint: {start_index}/{n_points} bereits verarbeitet")
-            print(f"     Fortfahren ab Zeitpunkt {start_index + 1}...")
+            print(f"  🔄 Resuming from checkpoint: {start_index}/{n_points} already processed")
+            print(f"     Continuing from timepoint {start_index + 1}...")
             print()
 
-    # Verarbeite Zeitpunkte einzeln (streaming statt batch)
+    # Process timepoints one by one (streaming instead of batch)
     if use_real_data:
         import gc
         from solar_seed.multichannel import load_aia_multichannel
 
         if verbose and start_index == 0:
-            print(f"  📡 Lade und analysiere {n_points} Zeitpunkte...")
+            print(f"  📡 Loading and analyzing {n_points} timepoints...")
         elif verbose:
-            print(f"  📡 Lade und analysiere verbleibende {n_points - start_index} Zeitpunkte...")
+            print(f"  📡 Loading and analyzing remaining {n_points - start_index} timepoints...")
 
         t = start_time + timedelta(minutes=cadence_minutes * start_index)
         failed_count = 0
@@ -852,15 +935,12 @@ def run_rotation_analysis(
             )
 
             if channels is not None:
-                # Analysiere alle Paare
-                for wl1, wl2 in combinations(WAVELENGTHS, 2):
-                    result = analyze_pair(
-                        channels[wl1], channels[wl2],
-                        wl1, wl2,
-                        bins=64,
-                        seed=seed + i
-                    )
-                    pair_timeseries[(wl1, wl2)].append(result.delta_mi_sector)
+                # Analyze all pairs (parallel if multiple cores available)
+                pair_results = analyze_pairs_parallel(
+                    channels, bins=64, seed=seed + i
+                )
+                for pair, delta_mi in pair_results.items():
+                    pair_timeseries[pair].append(delta_mi)
 
                 timestamps.append(timestamp)
                 failed_count = 0
@@ -882,29 +962,29 @@ def run_rotation_analysis(
             else:
                 failed_count += 1
                 if verbose:
-                    print("⚠️ übersprungen")
+                    print("⚠️ skipped")
 
                 if failed_count >= 10:
                     if verbose:
-                        print(f"    ✗ Abbruch: 10 aufeinanderfolgende Fehler")
+                        print(f"    ✗ Abort: 10 consecutive failures")
                     break
 
             t += timedelta(minutes=cadence_minutes)
 
-        # Finaler Checkpoint nur wenn Daten vorhanden
+        # Final checkpoint only if data available
         if len(timestamps) > 0:
             save_checkpoint(checkpoint_path, pair_timeseries, timestamps, len(timestamps))
 
         if len(timestamps) == 0:
-            print("  ✗ Keine Daten geladen.")
-            raise RuntimeError("Keine AIA-Daten verfügbar")
+            print("  ✗ No data loaded.")
+            raise RuntimeError("No AIA data available")
 
         if verbose:
-            print(f"\n  ✓ {len(timestamps)} Zeitpunkte erfolgreich verarbeitet")
+            print(f"\n  ✓ {len(timestamps)} timepoints successfully processed")
 
     else:
         if verbose:
-            print(f"  📊 Generiere synthetische Daten...")
+            print(f"  📊 Generating synthetic data...")
 
         from solar_seed.multichannel import generate_multichannel_timeseries
         timeseries = generate_multichannel_timeseries(
@@ -915,21 +995,19 @@ def run_rotation_analysis(
 
         for t_idx, (channels, timestamp) in enumerate(timeseries):
             if verbose and (t_idx + 1) % 50 == 0:
-                print(f"     Zeitpunkt {t_idx + 1}/{len(timeseries)}...")
+                print(f"     Timepoint {t_idx + 1}/{len(timeseries)}...")
 
             timestamps.append(timestamp)
 
-            for wl1, wl2 in combinations(WAVELENGTHS, 2):
-                result = analyze_pair(
-                    channels[wl1], channels[wl2],
-                    wl1, wl2,
-                    bins=64,
-                    seed=seed + t_idx
-                )
-                pair_timeseries[(wl1, wl2)].append(result.delta_mi_sector)
+            # Analyze all pairs (parallel)
+            pair_results = analyze_pairs_parallel(
+                channels, bins=64, seed=seed + t_idx
+            )
+            for pair, delta_mi in pair_results.items():
+                pair_timeseries[pair].append(delta_mi)
 
     if verbose:
-        print("\n  📈 Berechne Statistiken...")
+        print("\n  📈 Computing statistics...")
 
     # Berechne Mittelwerte, Standardabweichungen
     pair_means = {pair: float(np.mean(vals)) for pair, vals in pair_timeseries.items()}
@@ -962,9 +1040,9 @@ def run_rotation_analysis(
         pair_rankings=pair_rankings
     )
 
-    # Speichere Ergebnisse
+    # Save results
     if verbose:
-        print("\n  💾 Speichere Ergebnisse...")
+        print("\n  💾 Saving results...")
 
     save_rotation_results(result, out_path, timestamps)
 
@@ -981,19 +1059,27 @@ def save_rotation_results(
 ) -> None:
     """Speichert Rotations-Ergebnisse."""
 
-    # 1. Hauptergebnis als Text
+    # 1. Main result as text
     with open(output_dir / "rotation_analysis.txt", "w") as f:
-        f.write("27-TAGE-ROTATIONSANALYSE\n")
+        f.write("ROTATION ANALYSIS\n")
         f.write("=" * 70 + "\n\n")
 
-        f.write(f"Zeitraum:     {result.start_time[:10]} bis {result.end_time[:10]}\n")
-        f.write(f"Dauer:        {result.hours}h ({result.hours/24:.1f} Tage)\n")
-        f.write(f"Kadenz:       {result.cadence_minutes} min\n")
-        f.write(f"Datenpunkte:  {result.n_points}\n\n")
+        f.write("DATA SOURCE:\n")
+        f.write(f"  Instrument:   {AIA_DATA_SOURCE['instrument']}\n")
+        f.write(f"  Operator:     {AIA_DATA_SOURCE['operator']}\n")
+        f.write(f"  Data:         {AIA_DATA_SOURCE['data_provider']}\n")
+        f.write(f"  URL:          {AIA_DATA_SOURCE['data_url']}\n")
+        f.write(f"  Reference:    {AIA_DATA_SOURCE['reference']}\n\n")
 
-        f.write("KOPPLUNGS-RANKING (ΔMI_sector):\n")
+        f.write("ANALYSIS PARAMETERS:\n")
+        f.write(f"  Period:       {result.start_time[:10]} to {result.end_time[:10]}\n")
+        f.write(f"  Duration:     {result.hours}h ({result.hours/24:.1f} days)\n")
+        f.write(f"  Cadence:      {result.cadence_minutes} min\n")
+        f.write(f"  Datapoints:   {result.n_points}\n\n")
+
+        f.write("COUPLING RANKING (ΔMI_sector):\n")
         f.write("-" * 70 + "\n")
-        f.write(f"{'Rang':<6} {'Paar':<12} {'Mean':<12} {'Std':<12} {'Autokorr'}\n")
+        f.write(f"{'Rank':<6} {'Pair':<12} {'Mean':<12} {'Std':<12} {'Autocorr'}\n")
         f.write("-" * 70 + "\n")
 
         sorted_pairs = sorted(result.pair_rankings.items(), key=lambda x: x[1])
@@ -1004,7 +1090,7 @@ def save_rotation_results(
             f.write(f"{rank:<6} {pair[0]}-{pair[1]:<7} {mean:<12.4f} {std:<12.4f} {autocorr:.3f}\n")
 
         f.write("\n" + "=" * 70 + "\n")
-        f.write("\nZEITLICHE STABILITÄT (Autokorrelation lag-1):\n")
+        f.write("\nTEMPORAL STABILITY (Autocorrelation lag-1):\n")
         f.write("-" * 50 + "\n")
 
         sorted_by_autocorr = sorted(
@@ -1012,11 +1098,11 @@ def save_rotation_results(
             key=lambda x: -x[1]
         )
 
-        f.write("\nHöchste Autokorrelation (stabilste Kopplung):\n")
+        f.write("\nHighest autocorrelation (most stable coupling):\n")
         for pair, corr in sorted_by_autocorr[:5]:
             f.write(f"  {pair[0]}-{pair[1]} Å: r = {corr:.3f}\n")
 
-        f.write("\nNiedrigste Autokorrelation (variabelste Kopplung):\n")
+        f.write("\nLowest autocorrelation (most variable coupling):\n")
         for pair, corr in sorted_by_autocorr[-5:]:
             f.write(f"  {pair[0]}-{pair[1]} Å: r = {corr:.3f}\n")
 
@@ -1051,7 +1137,8 @@ def save_rotation_results(
         "pair_means": {f"{p[0]}-{p[1]}": v for p, v in result.pair_means.items()},
         "pair_stds": {f"{p[0]}-{p[1]}": v for p, v in result.pair_stds.items()},
         "temporal_correlations": {f"{p[0]}-{p[1]}": v for p, v in result.temporal_correlations.items()},
-        "pair_rankings": {f"{p[0]}-{p[1]}": v for p, v in result.pair_rankings.items()}
+        "pair_rankings": {f"{p[0]}-{p[1]}": v for p, v in result.pair_rankings.items()},
+        "data_source": AIA_DATA_SOURCE
     }
 
     with open(output_dir / "rotation_analysis.json", "w") as f:
@@ -1259,7 +1346,7 @@ Beispiele:
 
     if args.rotation:
         run_rotation_analysis(
-            hours=648.0,  # 27 Tage
+            hours=args.long_hours,  # Über --long-hours einstellbar
             cadence_minutes=args.cadence,
             output_dir="results/rotation",
             use_real_data=True,  # Immer echte Daten für Rotation

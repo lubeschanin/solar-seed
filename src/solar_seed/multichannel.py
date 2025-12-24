@@ -41,6 +41,49 @@ from solar_seed.control_tests import sector_ring_shuffle_test
 
 
 # ============================================================================
+# DATA SOURCE METADATA
+# ============================================================================
+
+AIA_DATA_SOURCE = {
+    "instrument": "SDO/AIA",
+    "instrument_full": "Solar Dynamics Observatory / Atmospheric Imaging Assembly",
+    "operator": "NASA / Stanford University",
+    "data_provider": "JSOC (Joint Science Operations Center)",
+    "data_url": "http://jsoc.stanford.edu",
+    "launch_date": "2010-02-11",
+    "orbit": "Geosynchronous (~36,000 km)",
+    "native_resolution": "4096x4096 pixels",
+    "native_cadence": "12 seconds",
+    "wavelengths_angstrom": [94, 131, 171, 193, 211, 304, 335],
+    "spectral_range": "EUV (Extreme Ultraviolet)",
+    "reference": "Lemen et al. 2012, Solar Physics, 275, 17-40",
+    "doi": "10.1007/s11207-011-9776-8"
+}
+
+# AIA Quality Flags (32-bit bitmask in FITS QUALITY keyword)
+# Reference: SDO AIA Guide, SDOD0060
+AIA_QUALITY_FLAGS = {
+    0x00000001: ("ACS_MODE", "ACS mode not SCIENCE"),
+    0x00000002: ("ACS_ECLP", "ACS eclipse flag set (Earth/Moon transit)"),
+    0x00000004: ("ACS_SUNP", "ACS sun presence flag not set"),
+    0x00000008: ("ACS_SAFE", "ACS safehold flag set"),
+    0x00000010: ("IMG_TYPE", "Image type not LIGHT"),
+    0x00000020: ("HWLTNOMINAL", "HW long term not nominal"),
+    0x00000040: ("AIESSION", "AIA ISS loop open"),
+    0x00040000: ("AIFCPS", "AIA focus calibration in progress"),
+    0x00080000: ("AIHIS", "AIA high-speed instrument sequencer"),
+    0x80000000: ("MISSING", "Image missing or corrupt"),
+}
+
+# Critical flags that invalidate the data completely
+AIA_CRITICAL_FLAGS = {
+    0x80000000,  # MISSING
+    0x00000002,  # ACS_ECLP (eclipse)
+    0x00000008,  # ACS_SAFE (safehold)
+}
+
+
+# ============================================================================
 # CHANNEL DEFINITIONS
 # ============================================================================
 
@@ -361,10 +404,10 @@ def load_aia_multichannel(
 
                     file_path = files[0]
 
-                    # Prüfe Dateigröße (AIA FITS ~7.5MB)
+                    # Check file size (AIA FITS ~7.5MB)
                     file_size = Path(file_path).stat().st_size
-                    if file_size < 5_000_000:  # Mindestens 5MB erwartet
-                        print(f"    ⚠️  Datei zu klein ({file_size/1e6:.1f}MB), Retry...")
+                    if file_size < 5_000_000:  # At least 5MB expected
+                        print(f"    ⚠️  File too small ({file_size/1e6:.1f}MB), Retry...")
                         Path(file_path).unlink()
                         time.sleep(2)
                         continue
@@ -399,13 +442,47 @@ def load_aia_multichannel(
                         raise
 
             if aia_map is None:
-                print(f"    ✗ Download fehlgeschlagen für {wl} Å nach {max_retries} Versuchen")
+                print(f"    ✗ Download failed for {wl} Å after {max_retries} attempts")
                 for f in files_to_delete:
                     try:
                         Path(f).unlink()
                     except Exception:
                         pass
                 return None, {}
+
+            # Quality flag check (AIA QUALITY keyword)
+            quality = aia_map.meta.get('QUALITY', 0)
+            if quality != 0:
+                # Critical flags that should skip the image
+                CRITICAL_FLAGS = {
+                    0x80000000: "MISSING",      # Bit 31: Image missing
+                    0x00000002: "ACS_ECLP",     # Bit 1: Eclipse
+                    0x00000008: "ACS_SAFE",     # Bit 3: Safehold
+                }
+
+                critical = False
+                for flag, name in CRITICAL_FLAGS.items():
+                    if quality & flag:
+                        print(f"    ✗ Critical quality flag for {wl} Å: {name} (0x{quality:08X})")
+                        critical = True
+                        break
+
+                if critical:
+                    # Skip this entire timepoint
+                    for f in files_to_delete:
+                        try:
+                            Path(f).unlink()
+                        except Exception:
+                            pass
+                    return None, {}
+
+                # Non-critical warning
+                print(f"    ⚠️  Quality flag for {wl} Å: 0x{quality:08X}")
+
+            # Store quality in metadata
+            if "quality" not in metadata:
+                metadata["quality"] = {}
+            metadata["quality"][wl] = quality
 
             channels[wl] = aia_map.data.astype(np.float64)
             metadata["files"][wl] = str(file_path)
@@ -497,11 +574,11 @@ def load_aia_multichannel_timeseries(
 
         t += timedelta(minutes=cadence_minutes)
 
-        # Periodisches Garbage Collection alle 50 Zeitpunkte
+        # Periodic garbage collection every 50 timepoints
         if (i + 1) % 50 == 0:
             gc.collect()
             if verbose:
-                print(f"    🧹 Speicher bereinigt ({len(results)} Zeitpunkte geladen)")
+                print(f"    🧹 Memory cleaned ({len(results)} timepoints loaded)")
 
     return results
 
@@ -684,14 +761,14 @@ def run_multichannel_analysis(
         )
 
         if len(timeseries) == 0:
-            print("  ✗ Keine Daten geladen. Abbruch.")
-            raise RuntimeError("Keine AIA-Daten verfügbar")
+            print("  ✗ No data loaded. Aborting.")
+            raise RuntimeError("No AIA data available")
 
         if verbose:
-            print(f"  ✓ {len(timeseries)} Zeitpunkte geladen")
+            print(f"  ✓ {len(timeseries)} timepoints loaded")
     else:
         if verbose:
-            print("  📊 Generiere synthetische Multi-Channel-Zeitreihe...")
+            print("  📊 Generating synthetic multi-channel timeseries...")
 
         timeseries = generate_multichannel_timeseries(
             n_points=n_points,
@@ -792,12 +869,19 @@ def save_multichannel_results(result: MultiChannelResult, output_dir: Path) -> N
 
     # 1. Kopplungs-Matrizen als Text
     with open(output_dir / "coupling_matrices.txt", "w") as f:
-        f.write("KOPPLUNGS-MATRIZEN (Multi-Channel Analyse)\n")
+        f.write("COUPLING MATRICES (Multi-Channel Analysis)\n")
         f.write("=" * 70 + "\n\n")
 
-        f.write(f"Zeitraum: {result.hours} Stunden, {result.n_timepoints} Zeitpunkte\n\n")
+        f.write("DATA SOURCE:\n")
+        f.write(f"  Instrument:   {AIA_DATA_SOURCE['instrument']}\n")
+        f.write(f"  Operator:     {AIA_DATA_SOURCE['operator']}\n")
+        f.write(f"  Data:         {AIA_DATA_SOURCE['data_provider']}\n")
+        f.write(f"  URL:          {AIA_DATA_SOURCE['data_url']}\n")
+        f.write(f"  Reference:    {AIA_DATA_SOURCE['reference']}\n\n")
 
-        f.write("ΔMI_sector (echte lokale Strukturkopplung):\n")
+        f.write(f"Period: {result.hours} hours, {result.n_timepoints} timepoints\n\n")
+
+        f.write("ΔMI_sector (true local structure coupling):\n")
         f.write("-" * 50 + "\n")
         f.write(result.coupling_delta_sector.to_ascii() + "\n\n")
 
@@ -805,7 +889,7 @@ def save_multichannel_results(result: MultiChannelResult, output_dir: Path) -> N
         f.write("-" * 50 + "\n")
         f.write(result.coupling_mi_ratio.to_ascii() + "\n\n")
 
-        f.write("ΔMI_ring (Struktur jenseits radialer Statistik):\n")
+        f.write("ΔMI_ring (structure beyond radial statistics):\n")
         f.write("-" * 50 + "\n")
         f.write(result.coupling_delta_ring.to_ascii() + "\n\n")
 
@@ -836,6 +920,7 @@ def save_multichannel_results(result: MultiChannelResult, output_dir: Path) -> N
             "n_timepoints": result.n_timepoints,
             "hours": result.hours
         },
+        "data_source": AIA_DATA_SOURCE,
         "statistics": {
             "mean_delta_mi_sector": result.mean_values.get("delta_mi_sector", 0),
             "std_delta_mi_sector": result.std_values.get("delta_mi_sector", 0),

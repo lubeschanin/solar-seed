@@ -28,7 +28,7 @@ import json
 from solar_seed.multichannel import (
     AIA_CHANNELS, WAVELENGTHS, WAVELENGTH_TO_TEMP,
     analyze_pair, load_aia_multichannel,
-    generate_multichannel_sun
+    generate_multichannel_sun, AIA_DATA_SOURCE
 )
 
 
@@ -463,15 +463,22 @@ def save_flare_results(result: FlareAnalysisResult, output_dir: Path) -> None:
     """Speichert Flare-Ergebnisse."""
 
     with open(output_dir / "flare_analysis.txt", "w") as f:
-        f.write("FLARE-EREIGNIS-ANALYSE\n")
+        f.write("FLARE EVENT ANALYSIS\n")
         f.write("=" * 70 + "\n\n")
+
+        f.write("DATA SOURCE:\n")
+        f.write(f"  Instrument:   {AIA_DATA_SOURCE['instrument']}\n")
+        f.write(f"  Operator:     {AIA_DATA_SOURCE['operator']}\n")
+        f.write(f"  Data:         {AIA_DATA_SOURCE['data_provider']}\n")
+        f.write(f"  URL:          {AIA_DATA_SOURCE['data_url']}\n")
+        f.write(f"  Reference:    {AIA_DATA_SOURCE['reference']}\n\n")
 
         f.write(f"Flare: {result.flare_id} ({result.flare_class})\n")
         f.write(f"Peak:  {result.peak_time}\n\n")
 
-        f.write("PHASEN-ÜBERSICHT:\n")
+        f.write("PHASE OVERVIEW:\n")
         f.write("-" * 50 + "\n")
-        f.write(f"{'Phase':<10} {'n':<5} {'94Å Intensität':<15} {'ΔMI 94-131'}\n")
+        f.write(f"{'Phase':<10} {'n':<5} {'94Å Intensity':<15} {'ΔMI 94-131'}\n")
         f.write("-" * 50 + "\n")
 
         for phase in [result.before, result.during, result.after]:
@@ -480,9 +487,9 @@ def save_flare_results(result: FlareAnalysisResult, output_dir: Path) -> None:
                     f"{phase.mean_94A_intensity:<15.1f} {mi_94_131:.4f}\n")
 
         f.write("\n" + "=" * 70 + "\n")
-        f.write("\nÄNDERUNGEN WÄHREND FLARE (Before → During):\n")
+        f.write("\nCHANGES DURING FLARE (Before → During):\n")
         f.write("-" * 60 + "\n")
-        f.write(f"{'Paar':<12} {'Before':<10} {'During':<10} {'After':<10} {'Änderung'}\n")
+        f.write(f"{'Pair':<12} {'Before':<10} {'During':<10} {'After':<10} {'Change'}\n")
         f.write("-" * 60 + "\n")
 
         for pair, data in sorted(result.coupling_change.items(),
@@ -521,7 +528,8 @@ def save_flare_results(result: FlareAnalysisResult, output_dir: Path) -> None:
         "most_affected": [
             {"pair": f"{p[0]}-{p[1]}", "change_percent": c}
             for p, c in result.most_affected
-        ]
+        ],
+        "data_source": AIA_DATA_SOURCE
     }
 
     with open(output_dir / "flare_analysis.json", "w") as f:
