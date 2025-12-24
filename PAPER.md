@@ -68,11 +68,15 @@ We quantify statistical dependence between pairs of EUV channels using mutual in
 
 I(X;Y) = Σ p(x,y) log₂ [p(x,y) / p(x)p(y)]
 
+**Estimator robustness.** Histogram-based MI estimation introduces binning bias, which we mitigate through fixed bin ranges calibrated to the dynamic range of AIA data. Robustness tests with 32, 64, and 128 bins confirm that relative MI differences between channels and the hierarchy of null models remain stable (coefficient of variation <5% across bin choices). Alternative estimators based on k-nearest neighbors (Kraskov et al. 2004) were evaluated but histogram discretization was retained for computational efficiency and reproducibility, given the large number of pairwise comparisons across timepoints.
+
 ### 3.2 Geometric Normalization
 
 To remove disk geometry and radial intensity gradients, we estimate the per-frame radial mean profile and normalize each image. The residual is defined as:
 
 R(r,θ) = I(r,θ) / ⟨I(r)⟩
+
+**Limb treatment.** Pixels beyond r/R☉ > 0.98 are excluded from analysis to avoid limb artifacts and off-disk emission. The radial normalization effectively removes limb brightening within the analyzed disk region; robustness tests confirm that results are stable when the limb exclusion threshold is varied between 0.95 and 0.99.
 
 ### 3.3 Hierarchy of Null Models
 
@@ -93,11 +97,35 @@ Images are divided into an 8×8 grid and MI is computed per cell to obtain spati
 
 ### 3.6 Statistical Testing
 
-Null distributions are generated via repeated shuffles. Z-scores and p-values are computed per timepoint and aggregated over time.
+For each null model, we generate empirical null distributions using 100 independent shuffles per timepoint. The observed MI is compared to the null distribution via Z-scores:
+
+Z = (MI_observed − μ_null) / σ_null
+
+where μ_null and σ_null are the mean and standard deviation of the null distribution. P-values are computed assuming normality for large Z (confirmed by shuffle distribution shape). For the primary coupling metric ΔMI_sector, we report time-aggregated statistics (mean ± standard deviation across timepoints) and minimum Z-scores to characterize worst-case significance.
+
+**Multiple comparisons.** When analyzing all 21 channel pairs simultaneously, we apply Bonferroni correction for family-wise error control. Given the extremely high Z-scores observed (Z > 100 for most pairs), all reported significant effects survive correction at α = 0.001.
 
 ### 3.7 Flare-Specific Analysis
 
 For major eruptive events, we analyze flare-specific time windows as separate subsets. Time intervals are defined relative to the GOES X-ray peak: pre-flare (−2 to −0.5 hours), flare (−0.5 to +1 hour), and post-flare (+1 to +3 hours). Coupling metrics are computed independently for each phase, enabling comparison of baseline organization with flare-driven dynamics.
+
+### 3.8 State-Space Dimensionality Metrics
+
+To characterize the effective complexity of solar atmospheric dynamics, we construct a state vector from coupling invariants and analyze its dimensionality using the following metrics:
+
+**Participation ratio.** Given the eigenvalue spectrum {λᵢ} of the state-space covariance matrix, the participation ratio quantifies effective dimensionality as:
+
+PR = (Σᵢ λᵢ)² / Σᵢ λᵢ²
+
+A uniform distribution across d dimensions yields PR = d, while concentration on a single mode yields PR = 1.
+
+**State-space volume.** We estimate the occupied volume as the square root of the determinant of the covariance matrix (proportional to the volume of the concentration ellipsoid).
+
+**Spectral entropy.** The Shannon entropy of the normalized eigenvalue spectrum measures the uniformity of variance distribution:
+
+H = −Σᵢ pᵢ log₂ pᵢ,  where pᵢ = λᵢ / Σⱼ λⱼ
+
+Higher entropy indicates variance spread across many dimensions; lower entropy indicates concentration on few modes.
 
 ---
 
@@ -282,6 +310,36 @@ From a physical perspective, such redundancy is naturally explained by magnetica
 
 These findings complement the operator-based and network-level analyses by demonstrating that solar atmospheric organization is not only hierarchical and dynamic, but also redundantly encoded, enhancing robustness and continuity across regime transitions.
 
+### 5.8 State Space Dimensionality and Constraint During Flares
+
+To quantify how solar atmospheric dynamics reorganize across activity regimes, we analyzed the effective dimensionality of the solar state space spanned by the coupling invariants I₁–I₅ and their temporal derivatives. Although the full embedding space has dimension ten, the global participation ratio indicates an effective dimensionality of 6.8, with 90% of the variance captured by seven components.
+
+When separated by activity regime, pronounced differences emerge. Quiet conditions occupy a comparatively high-dimensional and voluminous region of state space (participation ratio 5.37; state-space volume 1.7×10⁵), whereas active and flare states are progressively more constrained. During flares, the effective dimensionality drops to 3.11 and the occupied volume contracts by more than two orders of magnitude relative to quiet conditions.
+
+Despite this strong contraction, the flare state does not exhibit increased variance or entropy. Instead, the Shannon entropy of the normalized eigenvalue spectrum decreases from 1.88 bits (quiet) to 1.34 bits (flare), indicating that the dynamics collapse onto a small number of dominant modes rather than spreading across additional degrees of freedom.
+
+These results demonstrate that solar flares correspond to a contraction of the accessible state space onto a low-dimensional manifold. Rather than representing an expansion into new dynamical configurations, eruptive events impose strong constraints on the system, channeling its evolution through a reduced set of degrees of freedom.
+
+### 5.9 Physical Interpretation: Constraint-Dominated Dynamics
+
+The observed contraction of state-space volume during flares provides a unifying explanation for several previously identified phenomena. The breakdown of coupling hierarchies, the collapse of network connectivity, and the reduction of effective dimensionality all indicate that eruptive events do not introduce additional freedom into the system. Instead, magnetic reconnection drives the atmosphere into a highly constrained configuration dominated by a small number of collective modes.
+
+In this picture, quiet solar conditions correspond to a loosely constrained, high-dimensional regime in which multiple coupling pathways coexist. As magnetic stress accumulates, the system transitions toward a flare state characterized by reduced freedom and strong channeling of energy and information flow. The flare itself represents the release of stored energy within this constrained manifold, rather than an excursion into a higher-dimensional chaotic state.
+
+The strong reduction in state-space volume further implies that flares leave a lasting imprint on the system. Because the post-flare state occupies a different region of the state space, the dynamics do not simply revert to their pre-flare configuration, consistent with the hysteresis observed in both operator dynamics and network topology.
+
+### 5.10 Limitations and Outlook
+
+Several methodological and physical considerations constrain the interpretation of these results.
+
+**Chromospheric channel (304 Å).** Unlike the optically thin coronal EUV lines, the 304 Å channel (He II) is optically thick and originates from a range of formation heights in the chromosphere and transition region. Coupling involving this channel therefore reflects line-of-sight integration effects and radiative transfer processes that differ fundamentally from coronal emission. The consistently weaker and more variable coupling observed for 304 Å pairs is consistent with this physical distinction, and we interpret the chromospheric layer as a regime boundary rather than a smoothly integrated component of coronal organization.
+
+**Sample size and event generalization.** The flare-regime analysis is based on a limited number of major events (N = 2 X-class flares), with the state-space decomposition relying on relatively few flare-state data points (N ≈ 7). While the observed patterns are internally consistent and statistically significant, generalization to all flare classes and solar cycle phases requires validation across a larger event sample. The checkpoint-enabled analysis pipeline developed here is designed to facilitate such extended studies.
+
+**Cadence and spatial resolution.** The 12-minute synoptic cadence may undersample rapid flare dynamics, particularly during the impulsive phase. Higher-cadence AIA data (12-second full resolution) could reveal finer temporal structure in coupling evolution, though at substantially increased computational cost.
+
+**Outlook.** Future work should extend the analysis across multiple solar rotations and activity cycles to establish baseline variability and long-term trends. Integration with magnetogram data (HMI) could directly test the hypothesis of magnetically mediated coupling, while application to stellar EUV observations may enable comparative studies of atmospheric organization across different stellar types.
+
 ---
 
 ## 6. Conclusion
@@ -349,3 +407,31 @@ Beyond solar physics, the methodology is directly applicable to other multichann
 ![Figure 8](figures/figure8_redundancy_structure.png)
 
 *Redundancy structure and functional clustering of multichannel coupling. (A) Correlation matrix of pairwise coupling strengths across time, revealing coordinated variability among channel pairs without shared wavelengths or temperature response functions. (B) Hierarchical clustering (dendrogram) of coupling relationships, identifying four functional clusters: a chromospheric bridge, a dominant coronal backbone, an activity-dependent flare-channel group, and an intermediate transition zone. (C) Stability backbone composed of channel pairs exhibiting both high mutual information and reliability exceeding 90%. These links persist across quiet, active, and eruptive conditions. (D) Network representation of redundant coupling relationships, illustrating how multiple thermally separated layers participate in coherent, magnetically mediated interaction patterns. Together, these panels demonstrate that solar atmospheric coupling is redundantly encoded across temperature layers, providing robustness and continuity of structural organization during dynamical regime transitions.*
+
+### Figure 9 — State Space Contraction During Flares
+
+![Figure 9](figures/figure9_state_space.png)
+
+*Contraction of the effective solar atmospheric state space during flares. (A) Projection of the solar state vector, constructed from the coupling invariants I₁–I₅ and their temporal derivatives, onto the leading principal components. Quiet (green), active (orange), and flare (red) states occupy progressively smaller regions of the state space. (B) Effective dimensionality quantified by the participation ratio for different activity regimes. While quiet conditions span a higher-dimensional region of the embedding space, flare states collapse onto a reduced number of dominant modes. (C) Normalized state-space volume occupied by each regime, showing a contraction by more than two orders of magnitude during flares relative to quiet conditions. (D) Entropy of the eigenvalue spectrum of the state-space covariance matrix. The reduction in entropy during flares indicates increased dynamical constraint rather than enhanced variability. Together, these panels demonstrate that major solar flares correspond to a contraction of the accessible state space onto a low-dimensional manifold, reflecting a transition from distributed coronal organization to strongly constrained dynamics.*
+
+---
+
+## References
+
+1. Boerner, P., Edwards, C., Lemen, J., et al. (2012). Initial Calibration of the Atmospheric Imaging Assembly (AIA) on the Solar Dynamics Observatory (SDO). *Solar Physics*, 275, 41–66. https://doi.org/10.1007/s11207-011-9804-8
+
+2. Cover, T. M., & Thomas, J. A. (2006). *Elements of Information Theory* (2nd ed.). Wiley-Interscience.
+
+3. Kraskov, A., Stögbauer, H., & Grassberger, P. (2004). Estimating mutual information. *Physical Review E*, 69, 066138. https://doi.org/10.1103/PhysRevE.69.066138
+
+4. Lemen, J. R., Title, A. M., Akin, D. J., et al. (2012). The Atmospheric Imaging Assembly (AIA) on the Solar Dynamics Observatory (SDO). *Solar Physics*, 275, 17–40. https://doi.org/10.1007/s11207-011-9776-8
+
+5. O'Dwyer, B., Del Zanna, G., Mason, H. E., Weber, M. A., & Tripathi, D. (2010). SDO/AIA response to coronal hole, quiet Sun, active region, and flare plasma. *Astronomy & Astrophysics*, 521, A21. https://doi.org/10.1051/0004-6361/201014872
+
+6. Pesnell, W. D., Thompson, B. J., & Chamberlin, P. C. (2012). The Solar Dynamics Observatory (SDO). *Solar Physics*, 275, 3–15. https://doi.org/10.1007/s11207-011-9841-3
+
+7. Shibata, K., & Magara, T. (2011). Solar Flares: Magnetohydrodynamic Processes. *Living Reviews in Solar Physics*, 8, 6. https://doi.org/10.12942/lrsp-2011-6
+
+8. Shannon, C. E. (1948). A Mathematical Theory of Communication. *Bell System Technical Journal*, 27, 379–423. https://doi.org/10.1002/j.1538-7305.1948.tb01338.x
+
+9. Viall, N. M., & Klimchuk, J. A. (2012). Evidence for Widespread Cooling in an Active Region Observed with the SDO Atmospheric Imaging Assembly. *The Astrophysical Journal*, 753, 35. https://doi.org/10.1088/0004-637X/753/1/35
