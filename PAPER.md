@@ -66,17 +66,13 @@ For each frame, we apply minimal preprocessing: FITS loading and NaN handling, r
 
 We quantify statistical dependence between pairs of EUV channels using mutual information (MI), estimated via histogram discretization with 64 bins and fixed bin ranges. MI is reported in bits.
 
-$$
-I(X;Y) = \sum_{x,y} p(x,y) \log_2 \frac{p(x,y)}{p(x)p(y)}
-$$
+I(X;Y) = Σ p(x,y) log₂ [p(x,y) / p(x)p(y)]
 
 ### 3.2 Geometric Normalization
 
 To remove disk geometry and radial intensity gradients, we estimate the per-frame radial mean profile and normalize each image. The residual is defined as:
 
-$$
-R(r,\theta) = \frac{I(r,\theta)}{\langle I(r) \rangle}
-$$
+R(r,θ) = I(r,θ) / ⟨I(r)⟩
 
 ### 3.3 Hierarchy of Null Models
 
@@ -89,9 +85,7 @@ $$
 
 Local coupling beyond geometry and coarse structure is quantified as:
 
-$$
-\Delta\text{MI}_{\text{sector}}^{(i,j)} = \text{MI}(R_i, R_j) - \text{MI}_{\text{sector-null}}(R_i, R_j)
-$$
+ΔMI_sector(i,j) = MI(Rᵢ, Rⱼ) − MI_sector-null(Rᵢ, Rⱼ)
 
 ### 3.5 Spatial Analysis
 
@@ -111,9 +105,9 @@ For major eruptive events, we analyze flare-specific time windows as separate su
 
 ### 4.1 Global versus Geometry-Controlled Coupling
 
-We compute MI on original images and on geometry-normalized residuals. Across a 6-hour interval (30 timepoints), the ratio $\text{MI}_{\text{residual}}/\text{MI}_{\text{original}}$ remains stable at **30.8% ± 0.7%** (CV = 2.3%), indicating that most apparent coupling is geometric, while a consistent residual component remains after removal.
+We compute MI on original images and on geometry-normalized residuals. Across a 6-hour interval (30 timepoints), the ratio MI_residual/MI_original remains stable at **30.8% ± 0.7%** (CV = 2.3%), indicating that most apparent coupling is geometric, while a consistent residual component remains after removal.
 
-The residual coupling is extremely significant relative to shuffle-based null models, with minimum Z-scores exceeding Z = 986 and mean Z = 1252 ± 146 ($p < 10^{-100}$).
+The residual coupling is extremely significant relative to shuffle-based null models, with minimum Z-scores exceeding Z = 986 and mean Z = 1252 ± 146 (p < 10⁻¹⁰⁰).
 
 ### 4.2 Spatial Localization of Residual Coupling
 
@@ -123,15 +117,13 @@ Spatial MI maps (8×8 grid) show strong limb domination in original images. Afte
 
 Applying the hierarchy of null models yields the consistent ordering:
 
-$$
-\text{MI}_{\text{global}} < \text{MI}_{\text{ring}} < \text{MI}_{\text{sector}} < \text{MI}_{\text{residual}}
-$$
+MI_global < MI_ring < MI_sector < MI_residual
 
-This enables decomposition into radial, azimuthal, and local structure contributions, with a typical local contribution $\Delta\text{MI}_{\text{sector}} \approx 0.17$ bits.
+This enables decomposition into radial, azimuthal, and local structure contributions, with a typical local contribution ΔMI_sector ≈ 0.17 bits.
 
 ### 4.4 Temperature-Ordered Coupling Across EUV Channels
 
-Extending to seven EUV channels (21 pairs), we find temperature-ordered local coupling: thermally adjacent channels exhibit substantially stronger $\Delta\text{MI}_{\text{sector}}$ than thermally distant pairs. The strongest links occur among coronal channels (e.g., 193–211, 171–193), while chromospheric (304) and flare channels (94, 131) show weaker and more episodic coupling.
+Extending to seven EUV channels (21 pairs), we find temperature-ordered local coupling: thermally adjacent channels exhibit substantially stronger ΔMI_sector than thermally distant pairs. The strongest links occur among coronal channels (e.g., 193–211, 171–193), while chromospheric (304) and flare channels (94, 131) show weaker and more episodic coupling.
 
 ### 4.5 Robustness and Temporal Stability
 
@@ -141,9 +133,9 @@ Time-shift controls reduce coupling by >95%, alignment checks peak at (0,0), and
 
 To further examine how geometry-controlled multichannel coupling behaves during extreme solar activity, we analyzed an independent X1.9-class flare that occurred on 1 December 2025 (NOAA, source region AR4294, east limb). The reported flare peak times (e.g., NOAA X-ray flux) are used solely for timeline alignment; our MI metric quantifies structural coupling independently of intensity-based diagnostics.
 
-Figure 5 shows the temporal evolution of the local coupling metric $\Delta\text{MI}_{\text{sector}}$ for multiple EUV channel pairs before, during, and after the flare peak. A consistent pattern emerges: during the impulsive flare phase, most channel pairs exhibit a statistically significant reduction in coupling, particularly those involving the hottest coronal channels (e.g., 131 Å, 335 Å). Decoupling begins shortly before the reported X-ray peak and persists throughout the flare interval.
+Figure 5 shows the temporal evolution of the local coupling metric ΔMI_sector for multiple EUV channel pairs before, during, and after the flare peak. A consistent pattern emerges: during the impulsive flare phase, most channel pairs exhibit a statistically significant reduction in coupling, particularly those involving the hottest coronal channels (e.g., 131 Å, 335 Å). Decoupling begins shortly before the reported X-ray peak and persists throughout the flare interval.
 
-Notably, the flare peak itself does not coincide with a maximum in multichannel coupling. Instead, approximately 50–70 minutes after the X-ray peak, the system exhibits a pronounced global recoupling event, during which a majority of channel pairs show simultaneous increases in $\Delta\text{MI}_{\text{sector}}$. At this time, several thermally adjacent pairs (e.g., 193–211 Å) reach their highest observed coupling values, while chromosphere–corona pairs (e.g., 304–131 Å) also show enhanced coupling.
+Notably, the flare peak itself does not coincide with a maximum in multichannel coupling. Instead, approximately 50–70 minutes after the X-ray peak, the system exhibits a pronounced global recoupling event, during which a majority of channel pairs show simultaneous increases in ΔMI_sector. At this time, several thermally adjacent pairs (e.g., 193–211 Å) reach their highest observed coupling values, while chromosphere–corona pairs (e.g., 304–131 Å) also show enhanced coupling.
 
 This behavior mirrors the coupling dynamics observed for the X9.0 flare analyzed earlier, indicating that major flares are characterized by a transient breakdown of multithermal organization, followed by delayed large-scale reorganization of the solar atmosphere. We emphasize that the observed decoupling is not interpreted as a predictive precursor signal, but rather as a diagnostic signature of rapid magnetic reconfiguration during the impulsive flare phase.
 
@@ -153,25 +145,19 @@ These results demonstrate that geometry-controlled mutual information captures a
 
 To formalize the dynamical behavior of the solar atmosphere identified in Sections 4.4–4.6, we model the evolution of the solar state vector
 
-$$
-\mathbf{S}(t) = \big(I_1(t), I_2(t), I_3(t), I_4(t), I_5(t)\big)
-$$
+**S**(t) = (I₁(t), I₂(t), I₃(t), I₄(t), I₅(t))
 
-with regime-dependent linearized transition operators. For quiet (normal) conditions, we define the operator $A_N$ and bias $b_N$ via ordinary least squares (regularized) regression
+with regime-dependent linearized transition operators. For quiet (normal) conditions, we define the operator A_N and bias b_N via ordinary least squares (regularized) regression
 
-$$
-\mathbf{S}(t+\Delta t) \approx A_N \mathbf{S}(t) + b_N,
-$$
+**S**(t+Δt) ≈ A_N · **S**(t) + b_N
 
-using timepoints outside major eruptive intervals. Similarly, for flare (eruptive) conditions, we fit $A_F$ and $b_F$ using data within the temporal bounds of strong activity.
+using timepoints outside major eruptive intervals. Similarly, for flare (eruptive) conditions, we fit A_F and b_F using data within the temporal bounds of strong activity.
 
 #### 4.7.1 Regime-Dependent Operator Comparison
 
 The Frobenius norm of the difference between the flare and quiet operators is
 
-$$
-\lVert A_F - A_N \rVert_F = 2.90,
-$$
+‖A_F − A_N‖_F = 2.90
 
 indicating that the linearized dynamics in the two regimes are distinct. A direct comparison of the operators confirms that coupling relationships among the state vector components reorganize under eruptive conditions.
 
@@ -179,25 +165,21 @@ indicating that the linearized dynamics in the two regimes are distinct. A direc
 
 We define the residual of the quiet regime operator as
 
-$$
-r(t) = \lVert \mathbf{S}(t+\Delta t) - (A_N \mathbf{S}(t) + b_N) \rVert,
-$$
+r(t) = ‖**S**(t+Δt) − (A_N · **S**(t) + b_N)‖
 
-which measures deviation from normal propagation. Over the analyzed event on 1 December 2025, we observe that $r(t)$ increases significantly before the reported X-ray peak:
+which measures deviation from normal propagation. Over the analyzed event on 1 December 2025, we observe that r(t) increases significantly before the reported X-ray peak:
 
-- Pre-flare baseline: $2.3 \pm 1.3$
-- Flare interval: $5.1 \pm 1.4$
-- Threshold (2σ): $5.3$
+- Pre-flare baseline: 2.3 ± 1.3
+- Flare interval: 5.1 ± 1.4
+- Threshold (2σ): 5.3
 
 This suggests that the departure from normal dynamics precedes peak radiative signatures, offering a regime-agnostic diagnostic of imminent reorganization.
 
 #### 4.7.3 Hysteresis in State Transitions
 
-To investigate reversibility, we define operators for transitions from normal to flare ($A_{NF}$) and flare to normal ($A_{FN}$). The difference
+To investigate reversibility, we define operators for transitions from normal to flare (A_NF) and flare to normal (A_FN). The difference
 
-$$
-\lVert A_{NF} - A_{FN} \rVert_F = 4.93
-$$
+‖A_NF − A_FN‖_F = 4.93
 
 demonstrates that the pathway back to quiet conditions is not a simple inverse of the eruptive transition. This hysteresis supports the interpretation that the corona follows different dynamical rules in and out of the eruptive regime.
 
@@ -207,16 +189,16 @@ A comparison of mean component values before and after the eruptive interval rev
 
 | Component | Post-Flare Shift |
 |-----------|------------------|
-| $I_5$ (Normalized Scale) | +108% |
-| $I_3$ (Chromosphere) | +27% |
-| $I_2$ (Corona Ratio) | +6% |
-| $I_4$ (Core Stability) | −4% |
+| I₅ (Normalized Scale) | +108% |
+| I₃ (Chromosphere) | +27% |
+| I₂ (Corona Ratio) | +6% |
+| I₄ (Core Stability) | −4% |
 
 This observation indicates that the system does not return to its pre-flare attractor but occupies a reconfigured dynamical basin.
 
 #### 4.7.5 Eigenmode Structure of the Transition Operators
 
-An eigenanalysis of the transition matrices $A_N$ and $A_F$ reveals a spectrum of modes with distinct damping characteristics. The dominant mode (Mode 1, $\lambda \approx 0.90$) exhibits slow decay and is primarily composed of the strongly coupled components $I_5$, $I_2$, and $I_4$, representing the long-timescale structure of the corona. In contrast, the fastest decaying mode (Mode 5, $\lambda \approx 0.11$) is dominated by $I_3$, consistent with rapid chromospheric fluctuations that damp quickly under both quiet and eruptive dynamics.
+An eigenanalysis of the transition matrices A_N and A_F reveals a spectrum of modes with distinct damping characteristics. The dominant mode (Mode 1, λ ≈ 0.90) exhibits slow decay and is primarily composed of the strongly coupled components I₅, I₂, and I₄, representing the long-timescale structure of the corona. In contrast, the fastest decaying mode (Mode 5, λ ≈ 0.11) is dominated by I₃, consistent with rapid chromospheric fluctuations that damp quickly under both quiet and eruptive dynamics.
 
 These mode structures corroborate the notion of fast and slow manifolds in the solar atmospheric dynamics and provide a basis for reduced-order modeling.
 
@@ -228,25 +210,25 @@ The results presented in Figure 6 place the geometry-controlled mutual informati
 
 ### 5.1 Regime-Dependent Dynamics of the Solar Atmosphere
 
-The identification of distinct transition operators for quiet and flare conditions indicates that the solar atmosphere obeys different effective dynamical laws in these regimes. The significant difference between the operators $A_N$ and $A_F$ implies that flares are not merely characterized by increased emission or enhanced coupling amplitudes, but by a reorganization of how structural information propagates across temperature layers.
+The identification of distinct transition operators for quiet and flare conditions indicates that the solar atmosphere obeys different effective dynamical laws in these regimes. The significant difference between the operators A_N and A_F implies that flares are not merely characterized by increased emission or enhanced coupling amplitudes, but by a reorganization of how structural information propagates across temperature layers.
 
 This observation aligns with the physical picture of magnetic reconnection as a topological transition: the global organization of magnetic connectivity changes, leading to altered pathways for energy and information transfer throughout the corona.
 
 ### 5.2 Early Breakdown of Quiet-Regime Propagation
 
-The residual metric $r(t)$ (Figure 6A) reveals that the quiet-regime operator fails to describe the system dynamics prior to the X-ray peak of the flare. Importantly, this deviation is detected without reference to radiative flare diagnostics, suggesting that the atmospheric reorganization begins before peak energy release becomes visible in standard X-ray measurements.
+The residual metric r(t) (Figure 6A) reveals that the quiet-regime operator fails to describe the system dynamics prior to the X-ray peak of the flare. Importantly, this deviation is detected without reference to radiative flare diagnostics, suggesting that the atmospheric reorganization begins before peak energy release becomes visible in standard X-ray measurements.
 
 Physically, this behavior is consistent with a gradual destabilization of magnetic structures preceding large-scale reconnection. The rising residual therefore captures the onset of dynamical inconsistency in the quiet regime, offering a system-level indicator of impending eruptive activity.
 
 ### 5.3 Hysteresis and Post-Flare Reorganization
 
-The pronounced difference between the forward (normal-to-flare) and backward (flare-to-normal) transition operators demonstrates that the system exhibits hysteresis. The solar atmosphere does not retrace its dynamical trajectory after an eruptive event but instead relaxes into a modified configuration. This is further supported by the persistent post-flare shifts in the state vector components, particularly the strong increase in the normalized scale invariant $I_5$.
+The pronounced difference between the forward (normal-to-flare) and backward (flare-to-normal) transition operators demonstrates that the system exhibits hysteresis. The solar atmosphere does not retrace its dynamical trajectory after an eruptive event but instead relaxes into a modified configuration. This is further supported by the persistent post-flare shifts in the state vector components, particularly the strong increase in the normalized scale invariant I₅.
 
 Such hysteresis is a hallmark of nonlinear systems undergoing topological reconfiguration and indicates that major flares leave a lasting imprint on coronal organization, rather than constituting transient perturbations around a fixed equilibrium.
 
 ### 5.4 Fast and Slow Manifolds in Atmospheric Dynamics
 
-The eigenmode analysis of the quiet-regime operator reveals a clear separation between slow and fast dynamical components. The dominant slow mode, composed primarily of coronal invariants ($I_2$, $I_4$, $I_5$), governs long-timescale structural evolution, while rapidly damped modes are dominated by chromospheric variability ($I_3$).
+The eigenmode analysis of the quiet-regime operator reveals a clear separation between slow and fast dynamical components. The dominant slow mode, composed primarily of coronal invariants (I₂, I₄, I₅), governs long-timescale structural evolution, while rapidly damped modes are dominated by chromospheric variability (I₃).
 
 This fast–slow manifold separation provides a natural explanation for the observed behavior during flares: chromospheric fluctuations are rapidly suppressed, while the coronal structure reorganizes on longer timescales. The emergence of eruptive behavior can thus be interpreted as a collapse of hierarchical ordering among slow modes rather than an amplification of fast variability.
 
@@ -262,7 +244,7 @@ The dynamical regime switching identified in the operator-based analysis (Figure
 
 #### 5.6.1 Collapse of Network Connectivity During Flare Onset
 
-At the onset of the eruptive phase (02:48 UTC), the coupling network undergoes an abrupt collapse. Network density decreases from 0.17 to 0.14, the clustering coefficient drops from 0.33 to zero, and the largest connected component is reduced from four to three nodes. This collapse indicates a breakdown of coordinated interactions among temperature layers and mirrors the loss of hierarchical ordering captured by the invariant $I_1$ and the quiet-regime operator residual.
+At the onset of the eruptive phase (02:48 UTC), the coupling network undergoes an abrupt collapse. Network density decreases from 0.17 to 0.14, the clustering coefficient drops from 0.33 to zero, and the largest connected component is reduced from four to three nodes. This collapse indicates a breakdown of coordinated interactions among temperature layers and mirrors the loss of hierarchical ordering captured by the invariant I₁ and the quiet-regime operator residual.
 
 Physically, this phase corresponds to the destabilization of pre-existing magnetic connectivity as the system approaches large-scale reconnection. Rather than increasing global coherence, the flare onset is characterized by fragmentation and decoupling of the atmospheric interaction network.
 
