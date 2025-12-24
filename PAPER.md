@@ -224,35 +224,37 @@ These mode structures corroborate the notion of fast and slow manifolds in the s
 
 ## 5. Discussion
 
-### 5.1 Physical Interpretation of Temperature-Ordered Coupling
+The results presented in Figure 6 place the geometry-controlled mutual information framework into a dynamical systems context. Rather than describing solar flares as isolated impulsive events, the analysis demonstrates that eruptive activity corresponds to a regime switch in the propagation dynamics of the solar atmospheric state vector.
 
-The key result is a temperature-ordered pattern of local coupling that persists after removing geometric and statistical confounders. This ordering is consistent with a stratified atmosphere in which magnetic connectivity, heating, and transport organize neighboring thermal layers more strongly than distant ones.
+### 5.1 Regime-Dependent Dynamics of the Solar Atmosphere
 
-### 5.2 Relation to Existing Solar Diagnostics
+The identification of distinct transition operators for quiet and flare conditions indicates that the solar atmosphere obeys different effective dynamical laws in these regimes. The significant difference between the operators $A_N$ and $A_F$ implies that flares are not merely characterized by increased emission or enhanced coupling amplitudes, but by a reorganization of how structural information propagates across temperature layers.
 
-The framework complements correlation- and emission-measure-based diagnostics by capturing nonlinear dependence while explicitly controlling geometry. It provides an orthogonal measurement: how strongly layers are locally organized together, independent of disk-scale morphology.
+This observation aligns with the physical picture of magnetic reconnection as a topological transition: the global organization of magnetic connectivity changes, leading to altered pathways for energy and information transfer throughout the corona.
 
-### 5.3 Channel-Specific Behavior
+### 5.2 Early Breakdown of Quiet-Regime Propagation
 
-Chromospheric 304 Å shows weaker coupling to coronal channels, consistent with different plasma regimes. Flare channels (94, 131) show moderate, activity-dependent coupling patterns, consistent with episodic heating rather than persistent structural organization.
+The residual metric $r(t)$ (Figure 6A) reveals that the quiet-regime operator fails to describe the system dynamics prior to the X-ray peak of the flare. Importantly, this deviation is detected without reference to radiative flare diagnostics, suggesting that the atmospheric reorganization begins before peak energy release becomes visible in standard X-ray measurements.
 
-Analysis of an X9.0 flare event (October 3, 2024) reveals that most channel pairs exhibit *reduced* local coupling during the flare peak, with decreases of 25–47% across many pairs. We emphasize that reduced coupling during flares does not contradict physical expectations; rather, it reflects the breakdown of coherent multichannel organization during rapid magnetic reconfiguration. The metric measures structural organization, not activity intensity—extreme events disrupt the ordered layering that produces high $\Delta\text{MI}_{\text{sector}}$ under quiescent conditions. A similar dynamical pattern of decoupling and delayed recoupling was also observed for the X1.9 flare on 1 December 2025 (see Sec. 4.6).
+Physically, this behavior is consistent with a gradual destabilization of magnetic structures preceding large-scale reconnection. The rising residual therefore captures the onset of dynamical inconsistency in the quiet regime, offering a system-level indicator of impending eruptive activity.
 
-A second flare event—the X1.9 flare of December 1, 2025—provides striking temporal validation. Cross-referencing our 27-day rotation analysis with GOES X-ray data reveals precise temporal alignment: the GOES X-ray peak occurred at **02:49 UTC**, while our coupling metric shows a decoupling window from **02:48–03:12 UTC**—a near-exact match. A recoupling maximum followed at 03:48 UTC, 59 minutes after the X-ray peak. During this recoupling phase, 17 of 21 channel pairs showed increased coupling relative to the pre-flare baseline (sign test: p = 0.019), with a mean increase of +0.15 ± 0.12 bits. The 193–211 Å pair reached a peak coupling of 0.94 bits—among the highest values observed in the entire 27-day dataset.
+### 5.3 Hysteresis and Post-Flare Reorganization
 
-The temporal coincidence of decoupling with the X-ray peak, followed by systematic recoupling approximately one hour later, demonstrates that mutual information coupling responds directly to flare dynamics. The decoupling phase captures the disruption of coherent thermal layering during magnetic reconnection, while post-flare recoupling reflects the re-establishment of organized multichannel structure as the active region relaxes into a new configuration.
+The pronounced difference between the forward (normal-to-flare) and backward (flare-to-normal) transition operators demonstrates that the system exhibits hysteresis. The solar atmosphere does not retrace its dynamical trajectory after an eruptive event but instead relaxes into a modified configuration. This is further supported by the persistent post-flare shifts in the state vector components, particularly the strong increase in the normalized scale invariant $I_5$.
 
-### 5.4 Temporal Stability and Implications
+Such hysteresis is a hallmark of nonlinear systems undergoing topological reconfiguration and indicates that major flares leave a lasting imprint on coronal organization, rather than constituting transient perturbations around a fixed equilibrium.
 
-The stability of $\Delta\text{MI}_{\text{sector}}$ suggests a measurable baseline of atmospheric organization. This study does not claim predictivity; however, deviations from baseline may be informative for event-focused analyses.
+### 5.4 Fast and Slow Manifolds in Atmospheric Dynamics
 
-### 5.5 Methodological Generality
+The eigenmode analysis of the quiet-regime operator reveals a clear separation between slow and fast dynamical components. The dominant slow mode, composed primarily of coronal invariants ($I_2$, $I_4$, $I_5$), governs long-timescale structural evolution, while rapidly damped modes are dominated by chromospheric variability ($I_3$).
 
-The hierarchical null-model approach is general: decompose multichannel dependence by removing dominant structural contributions before interpretation.
+This fast–slow manifold separation provides a natural explanation for the observed behavior during flares: chromospheric fluctuations are rapidly suppressed, while the coronal structure reorganizes on longer timescales. The emergence of eruptive behavior can thus be interpreted as a collapse of hierarchical ordering among slow modes rather than an amplification of fast variability.
 
-### 5.6 Scope and Non-Claims
+### 5.5 Implications for Solar Diagnostics
 
-We do not infer causality or directionality. The metric measures shared structure, not energy transfer pathways.
+Together, these findings suggest that major solar flares are best understood as regime transitions in a structured dynamical system, characterized by operator switching, hysteresis, and attractor shifts. The geometry-controlled mutual information framework provides access to these properties by isolating intrinsic coupling dynamics from geometric and instrumental effects.
+
+Beyond flare analysis, the identification of regime-dependent operators and invariant structures opens a pathway toward reduced-order modeling of solar atmospheric dynamics and toward system-level diagnostics that complement traditional intensity-based space-weather indicators.
 
 ---
 
