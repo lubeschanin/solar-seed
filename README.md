@@ -170,7 +170,7 @@ This opens a user-friendly menu:
 
 Features:
 - **Checkpoint/Resume**: Long analyses save progress automatically
-- **Timezone Support**: Enter birth times with automatic UTC conversion
+- **Timezone Support**: Enter local times with automatic UTC conversion
 - **Mirror Fallback**: Automatic failover to backup data sources (ROB, SDAC, CfA)
 
 ## Usage (Command Line)

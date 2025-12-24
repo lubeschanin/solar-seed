@@ -416,7 +416,7 @@ def run_render():
         utc_timestamp = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%dT12:00:00")
         display_date = utc_timestamp[:10]
     else:
-        print("\n  ── Enter birth/event date and time ──\n")
+        print("\n  ── Enter date and time ──\n")
 
         # Get date in DD.MM.YYYY format
         while True:
