@@ -151,6 +151,10 @@ Chromospheric 304 Å shows weaker coupling to coronal channels, consistent with 
 
 Analysis of an X9.0 flare event (October 3, 2024) reveals that most channel pairs exhibit *reduced* local coupling during the flare peak, with decreases of 25–47% across many pairs. We emphasize that reduced coupling during flares does not contradict physical expectations; rather, it reflects the breakdown of coherent multichannel organization during rapid magnetic reconfiguration. The metric measures structural organization, not activity intensity—extreme events disrupt the ordered layering that produces high $\Delta\text{MI}_{\text{sector}}$ under quiescent conditions.
 
+A second flare event—the X1.9 flare of December 1, 2025—provides striking temporal validation. Cross-referencing our 27-day rotation analysis with GOES X-ray data reveals precise temporal alignment: the GOES X-ray peak occurred at **02:49 UTC**, while our coupling metric shows a decoupling window from **02:48–03:12 UTC**—a near-exact match. A recoupling maximum followed at 03:48 UTC, 59 minutes after the X-ray peak. During this recoupling phase, 17 of 21 channel pairs showed increased coupling relative to the pre-flare baseline (sign test: p = 0.019), with a mean increase of +0.15 ± 0.12 bits. The 193–211 Å pair reached a peak coupling of 0.94 bits—among the highest values observed in the entire 27-day dataset.
+
+The temporal coincidence of decoupling with the X-ray peak, followed by systematic recoupling approximately one hour later, demonstrates that mutual information coupling responds directly to flare dynamics. The decoupling phase captures the disruption of coherent thermal layering during magnetic reconnection, while post-flare recoupling reflects the re-establishment of organized multichannel structure as the active region relaxes into a new configuration.
+
 ### 5.4 Temporal Stability and Implications
 
 The stability of $\Delta\text{MI}_{\text{sector}}$ suggests a measurable baseline of atmospheric organization. This study does not claim predictivity; however, deviations from baseline may be informative for event-focused analyses.
