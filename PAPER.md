@@ -139,7 +139,7 @@ Time-shift controls reduce coupling by >95%, alignment checks peak at (0,0), and
 
 ### 4.6 Coupling Dynamics During Major Solar Flares
 
-To further examine how geometry-controlled multichannel coupling behaves during extreme solar activity, we analyzed an independent X1.9-class flare that occurred on 1 December 2025 (NOAA, source region AR4294, east limb).
+To further examine how geometry-controlled multichannel coupling behaves during extreme solar activity, we analyzed an independent X1.9-class flare that occurred on 1 December 2025 (NOAA, source region AR4294, east limb). The reported flare peak times (e.g., NOAA X-ray flux) are used solely for timeline alignment; our MI metric quantifies structural coupling independently of intensity-based diagnostics.
 
 Figure 5 shows the temporal evolution of the local coupling metric $\Delta\text{MI}_{\text{sector}}$ for multiple EUV channel pairs before, during, and after the flare peak. A consistent pattern emerges: during the impulsive flare phase, most channel pairs exhibit a statistically significant reduction in coupling, particularly those involving the hottest coronal channels (e.g., 131 Å, 335 Å). Decoupling begins shortly before the reported X-ray peak and persists throughout the flare interval.
 
