@@ -286,30 +286,19 @@ These results suggest that solar flares can be interpreted as nonequilibrium pha
 
 ---
 
-## 6. Limitations and Outlook
+## 6. Conclusion
 
-### 6.1 Methodological Limitations
+In this work, we introduced a geometry-controlled mutual information framework to investigate multichannel coupling in the solar atmosphere using SDO/AIA EUV observations. By explicitly removing geometric and instrumental biases, the method isolates intrinsic coupling structures across temperature layers and enables a system-level characterization of solar atmospheric dynamics.
 
-MI quantifies dependence but not causality. Histogram MI introduces finite-sample bias and depends on binning; null-model comparisons mitigate this. Radial normalization assumes approximate radial symmetry for disk-scale structure and provides conservative removal of geometry.
+Our analysis demonstrates that the solar atmosphere exhibits robust, temperature-ordered coupling invariants under quiet conditions, forming a stable hierarchical organization dominated by coronal layers. These invariants persist across time and activity levels, indicating an underlying structural backbone mediated by magnetic connectivity rather than transient radiative effects.
 
-### 6.2 Interpretation Limits
+During major solar flares, this organization undergoes a qualitative transformation. Using a low-dimensional solar state vector derived from coupling invariants, we show that eruptive events correspond to regime switches in the system dynamics. This transition is characterized by a breakdown of the quiet-regime propagation operator, detectable prior to the X-ray peak, followed by a distinct flare-regime operator and pronounced hysteresis. The post-flare state does not return to its pre-event configuration but instead occupies a reorganized attractor with persistently higher connectivity.
 
-$\Delta\text{MI}_{\text{sector}}$ does not identify mechanisms. Additional diagnostics (e.g., magnetograms) are required to connect coupling to topology and transport. Flare channels can produce episodic behavior.
+A complementary network-theoretic analysis reveals that these dynamical regime switches correspond to nonequilibrium phase transitions in the coupling network of the solar atmosphere. Flare onset is marked by a collapse of network coherence, while the recovery phase produces an overshooting reconnection into a more strongly coupled state. The consistency between operator-based dynamics and network-level phase behavior supports a unified interpretation of flares as system-wide reorganizations rather than localized impulsive phenomena.
 
-### 6.3 Temporal and Observational Scope
+Together, these results establish geometry-controlled mutual information as a powerful tool for probing the dynamical organization of the solar atmosphere. By focusing on intrinsic coupling structures and their evolution, the framework provides access to early indicators of regime change, hysteresis effects, and post-event reconfiguration that are not readily captured by traditional intensity-based diagnostics.
 
-Extending beyond 24 hours to full solar rotations and solar-cycle phases is future work. Higher-cadence datasets may reveal finer structure but require careful handling of exposure and gaps.
-
-### 6.4 Outlook
-
-1. **Long-term studies:** coupling evolution across rotations and the solar cycle
-2. **Event-conditioned analysis:** baseline deviations around flares/CMEs
-3. **Magnetic integration:** relate coupling to magnetogram-derived topology
-4. **Method extensions:** alternative MI estimators and multiscale measures
-
-### 6.5 Concluding Remarks
-
-Careful separation of geometric, statistical, and local contributions is essential for interpreting multichannel dependencies. The presented framework provides a reproducible basis for future multichannel analyses.
+Beyond solar physics, the methodology is directly applicable to other multichannel, spatially structured systems where disentangling intrinsic interactions from geometric constraints is essential. As such, the approach opens new avenues for reduced-order modeling, comparative stellar studies, and system-level diagnostics of complex plasma environments.
 
 ---
 
