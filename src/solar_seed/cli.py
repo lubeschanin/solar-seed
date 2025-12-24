@@ -299,7 +299,12 @@ def run_rotation():
 
 """)
 
-    if get_choice("Start? [y/n]:", ["y", "n"]) == "y":
+    print("  Auto-push checkpoints to git? (for cross-system resume)")
+    print("    [y] Yes - push after each checkpoint")
+    print("    [n] No  - local only")
+    auto_push = get_choice("Choose [y/n]:", ["y", "n"]) == "y"
+
+    if get_choice("\n  Start? [y/n]:", ["y", "n"]) == "y":
         print("\n  🚀 Starting rotation analysis...\n")
         print("  Tip: Press Ctrl+C to pause at any time.")
         print("       The analysis will resume on next start.\n")
@@ -310,7 +315,8 @@ def run_rotation():
             cadence_minutes=int(cadence),
             start_time_str=start_date,
             resume=resume,
-            verbose=True
+            verbose=True,
+            auto_push=auto_push
         )
     else:
         print("\n  Cancelled.")

@@ -812,9 +812,18 @@ def save_checkpoint(
     checkpoint_path: Path,
     pair_timeseries: Dict[Tuple[int, int], List[float]],
     timestamps: List[str],
-    last_index: int
+    last_index: int,
+    auto_push: bool = False
 ) -> None:
-    """Speichert Checkpoint für Resume."""
+    """Speichert Checkpoint für Resume.
+
+    Args:
+        checkpoint_path: Pfad zur Checkpoint-Datei
+        pair_timeseries: Zeitreihen-Daten
+        timestamps: Liste der Zeitstempel
+        last_index: Letzter verarbeiteter Index
+        auto_push: Automatisch git commit & push nach Speicherung
+    """
     data = {
         "pair_timeseries": {f"{p[0]}-{p[1]}": v for p, v in pair_timeseries.items()},
         "timestamps": timestamps,
@@ -822,6 +831,54 @@ def save_checkpoint(
     }
     with open(checkpoint_path, "w") as f:
         json.dump(data, f)
+
+    if auto_push:
+        git_push_checkpoint(checkpoint_path, last_index, len(timestamps))
+
+
+def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None:
+    """Git commit & push des Checkpoints für Cross-System Resume."""
+    import subprocess
+
+    try:
+        # Nur pushen wenn wir in einem Git-Repo sind
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            capture_output=True,
+            text=True,
+            cwd=checkpoint_path.parent.parent.parent  # Project root
+        )
+        if result.returncode != 0:
+            return  # Kein Git-Repo
+
+        project_root = checkpoint_path.parent.parent.parent
+        rel_path = checkpoint_path.relative_to(project_root)
+
+        # Add, commit, push
+        subprocess.run(
+            ["git", "add", str(rel_path)],
+            cwd=project_root,
+            capture_output=True
+        )
+
+        commit_msg = f"Auto-checkpoint: {current}/{total} timepoints ({current*100//total}%)"
+        subprocess.run(
+            ["git", "commit", "-m", commit_msg, "--no-verify"],
+            cwd=project_root,
+            capture_output=True
+        )
+
+        subprocess.run(
+            ["git", "push"],
+            cwd=project_root,
+            capture_output=True
+        )
+
+        print(f"    📤 Checkpoint pushed ({current}/{total})")
+
+    except Exception as e:
+        # Git-Fehler ignorieren, Analyse nicht unterbrechen
+        pass
 
 
 def run_rotation_analysis(
@@ -832,7 +889,8 @@ def run_rotation_analysis(
     use_real_data: bool = True,
     start_time_str: Optional[str] = None,
     verbose: bool = True,
-    resume: bool = True  # Automatisch fortsetzen falls Checkpoint existiert
+    resume: bool = True,  # Automatisch fortsetzen falls Checkpoint existiert
+    auto_push: bool = False  # Git push nach jedem Checkpoint
 ) -> RotationAnalysisResult:
     """
     Führt 27-Tage-Rotationsanalyse mit echten AIA-Daten durch.
@@ -954,7 +1012,7 @@ def run_rotation_analysis(
                     start_time_str, end_time.isoformat()
                 )
                 save_rotation_results(interim_result, out_path, timestamps)
-                save_checkpoint(checkpoint_path, pair_timeseries, timestamps, i + 1)
+                save_checkpoint(checkpoint_path, pair_timeseries, timestamps, i + 1, auto_push)
 
                 # Garbage Collection alle 10 Zeitpunkte
                 if (i + 1) % 10 == 0:
@@ -973,7 +1031,7 @@ def run_rotation_analysis(
 
         # Final checkpoint only if data available
         if len(timestamps) > 0:
-            save_checkpoint(checkpoint_path, pair_timeseries, timestamps, len(timestamps))
+            save_checkpoint(checkpoint_path, pair_timeseries, timestamps, len(timestamps), auto_push)
 
         if len(timestamps) == 0:
             print("  ✗ No data loaded.")
@@ -1341,6 +1399,8 @@ Beispiele:
                         help="Kadenz in Minuten für Rotationsanalyse (default: 60)")
     parser.add_argument("--no-resume", action="store_true",
                         help="Nicht von Checkpoint fortsetzen, neu starten")
+    parser.add_argument("--auto-push", action="store_true",
+                        help="Git push nach jedem Checkpoint (für Cross-System Resume)")
 
     args = parser.parse_args()
 
@@ -1352,7 +1412,8 @@ Beispiele:
             use_real_data=True,  # Immer echte Daten für Rotation
             start_time_str=args.start,
             verbose=True,
-            resume=not args.no_resume
+            resume=not args.no_resume,
+            auto_push=args.auto_push
         )
     elif args.timescale_only:
         run_timescale_comparison(
