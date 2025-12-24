@@ -133,6 +133,18 @@ Extending to seven EUV channels (21 pairs), we find temperature-ordered local co
 
 Time-shift controls reduce coupling by >95%, alignment checks peak at (0,0), and scale-response tests indicate coupling dominated by mid-to-large spatial scales.
 
+### 4.6 Coupling Dynamics During Major Solar Flares
+
+To further examine how geometry-controlled multichannel coupling behaves during extreme solar activity, we analyzed an independent X1.9-class flare that occurred on 1 December 2025 (NOAA, source region AR4294, east limb).
+
+Figure 5 shows the temporal evolution of the local coupling metric $\Delta\text{MI}_{\text{sector}}$ for multiple EUV channel pairs before, during, and after the flare peak. A consistent pattern emerges: during the impulsive flare phase, most channel pairs exhibit a statistically significant reduction in coupling, particularly those involving the hottest coronal channels (e.g., 131 Å, 335 Å). Decoupling begins shortly before the reported X-ray peak and persists throughout the flare interval.
+
+Notably, the flare peak itself does not coincide with a maximum in multichannel coupling. Instead, approximately 50–70 minutes after the X-ray peak, the system exhibits a pronounced global recoupling event, during which a majority of channel pairs show simultaneous increases in $\Delta\text{MI}_{\text{sector}}$. At this time, several thermally adjacent pairs (e.g., 193–211 Å) reach their highest observed coupling values, while chromosphere–corona pairs (e.g., 304–131 Å) also show enhanced coupling.
+
+This behavior mirrors the coupling dynamics observed for the X9.0 flare analyzed earlier, indicating that major flares are characterized by a transient breakdown of multithermal organization, followed by delayed large-scale reorganization of the solar atmosphere. We emphasize that the observed decoupling is not interpreted as a predictive precursor signal, but rather as a diagnostic signature of rapid magnetic reconfiguration during the impulsive flare phase.
+
+These results demonstrate that geometry-controlled mutual information captures aspects of flare-driven coronal restructuring that are not directly visible in traditional intensity-based diagnostics such as X-ray flux, highlighting its potential as a complementary tool for studying the dynamical organization of the solar atmosphere.
+
 ---
 
 ## 5. Discussion
