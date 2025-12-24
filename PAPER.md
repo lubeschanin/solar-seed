@@ -26,7 +26,7 @@ Traditional approaches to multichannel analysis in solar physics rely on intensi
 
 Here we introduce a geometry-controlled mutual information framework designed to isolate genuine multichannel coupling in solar imagery. Mutual information (MI), unlike linear correlation, captures arbitrary statistical dependence between channels, but must be applied with care in spatially structured systems. We therefore combine MI estimation with a hierarchy of null models that progressively remove disk geometry, radial statistics, and coarse azimuthal structure.
 
-Applying this framework to seven AIA EUV channels spanning chromospheric to flare temperatures, we construct a coupling matrix of the solar atmosphere. We show that neighboring thermal layers exhibit significantly stronger local coupling than thermally distant layers, and that this structure is stable over time, spatially localized, and robust to extensive controls. These results reveal an intrinsic, temperature-ordered organization of the solar atmosphere consistent with magnetically mediated interactions between adjacent thermal layers.
+Applying this framework to seven AIA EUV channels spanning chromospheric to flare temperatures, we construct a coupling matrix of the solar atmosphere. We show that neighboring thermal layers exhibit significantly stronger local coupling than thermally distant layers, and that this structure is stable over time, spatially localized, and robust to extensive controls. We investigate multichannel coupling dynamics not only in baseline periods but also across major eruptive events. These results reveal an intrinsic, temperature-ordered organization of the solar atmosphere consistent with magnetically mediated interactions between adjacent thermal layers.
 
 ---
 
@@ -101,6 +101,10 @@ Images are divided into an 8×8 grid and MI is computed per cell to obtain spati
 
 Null distributions are generated via repeated shuffles. Z-scores and p-values are computed per timepoint and aggregated over time.
 
+### 3.7 Flare-Specific Analysis
+
+For major eruptive events, we analyze flare-specific time windows as separate subsets. Time intervals are defined relative to the GOES X-ray peak: pre-flare (−2 to −0.5 hours), flare (−0.5 to +1 hour), and post-flare (+1 to +3 hours). Coupling metrics are computed independently for each phase, enabling comparison of baseline organization with flare-driven dynamics.
+
 ---
 
 ## 4. Results
@@ -161,7 +165,7 @@ The framework complements correlation- and emission-measure-based diagnostics by
 
 Chromospheric 304 Å shows weaker coupling to coronal channels, consistent with different plasma regimes. Flare channels (94, 131) show moderate, activity-dependent coupling patterns, consistent with episodic heating rather than persistent structural organization.
 
-Analysis of an X9.0 flare event (October 3, 2024) reveals that most channel pairs exhibit *reduced* local coupling during the flare peak, with decreases of 25–47% across many pairs. We emphasize that reduced coupling during flares does not contradict physical expectations; rather, it reflects the breakdown of coherent multichannel organization during rapid magnetic reconfiguration. The metric measures structural organization, not activity intensity—extreme events disrupt the ordered layering that produces high $\Delta\text{MI}_{\text{sector}}$ under quiescent conditions.
+Analysis of an X9.0 flare event (October 3, 2024) reveals that most channel pairs exhibit *reduced* local coupling during the flare peak, with decreases of 25–47% across many pairs. We emphasize that reduced coupling during flares does not contradict physical expectations; rather, it reflects the breakdown of coherent multichannel organization during rapid magnetic reconfiguration. The metric measures structural organization, not activity intensity—extreme events disrupt the ordered layering that produces high $\Delta\text{MI}_{\text{sector}}$ under quiescent conditions. A similar dynamical pattern of decoupling and delayed recoupling was also observed for the X1.9 flare on 1 December 2025 (see Sec. 4.6).
 
 A second flare event—the X1.9 flare of December 1, 2025—provides striking temporal validation. Cross-referencing our 27-day rotation analysis with GOES X-ray data reveals precise temporal alignment: the GOES X-ray peak occurred at **02:49 UTC**, while our coupling metric shows a decoupling window from **02:48–03:12 UTC**—a near-exact match. A recoupling maximum followed at 03:48 UTC, 59 minutes after the X-ray peak. During this recoupling phase, 17 of 21 channel pairs showed increased coupling relative to the pre-flare baseline (sign test: p = 0.019), with a mean increase of +0.15 ± 0.12 bits. The 193–211 Å pair reached a peak coupling of 0.94 bits—among the highest values observed in the entire 27-day dataset.
 
