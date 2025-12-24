@@ -256,6 +256,34 @@ Together, these findings suggest that major solar flares are best understood as 
 
 Beyond flare analysis, the identification of regime-dependent operators and invariant structures opens a pathway toward reduced-order modeling of solar atmospheric dynamics and toward system-level diagnostics that complement traditional intensity-based space-weather indicators.
 
+### 5.6 Network Phase Transitions and Hysteresis in Solar Atmospheric Coupling
+
+The dynamical regime switching identified in the operator-based analysis (Figure 6) is further corroborated by an independent network-theoretic characterization of the coupling structure. By interpreting the pairwise residual coupling metrics as a weighted interaction network between temperature layers, we identify two distinct network phase transitions during the analyzed X-class flare (Figure 7).
+
+#### 5.6.1 Collapse of Network Connectivity During Flare Onset
+
+At the onset of the eruptive phase (02:48 UTC), the coupling network undergoes an abrupt collapse. Network density decreases from 0.17 to 0.14, the clustering coefficient drops from 0.33 to zero, and the largest connected component is reduced from four to three nodes. This collapse indicates a breakdown of coordinated interactions among temperature layers and mirrors the loss of hierarchical ordering captured by the invariant $I_1$ and the quiet-regime operator residual.
+
+Physically, this phase corresponds to the destabilization of pre-existing magnetic connectivity as the system approaches large-scale reconnection. Rather than increasing global coherence, the flare onset is characterized by fragmentation and decoupling of the atmospheric interaction network.
+
+#### 5.6.2 Explosive Reconnection and Network Reorganization
+
+Approximately one hour after the X-ray peak (03:48 UTC), the system enters a second transition marked by rapid network reconnection. Network density increases explosively from 0.14 to 0.67, achieving full connectivity across all seven temperature nodes. Notably, this connectivity overshoots pre-flare levels, indicating that the post-flare state is not a simple recovery of the original configuration.
+
+This reconnection phase aligns temporally with the recoupling spike observed in the operator-based analysis and reflects the establishment of a new, globally coherent interaction structure following magnetic reconfiguration.
+
+#### 5.6.3 Hysteresis and Post-Flare Attractor Shift
+
+A comparison of pre- and post-flare network metrics reveals pronounced hysteresis. None of the primary network measures—density, mean degree, clustering coefficient, or total weight—return to their pre-flare values. Instead, all metrics increase substantially in the post-flare state, with clustering increasing by 139% and network density by 82%.
+
+This persistent shift demonstrates that the solar atmospheric coupling network relaxes into a new attractor characterized by higher connectivity and stronger inter-layer coupling. Such behavior is consistent with irreversible topological changes in the coronal magnetic field and reinforces the interpretation of major flares as system-wide reorganization events rather than transient perturbations.
+
+#### 5.6.4 Unified Interpretation with Operator Dynamics
+
+Together with the operator-based regime switching, the network analysis establishes a coherent picture of flare dynamics: the onset phase is marked by a collapse of coupling coherence, while the recovery phase produces a reorganized, more strongly connected state. The consistency between the operator-level hysteresis and the network-level attractor shift underscores the robustness of the identified phase transitions.
+
+These results suggest that solar flares can be interpreted as nonequilibrium phase transitions in a dynamically coupled, magnetically mediated network, with lasting consequences for the organization of the solar atmosphere.
+
 ---
 
 ## 6. Limitations and Outlook
@@ -322,3 +350,9 @@ Careful separation of geometric, statistical, and local contributions is essenti
 ![Figure 6](figures/figure6_operator_dynamics.png)
 
 *Regime-switching dynamics of the solar state vector during an X-class flare. (A) Time evolution of the residual $r(t) = \lVert \mathbf{S}(t+\Delta t) - (A_N \mathbf{S}(t) + b_N) \rVert$, quantifying deviations from the quiet-regime transition operator. The residual exceeds the 2σ threshold prior to the GOES X-ray peak (red band), indicating an early breakdown of quiet-regime dynamics before peak radiative emission. (B) Difference between the flare and quiet transition operators, $A_F - A_N$. Colored entries denote changes in linear coupling coefficients between state vector components ($I_1$–$I_5$); starred values indicate statistically significant differences. The structured pattern demonstrates a redistribution of dynamical couplings rather than a uniform amplitude change. (C) Eigenvalue spectrum of the quiet-regime operator $A_N$. The dominant slow mode ($\lambda \approx 0.90$) represents long-timescale coronal organization, while rapidly damped modes ($\lambda \lesssim 0.11$) are dominated by chromospheric variability, consistent with fast–slow manifold separation. (D) Trajectory of the solar state vector in reduced state space ($I_1$, $I_2$, $I_5$). The system transitions from a pre-flare state (green) through the eruptive phase (red) to a post-flare state (blue), which does not coincide with the pre-flare trajectory, indicating hysteresis and a post-event attractor shift. Together, these panels demonstrate that major solar flares correspond to a regime switch characterized by operator change, early deviation from quiet-regime dynamics, hysteresis, and persistent post-flare reorganization.*
+
+### Figure 7 — Network Phase Transitions
+
+![Figure 7](figures/figure7_phase_transitions.png)
+
+*Network-level phase transitions in solar atmospheric coupling during the X1.9 flare. (A) Number of significant coupling pairs (above thresholds 0.2, 0.3, 0.4) as a function of time, showing abrupt collapse during flare onset and subsequent recovery. (B) Network topology metrics: density (fraction of active edges) and clustering coefficient, both exhibiting sharp transitions coincident with flare dynamics. (C) Phase space trajectory in network coordinates (density vs. total coupling weight), demonstrating pronounced hysteresis—the post-flare state does not return to the pre-flare region but occupies a new attractor with higher connectivity. (D) Rate of change of network metrics, highlighting the timing of phase transitions: collapse onset precedes the X-ray peak, while reconnection occurs approximately one hour later. The network analysis independently confirms the regime-switching dynamics identified through operator methods (Figure 6) and establishes that major flares constitute nonequilibrium phase transitions with lasting topological consequences.*
