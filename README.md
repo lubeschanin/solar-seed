@@ -146,18 +146,22 @@ The easiest way to use Solar Seed is through the interactive menu:
 This opens a user-friendly menu:
 
 ```
-╔════════════════════════════════════════════════════════════╗
-║                    SOLAR SEED                              ║
-║         Multichannel Coupling Analysis                     ║
-╚════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════════════════╗
+║                                                                       ║
+║             🌞  S O L A R   S E E D  🌱                               ║
+║                                                                       ║
+║         Mutual Information Analysis of the Sun                        ║
+║                                                                       ║
+╚═══════════════════════════════════════════════════════════════════════╝
 
-  [1] Quick Analysis (6 hours)
-  [2] Extended Analysis (24 hours)
-  [3] Rotation Analysis (27 days)
-  [4] Render Sun Images
-  [5] Generate Figures
-  [6] Resume Rotation Analysis
-  [7] Exit
+  [1]  Quick Test (synthetic data, ~2 min)
+  [2]  Multi-Channel Analysis (21 wavelength pairs)
+  [3]  Rotation Analysis (27 days, real AIA data)
+  [4]  Flare Analysis (X9.0 Event)
+  [5]  Render Sun Images (download + visualize)
+  [6]  Status: Check running analysis
+  [7]  View Results
+  [q]  Quit
 ```
 
 Features:
