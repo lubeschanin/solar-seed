@@ -12,7 +12,7 @@ Here we introduce a geometry-controlled mutual information framework to quantify
 
 Applying this method to seven EUV channels spanning chromospheric to flare temperatures, we construct a coupling matrix across thermal layers of the solar atmosphere. We find that neighboring temperature channels exhibit significantly stronger local coupling than thermally distant pairs. This temperature-ordered structure is stable over time, survives time-shift and alignment controls, and is spatially localized to active regions rather than disk geometry.
 
-Our results demonstrate that information-theoretic coupling, when properly controlled for geometric effects, reveals an intrinsic organization of the solar atmosphere consistent with magnetically mediated interactions between adjacent thermal layers. The presented framework provides a general, reproducible approach for analyzing multichannel structure in complex astrophysical systems.
+Our results demonstrate that information-theoretic coupling, when properly controlled for geometric effects, reveals an intrinsic organization of the solar atmosphere consistent with magnetically mediated interactions between adjacent thermal layers. Solar flares emerge as regime-switching events in this dynamically coupled system, leaving a persistent imprint on its organizational structure. The presented framework provides a general, reproducible approach for analyzing multichannel structure in complex astrophysical systems.
 
 ---
 
