@@ -342,7 +342,45 @@ Several methodological and physical considerations constrain the interpretation 
 
 ---
 
-## 6. Conclusion
+## 6. Implications and Applications
+
+The results presented in this study provide concrete benefits for both applied space-weather forecasting and the theoretical understanding of solar atmospheric dynamics. By shifting the analysis from intensity-based diagnostics to system-level coupling and organization, the framework enables new classes of physical insight and practical diagnostics.
+
+### 6.1 Improved Space-Weather Forecasting
+
+A key practical implication of this work lies in early detection of eruptive solar activity. We show that the intrinsic coupling structure of the solar atmosphere begins to break down prior to the peak in soft X-ray emission. The resulting increase in the operator residual provides a potential early-warning indicator that precedes conventional flare signatures.
+
+Unlike traditional approaches that primarily quantify radiative intensity, the proposed framework diagnoses changes in the internal organization of the corona. This distinction enables detection of destabilization processes before large-scale energy release becomes observable, offering a complementary diagnostic for operational space-weather monitoring.
+
+### 6.2 Physically Grounded Interpretation of Multichannel Data
+
+The geometry-controlled mutual information framework addresses a long-standing challenge in solar data analysis: separating genuine physical coupling from apparent correlations caused by spherical geometry and line-of-sight effects. By explicitly removing these geometric contributions, the method reveals intrinsic interaction patterns that were previously obscured.
+
+The identification of regime-dependent dynamics further implies that solar flares should not be treated as mere perturbations of the quiet Sun. Instead, they represent a distinct dynamical regime governed by different effective propagation laws. This insight places important constraints on physical models, which must account for regime switching rather than assuming a single stationary description of coronal dynamics.
+
+### 6.3 Long-Term Evolution and Structural Memory
+
+The observation of hysteresis following major flares demonstrates that the solar atmosphere does not simply revert to its pre-event configuration. Instead, the system settles into a reorganized state characterized by higher connectivity and altered coupling patterns. This behavior suggests a form of structural memory, whereby past eruptive events influence subsequent atmospheric organization.
+
+Such memory effects are relevant for understanding the evolution of active regions over extended periods and may help explain the clustering of eruptive activity in time.
+
+### 6.4 Reduced-Order Modeling of Solar Dynamics
+
+The state-space analysis reveals that during flares the effective dimensionality of the system collapses onto a low-dimensional manifold. This finding has important implications for numerical modeling: rather than requiring full-resolution simulations across many degrees of freedom, eruptive dynamics may be captured by a small number of dominant modes.
+
+This opens the possibility of reduced-order models that retain physical interpretability while significantly reducing computational cost, particularly for ensemble studies or real-time forecasting applications.
+
+### 6.5 Transferability to Other Stellar and Plasma Systems
+
+Although developed for SDO/AIA observations of the Sun, the proposed methodology is not solar-specific. The geometry-controlled mutual information approach provides a general tool for disentangling intrinsic coupling from geometric and instrumental effects in any multichannel, spatially structured system.
+
+Potential applications include the study of stellar atmospheres beyond the Sun, laboratory plasmas, and other complex systems where genuine physical interactions must be distinguished from observational artifacts.
+
+In summary, this work transforms the analysis of solar images from a primarily intensity-based description into a characterization of system architecture and dynamical organization, providing new pathways for both applied diagnostics and fundamental physical understanding.
+
+---
+
+## 7. Conclusion
 
 In this work, we introduced a geometry-controlled mutual information framework to investigate multichannel coupling in the solar atmosphere using SDO/AIA EUV observations. By explicitly removing geometric and instrumental biases, the method isolates intrinsic coupling structures across temperature layers and enables a system-level characterization of solar atmospheric dynamics.
 
