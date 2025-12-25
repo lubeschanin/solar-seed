@@ -841,44 +841,69 @@ def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None
     import subprocess
 
     try:
+        # Project root ermitteln (results/rotation/checkpoint.json -> project root)
+        project_root = checkpoint_path.parent.parent.parent.resolve()
+
         # Nur pushen wenn wir in einem Git-Repo sind
         result = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
             capture_output=True,
             text=True,
-            cwd=checkpoint_path.parent.parent.parent  # Project root
+            cwd=project_root
         )
         if result.returncode != 0:
-            return  # Kein Git-Repo
+            print("    ⚠️  Auto-push: Not a git repository")
+            return
 
-        project_root = checkpoint_path.parent.parent.parent
-        rel_path = checkpoint_path.relative_to(project_root)
+        # Alle Rotation-Dateien hinzufügen
+        rotation_dir = checkpoint_path.parent
+        files_to_add = [
+            rotation_dir / "checkpoint.json",
+            rotation_dir / "coupling_evolution.csv",
+            rotation_dir / "rotation_analysis.json",
+            rotation_dir / "rotation_analysis.txt"
+        ]
 
-        # Add, commit, push
-        subprocess.run(
-            ["git", "add", str(rel_path)],
-            cwd=project_root,
-            capture_output=True
-        )
+        for f in files_to_add:
+            if f.exists():
+                rel_path = f.relative_to(project_root)
+                subprocess.run(
+                    ["git", "add", str(rel_path)],
+                    cwd=project_root,
+                    capture_output=True
+                )
 
+        # Commit
         commit_msg = f"Auto-checkpoint: {current}/{total} timepoints ({current*100//total}%)"
-        subprocess.run(
+        commit_result = subprocess.run(
             ["git", "commit", "-m", commit_msg, "--no-verify"],
             cwd=project_root,
-            capture_output=True
+            capture_output=True,
+            text=True
         )
 
-        subprocess.run(
+        if commit_result.returncode != 0:
+            if "nothing to commit" in commit_result.stdout or "nothing to commit" in commit_result.stderr:
+                return  # Keine Änderungen, kein Push nötig
+            print(f"    ⚠️  Auto-push: Commit failed - {commit_result.stderr.strip()}")
+            return
+
+        # Push
+        push_result = subprocess.run(
             ["git", "push"],
             cwd=project_root,
-            capture_output=True
+            capture_output=True,
+            text=True
         )
+
+        if push_result.returncode != 0:
+            print(f"    ⚠️  Auto-push: Push failed - {push_result.stderr.strip()}")
+            return
 
         print(f"    📤 Checkpoint pushed ({current}/{total})")
 
     except Exception as e:
-        # Git-Fehler ignorieren, Analyse nicht unterbrechen
-        pass
+        print(f"    ⚠️  Auto-push error: {e}")
 
 
 def run_rotation_analysis(
