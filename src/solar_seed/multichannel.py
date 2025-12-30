@@ -419,18 +419,22 @@ def load_aia_multichannel(
                         time.sleep(2)
                         continue
 
-                    # Lade Map mit Unterdrückung von Truncation-Warnings
-                    with warnings.catch_warnings():
-                        warnings.filterwarnings('error')  # Warnings als Exceptions
-                        try:
-                            aia_map = sunpy.map.Map(file_path)
-                        except Warning as w:
-                            if "truncated" in str(w).lower():
+                    # Lade Map - prüfe auf Truncation nach dem Laden
+                    with warnings.catch_warnings(record=True) as caught_warnings:
+                        warnings.simplefilter("always")
+                        aia_map = sunpy.map.Map(file_path)
+
+                        # Prüfe ob Truncation-Warning aufgetreten
+                        for w in caught_warnings:
+                            if "truncat" in str(w.message).lower():
                                 print(f"    ⚠️  Truncated file, Retry...")
                                 Path(file_path).unlink()
+                                aia_map = None
                                 time.sleep(2)
-                                continue
-                            raise
+                                break
+
+                        if aia_map is None:
+                            continue
 
                     files_to_delete.append(file_path)
                     break  # Erfolg!
