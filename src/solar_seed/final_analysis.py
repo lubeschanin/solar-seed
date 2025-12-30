@@ -841,22 +841,20 @@ def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None
     import subprocess
 
     try:
-        # Project root ermitteln (results/rotation/checkpoint.json -> project root)
-        project_root = checkpoint_path.parent.parent.parent.resolve()
-
-        # Nur pushen wenn wir in einem Git-Repo sind
+        # Git root finden (funktioniert auch mit relativen Pfaden)
         result = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
+            ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
-            text=True,
-            cwd=project_root
+            text=True
         )
         if result.returncode != 0:
             print("    ⚠️  Auto-push: Not a git repository")
             return
 
+        project_root = Path(result.stdout.strip())
+
         # Alle Rotation-Dateien hinzufügen
-        rotation_dir = checkpoint_path.parent
+        rotation_dir = checkpoint_path.resolve().parent
         files_to_add = [
             rotation_dir / "checkpoint.json",
             rotation_dir / "coupling_evolution.csv",
