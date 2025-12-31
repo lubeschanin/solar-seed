@@ -841,9 +841,10 @@ def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None
     import subprocess
 
     try:
-        # Git root finden (funktioniert auch mit relativen Pfaden)
+        # Git root finden - vom Checkpoint-Verzeichnis aus
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
+            cwd=checkpoint_path.parent,
             capture_output=True,
             text=True
         )
