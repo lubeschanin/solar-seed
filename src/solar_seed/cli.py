@@ -42,7 +42,7 @@ def print_menu():
   │                                                                     │
   │   [2]  Multi-Channel Analysis (21 wavelength pairs)                 │
   │                                                                     │
-  │   [3]  Rotation Analysis (27 days, real AIA data)                   │
+  │   [3]  Rotation Analysis (segment-based, scalable)                  │
   │                                                                     │
   │   [4]  Flare Analysis (X9.0 Event)                                  │
   │                                                                     │
@@ -134,6 +134,45 @@ def check_checkpoint() -> dict:
     return info
 
 
+def check_segments() -> dict:
+    """Check existing segments."""
+    import json
+    segment_dir = Path("results/rotation/segments")
+
+    info = {
+        "exists": False,
+        "count": 0,
+        "dates": [],
+        "total_points": 0,
+        "first_date": None,
+        "last_date": None
+    }
+
+    if not segment_dir.exists():
+        return info
+
+    segment_files = sorted(segment_dir.glob("*.json"))
+    if not segment_files:
+        return info
+
+    info["exists"] = True
+    info["count"] = len(segment_files)
+    info["dates"] = [f.stem for f in segment_files]
+    info["first_date"] = info["dates"][0] if info["dates"] else None
+    info["last_date"] = info["dates"][-1] if info["dates"] else None
+
+    # Count total points
+    for sf in segment_files:
+        try:
+            with open(sf) as f:
+                data = json.load(f)
+            info["total_points"] += data.get("n_points", 0)
+        except:
+            pass
+
+    return info
+
+
 def run_quicktest():
     """Quick test with synthetic data."""
     clear_screen()
@@ -205,118 +244,222 @@ def run_multichannel():
 
 
 def run_rotation():
-    """27-day Rotation Analysis."""
+    """Segment-based Rotation Analysis."""
     clear_screen()
     print_header()
     print("""
   ┌─────────────────────────────────────────────────────────────────────┐
-  │              27-DAY ROTATION ANALYSIS                               │
+  │            SEGMENT-BASED ROTATION ANALYSIS                          │
   └─────────────────────────────────────────────────────────────────────┘
 
-  Analyzes a complete solar rotation (~27 days).
-  Uses real AIA data from the SDO satellite.
+  Analyzes solar rotation data using a scalable segment-based approach.
+  Each day is analyzed independently and can be extended later.
 
-  ⚠ Note: Downloads may be interrupted by network issues.
-          The analysis can be resumed at any time!
+  Benefits:
+    • Scalable: 16, 27, or 100+ days
+    • Fault-tolerant: only lose one day on failure
+    • Extensible: add more days without re-processing
 """)
 
-    # Check for existing checkpoint
+    # Check for existing segments
+    segments = check_segments()
     checkpoint = check_checkpoint()
 
-    if checkpoint["exists"]:
-        start_info = f"Start: {checkpoint['start_date']}" if checkpoint['start_date'] else ""
-        hours_info = f", {checkpoint['hours']}h" if checkpoint['hours'] else ""
-        cadence_info = f", {checkpoint['cadence']}min cadence" if checkpoint['cadence'] else ""
-        config_line = f"{start_info}{hours_info}{cadence_info}"
-
+    if segments["exists"]:
         print(f"""
   ┌─────────────────────────────────────────────────────────────────────┐
-  │  ✓ CHECKPOINT FOUND                                                 │
-  │    Already processed: {checkpoint['processed']} timepoints{' ' * (38 - len(str(checkpoint['processed'])))}│
-  │    {config_line:<65}│
+  │  ✓ SEGMENTS FOUND                                                   │
+  │    Days analyzed:  {segments['count']:<47}│
+  │    Period:         {segments['first_date']} → {segments['last_date']:<28}│
+  │    Total points:   {segments['total_points']:<47}│
   └─────────────────────────────────────────────────────────────────────┘
 """)
         print("  What would you like to do?")
-        print("    [1] Resume (recommended)")
-        print("    [2] Start fresh (delete checkpoint)")
-        print("    [3] Cancel")
+        print("    [1] Extend analysis (add more days)")
+        print("    [2] Aggregate existing segments")
+        print("    [3] Start fresh analysis")
+        print("    [4] Cancel")
 
-        action = get_choice("Choose [1/2/3]:", ["1", "2", "3"])
+        action = get_choice("Choose [1/2/3/4]:", ["1", "2", "3", "4"])
 
-        if action == "3":
+        if action == "4":
             print("\n  Cancelled.")
             return
 
-        resume = action == "1"
+        if action == "2":
+            print("\n  🔄 Aggregating segments...\n")
+            from solar_seed.final_analysis import aggregate_segments
+            aggregate_segments(verbose=True)
+            return
 
-        # If resuming, use saved config as defaults
-        if resume:
-            default_start = checkpoint.get("start_date") or (datetime.now() - timedelta(days=27)).strftime("%Y-%m-%d")
-            default_hours = checkpoint.get("hours") or 648
-            default_cadence = checkpoint.get("cadence") or 60
+        if action == "1":
+            # Extend: suggest next day after last segment
+            from datetime import datetime
+            last = datetime.strptime(segments["last_date"], "%Y-%m-%d")
+            default_start = (last + timedelta(days=1)).strftime("%Y-%m-%d")
+            default_end = (last + timedelta(days=8)).strftime("%Y-%m-%d")
 
-            print(f"\n  Using saved configuration (press Enter to keep):\n")
-            start_date = f"{default_start}T00:00:00"
-            hours = default_hours
-            cadence = default_cadence
-
-            print(f"    Start date:   {default_start}")
-            print(f"    Duration:     {hours} hours ({hours/24:.0f} days)")
-            print(f"    Cadence:      {cadence} minutes")
+            print(f"\n  Extend from {default_start}:")
         else:
-            print("\n  ── Configuration ──\n")
-            start_date = get_date("Start date:", 27)
-            hours = get_number("Duration in hours:", 648, 24, 1000)
-            cadence = get_number("Cadence in minutes:", 60, 12, 360)
-    else:
-        resume = False
-        print("\n  No checkpoint found. Starting new analysis.")
+            # Fresh start
+            default_start = (datetime.now() - timedelta(days=27)).strftime("%Y-%m-%d")
+            default_end = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            print("\n  ── New Analysis Configuration ──\n")
 
+    elif checkpoint["exists"]:
+        # Legacy checkpoint exists - offer conversion
+        print(f"""
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  ⚠ LEGACY CHECKPOINT FOUND                                          │
+  │    Processed: {checkpoint['processed']} timepoints{' ' * (48 - len(str(checkpoint['processed'])))}│
+  └─────────────────────────────────────────────────────────────────────┘
+""")
+        print("  What would you like to do?")
+        print("    [1] Convert to segments (recommended)")
+        print("    [2] Continue with legacy mode")
+        print("    [3] Start fresh with segments")
+        print("    [4] Cancel")
+
+        action = get_choice("Choose [1/2/3/4]:", ["1", "2", "3", "4"])
+
+        if action == "4":
+            print("\n  Cancelled.")
+            return
+
+        if action == "1":
+            print("\n  🔄 Converting checkpoint to segments...\n")
+            from solar_seed.final_analysis import convert_checkpoint_to_segments
+            convert_checkpoint_to_segments(verbose=True)
+            print("\n  ✓ Conversion complete! Run again to extend or aggregate.")
+            return
+
+        if action == "2":
+            # Legacy mode
+            run_rotation_legacy()
+            return
+
+        # Fresh start
+        default_start = (datetime.now() - timedelta(days=27)).strftime("%Y-%m-%d")
+        default_end = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        print("\n  ── New Analysis Configuration ──\n")
+
+    else:
+        # No data - new analysis
+        default_start = (datetime.now() - timedelta(days=27)).strftime("%Y-%m-%d")
+        default_end = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        print("\n  No existing data. Starting new segment-based analysis.")
         print("\n  ── Configuration ──\n")
 
-        start_date = get_date("Start date:", 27)
-        hours = get_number("Duration in hours:", 648, 24, 1000)  # 648h = 27 days
-        cadence = get_number("Cadence in minutes:", 60, 12, 360)
+    # Get date range
+    print(f"  Enter date range (YYYY-MM-DD format):\n")
 
-    n_points = int(hours * 60 / cadence)
-    days = hours / 24
+    while True:
+        start_input = input(f"    Start date [{default_start}]: ").strip()
+        start_date = start_input if start_input else default_start
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+            break
+        except ValueError:
+            print("    ⚠ Please use format YYYY-MM-DD")
+
+    while True:
+        end_input = input(f"    End date [{default_end}]: ").strip()
+        end_date = end_input if end_input else default_end
+        try:
+            datetime.strptime(end_date, "%Y-%m-%d")
+            break
+        except ValueError:
+            print("    ⚠ Please use format YYYY-MM-DD")
+
+    # Calculate days
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    n_days = (end_dt - start_dt).days + 1
+    n_points = n_days * 120  # 120 points per day at 12-min cadence
 
     print(f"""
   ────────────────────────────────────────────────────────────────────────
 
   Summary:
-    Start date:   {start_date[:10]}
-    Duration:     {days:.1f} days ({hours:.0f} hours)
-    Cadence:      {cadence:.0f} minutes
-    Datapoints:   {n_points}
-    Mode:         {"Resume" if resume else "Fresh start"}
+    Period:       {start_date} → {end_date}
+    Days:         {n_days}
+    Cadence:      12 minutes
+    Points/day:   120
+    Total:        ~{n_points} datapoints
 
-  Estimated download size: ~{n_points * 7 * 15:.0f} MB
-  (FITS files are deleted after processing)
+  Existing segments will be skipped automatically.
 
 """)
 
-    print("  Auto-push checkpoints to git? (for cross-system resume)")
-    print("    [y] Yes - push after each checkpoint")
+    print("  Auto-push segments to git?")
+    print("    [y] Yes - push after each day")
     print("    [n] No  - local only")
     auto_push = get_choice("Choose [y/n]:", ["y", "n"]) == "y"
 
     if get_choice("\n  Start? [y/n]:", ["y", "n"]) == "y":
-        print("\n  🚀 Starting rotation analysis...\n")
+        print("\n  🚀 Starting segment-based analysis...\n")
         print("  Tip: Press Ctrl+C to pause at any time.")
-        print("       The analysis will resume on next start.\n")
+        print("       Already completed segments are preserved.\n")
 
+        from solar_seed.final_analysis import run_segmented_rotation
+        run_segmented_rotation(
+            start_date=start_date,
+            end_date=end_date,
+            cadence_minutes=12,
+            verbose=True,
+            auto_push=auto_push
+        )
+    else:
+        print("\n  Cancelled.")
+
+
+def run_rotation_legacy():
+    """Legacy 27-day Rotation Analysis (monolithic)."""
+    clear_screen()
+    print_header()
+    print("""
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │          LEGACY ROTATION ANALYSIS (monolithic)                      │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  ⚠ This is the old monolithic approach. Consider using segment-based
+    analysis for better scalability and fault tolerance.
+""")
+
+    checkpoint = check_checkpoint()
+
+    if checkpoint["exists"]:
+        print(f"\n  Checkpoint found: {checkpoint['processed']} timepoints processed")
+        print("    [1] Resume")
+        print("    [2] Start fresh")
+        print("    [3] Cancel")
+
+        action = get_choice("Choose [1/2/3]:", ["1", "2", "3"])
+        if action == "3":
+            return
+        resume = action == "1"
+    else:
+        resume = False
+
+    if not resume:
+        print("\n  ── Configuration ──\n")
+        start_date = get_date("Start date:", 27)
+        hours = get_number("Duration in hours:", 648, 24, 1000)
+        cadence = get_number("Cadence in minutes:", 60, 12, 360)
+    else:
+        start_date = f"{checkpoint.get('start_date', '')}T00:00:00"
+        hours = checkpoint.get("hours") or 648
+        cadence = checkpoint.get("cadence") or 60
+
+    if get_choice("\n  Start? [y/n]:", ["y", "n"]) == "y":
         from solar_seed.final_analysis import run_rotation_analysis
         run_rotation_analysis(
             hours=hours,
             cadence_minutes=int(cadence),
             start_time_str=start_date,
             resume=resume,
-            verbose=True,
-            auto_push=auto_push
+            verbose=True
         )
-    else:
-        print("\n  Cancelled.")
 
 
 def run_flare():
@@ -500,20 +643,27 @@ def show_status():
   └─────────────────────────────────────────────────────────────────────┘
 """)
 
-    # Check rotation checkpoint
+    # Check segments (new)
+    segments = check_segments()
     checkpoint = check_checkpoint()
 
-    if checkpoint["exists"]:
-        # Calculate total from checkpoint info
+    if segments["exists"]:
+        print(f"  🌞 Rotation Analysis (Segment-based):")
+        print(f"     Days analyzed: {segments['count']}")
+        print(f"     Period:        {segments['first_date']} → {segments['last_date']}")
+        print(f"     Total points:  {segments['total_points']}")
+        print()
+    elif checkpoint["exists"]:
+        # Legacy checkpoint
         if checkpoint["hours"] and checkpoint["cadence"]:
             total = int(checkpoint["hours"] * 60 / checkpoint["cadence"])
         else:
-            total = 648  # Default 27 days at 60min cadence
+            total = 648
 
         current = checkpoint["processed"]
         pct = current / total * 100 if total > 0 else 0
 
-        print(f"  🌞 Rotation Analysis:")
+        print(f"  🌞 Rotation Analysis (Legacy):")
         if checkpoint["start_date"]:
             days = checkpoint["hours"] / 24 if checkpoint["hours"] else 27
             print(f"     Start: {checkpoint['start_date']}  Duration: {days:.0f} days")
@@ -521,7 +671,7 @@ def show_status():
         print(f"     Status: {'In progress...' if pct < 100 else 'Completed ✓'}")
         print()
     else:
-        print("  No rotation analysis in progress.\n")
+        print("  No rotation analysis data found.\n")
 
     # Check for result files
     result_dirs = [
