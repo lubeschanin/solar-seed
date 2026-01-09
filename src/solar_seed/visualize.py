@@ -765,13 +765,18 @@ def plot_stereo_validation(
     output_path: Path,
     stereo_data_path: Path | None = None,
 ) -> None:
-    """Figure 6: STEREO-A/EUVI cross-instrument validation.
+    """Figure 6: Time-synchronized antipodal validation of thermal coupling hierarchy.
 
-    Shows 180° cross-hemisphere validation with 90.6% rank correlation.
+    4-panel figure showing:
+    (a) Opposition geometry schematic
+    (b) Temperature-ordered coupling hierarchy by pair type
+    (c) Scatter comparison of ΔMI_sector values
+    (d) Rank correlation visualization
     """
     import matplotlib.pyplot as plt
-    from matplotlib.patches import FancyArrowPatch, Circle
-    import matplotlib.patches as mpatches
+    from matplotlib.patches import Circle, Arc, FancyArrowPatch
+    from matplotlib.patches import Patch
+    from scipy import stats
 
     # Load STEREO data or use defaults from synchronized 180° analysis
     if stereo_data_path and stereo_data_path.exists():
@@ -801,143 +806,229 @@ def plot_stereo_validation(
             }
         }
 
-    # Extract and rank EUVI pairs
-    euvi_pairs = [(pair, data["delta_mi"]) for pair, data in stereo_data["euvi_results"].items()]
-    euvi_pairs.sort(key=lambda x: x[1], reverse=True)
-
-    # Common pairs for comparison (wavelength mapping: 195→193)
+    # Pair mapping (EUVI → AIA equivalent)
     pair_mapping = {
         "171-195": "171-193",
         "171-304": "171-304",
         "195-304": "193-304",
     }
 
-    fig = plt.figure(figsize=(16, 7))
+    # Pair categories for panel (b)
+    pair_categories = {
+        "Coronal Core": {"euvi": "171-195", "aia": "171-193", "color": "#e74c3c"},
+        "Coronal–Chromospheric": {"euvi": "171-304", "aia": "171-304", "color": "#3498db"},
+        "Transition Layer": {"euvi": "195-304", "aia": "193-304", "color": "#27ae60"},
+    }
 
-    # Left panel: Geometry schematic
-    ax1 = fig.add_subplot(131)
-    ax1.set_xlim(-2.5, 2.5)
-    ax1.set_ylim(-2.5, 2.5)
-    ax1.set_aspect('equal')
-    ax1.axis('off')
-
-    # Draw Sun
-    sun = Circle((0, 0), 0.6, color='#f39c12', ec='#e67e22', linewidth=2)
-    ax1.add_patch(sun)
-    ax1.text(0, 0, 'Sun', ha='center', va='center', fontsize=10, fontweight='bold')
-
-    # Draw Earth (SDO/AIA)
-    earth = Circle((0, -1.8), 0.2, color='#3498db', ec='#2980b9', linewidth=2)
-    ax1.add_patch(earth)
-    ax1.text(0, -2.15, 'Earth\n(SDO/AIA)', ha='center', va='top', fontsize=9)
-
-    # Draw STEREO-A (opposite side - 180°)
-    stereo = Circle((0, 1.8), 0.2, color='#e74c3c', ec='#c0392b', linewidth=2)
-    ax1.add_patch(stereo)
-    ax1.text(0, 2.15, 'STEREO-A\n(EUVI)', ha='center', va='bottom', fontsize=9)
-
-    # Draw viewing lines
-    ax1.plot([0, 0], [-1.6, -0.6], 'b--', alpha=0.5, linewidth=1.5)
-    ax1.plot([0, 0], [1.6, 0.6], 'r--', alpha=0.5, linewidth=1.5)
-
-    # 180° label
-    ax1.annotate('', xy=(-0.8, 0.5), xytext=(-0.8, -0.5),
-                arrowprops=dict(arrowstyle='<->', color='#2c3e50', lw=2))
-    ax1.text(-1.2, 0, '180°', ha='center', va='center', fontsize=11, fontweight='bold', color='#2c3e50')
-
-    ax1.set_title('Viewing Geometry\n(Feb 6, 2011)', fontsize=12, fontweight='bold', pad=10)
-
-    # Center panel: Ranking comparison
-    ax2 = fig.add_subplot(132)
-
-    # EUVI rankings (left side)
-    euvi_y = np.arange(len(euvi_pairs))
-    euvi_values = [p[1] for p in euvi_pairs]
-    euvi_labels = [p[0].replace("-", "–") + " Å" for p in euvi_pairs]
-
-    bars1 = ax2.barh(euvi_y - 0.2, euvi_values, height=0.35, color='#e74c3c',
-                     edgecolor='#c0392b', alpha=0.8, label='STEREO-A/EUVI')
-
-    # AIA rankings for matching pairs
-    common_euvi = []
-    common_aia = []
-    for euvi_pair, euvi_val in euvi_pairs:
-        if euvi_pair in pair_mapping:
-            aia_pair = pair_mapping[euvi_pair]
-            if aia_pair in stereo_data["aia_results"]:
-                common_euvi.append((euvi_pair, euvi_val))
-                common_aia.append((aia_pair, stereo_data["aia_results"][aia_pair]))
-
-    # Plot AIA bars for common pairs
-    for i, (euvi_pair, _) in enumerate(euvi_pairs):
-        if euvi_pair in pair_mapping:
-            aia_pair = pair_mapping[euvi_pair]
-            if aia_pair in stereo_data["aia_results"]:
-                aia_val = stereo_data["aia_results"][aia_pair]
-                ax2.barh(i + 0.2, aia_val, height=0.35, color='#3498db',
-                        edgecolor='#2980b9', alpha=0.8)
-
-    ax2.set_yticks(euvi_y)
-    ax2.set_yticklabels(euvi_labels, fontsize=10)
-    ax2.set_xlabel("ΔMI_sector (bits)", fontsize=11)
-    ax2.set_title("Coupling Hierarchy Comparison", fontsize=12, fontweight='bold')
-    ax2.invert_yaxis()
-    ax2.grid(True, alpha=0.3, axis='x')
-
-    # Legend
-    from matplotlib.patches import Patch
-    legend_elements = [
-        Patch(facecolor='#e74c3c', edgecolor='#c0392b', label='STEREO-A/EUVI'),
-        Patch(facecolor='#3498db', edgecolor='#2980b9', label='SDO/AIA'),
-    ]
-    ax2.legend(handles=legend_elements, loc='lower right', fontsize=9)
-
-    # Right panel: Correlation and key result
-    ax3 = fig.add_subplot(133)
-    ax3.axis('off')
+    # Extract common pairs for scatter plot
+    common_pairs = []
+    for euvi_pair, aia_pair in pair_mapping.items():
+        if euvi_pair in stereo_data["euvi_results"] and aia_pair in stereo_data["aia_results"]:
+            euvi_val = stereo_data["euvi_results"][euvi_pair]["delta_mi"]
+            aia_val = stereo_data["aia_results"][aia_pair]
+            common_pairs.append({
+                "euvi_pair": euvi_pair,
+                "aia_pair": aia_pair,
+                "euvi_mi": euvi_val,
+                "aia_mi": aia_val,
+                "ratio": euvi_val / aia_val if aia_val > 0 else 0
+            })
 
     correlation = stereo_data.get("correlation", 0.906)
 
-    # Key result box
-    result_text = (
-        f"Rank Correlation\n\n"
-        f"ρ = {correlation:.1%}\n\n"
-        f"(p < 0.05)"
-    )
-    ax3.text(0.5, 0.7, result_text, ha='center', va='center', fontsize=20,
-             fontweight='bold', color='#27ae60',
-             transform=ax3.transAxes,
-             bbox=dict(boxstyle='round,pad=0.5', facecolor='#e8f8f5', edgecolor='#27ae60', linewidth=3))
+    # Create 2x2 figure
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    ((ax_a, ax_b), (ax_c, ax_d)) = axes
 
-    # Interpretation
-    interp_text = (
-        "Key Finding:\n\n"
-        "Temperature-ordered coupling hierarchy\n"
-        "is preserved when observing from\n"
-        "opposite sides of the Sun.\n\n"
-        "→ Intrinsic organizational principle\n"
-        "   independent of viewing geometry"
-    )
-    ax3.text(0.5, 0.25, interp_text, ha='center', va='center', fontsize=10,
-             transform=ax3.transAxes,
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    # =========================================================================
+    # Panel (a): Opposition geometry schematic
+    # =========================================================================
+    ax_a.set_xlim(-3, 3)
+    ax_a.set_ylim(-3, 3)
+    ax_a.set_aspect('equal')
+    ax_a.axis('off')
 
-    # Add sync info
-    max_dt = stereo_data.get("max_dt_euvi_min", 2.5)
-    ax3.text(0.5, 0.02, f"Time synchronization: Δt < {max_dt} min",
-             ha='center', va='bottom', fontsize=9, style='italic',
-             transform=ax3.transAxes, color='#7f8c8d')
+    # Draw Sun with corona indication
+    sun = Circle((0, 0), 0.5, color='#f39c12', ec='#e67e22', linewidth=3, zorder=10)
+    ax_a.add_patch(sun)
+    corona = Circle((0, 0), 0.7, color='#f39c12', alpha=0.2, ec='none', zorder=5)
+    ax_a.add_patch(corona)
 
-    ax3.set_title("Validation Result", fontsize=12, fontweight='bold')
+    # Draw orbit path
+    orbit = Circle((0, 0), 2.0, fill=False, color='#bdc3c7', linestyle='--', linewidth=1.5)
+    ax_a.add_patch(orbit)
 
+    # Draw Earth (SDO/AIA) at bottom
+    earth = Circle((0, -2.0), 0.18, color='#3498db', ec='#2980b9', linewidth=2, zorder=10)
+    ax_a.add_patch(earth)
+    ax_a.text(0, -2.5, 'Earth\n(SDO/AIA)', ha='center', va='top', fontsize=10, fontweight='bold', color='#2980b9')
+
+    # Draw STEREO-A at top (180° opposite)
+    stereo = Circle((0, 2.0), 0.18, color='#e74c3c', ec='#c0392b', linewidth=2, zorder=10)
+    ax_a.add_patch(stereo)
+    ax_a.text(0, 2.5, 'STEREO-A\n(EUVI)', ha='center', va='bottom', fontsize=10, fontweight='bold', color='#c0392b')
+
+    # Draw viewing cones
+    ax_a.fill([0, -0.8, 0.8], [-2.0, -0.5, -0.5], color='#3498db', alpha=0.15, zorder=1)
+    ax_a.fill([0, -0.8, 0.8], [2.0, 0.5, 0.5], color='#e74c3c', alpha=0.15, zorder=1)
+
+    # Near/far hemisphere labels
+    ax_a.text(0, -1.0, 'Near\nHemisphere', ha='center', va='center', fontsize=9, color='#2980b9', style='italic')
+    ax_a.text(0, 1.0, 'Far\nHemisphere', ha='center', va='center', fontsize=9, color='#c0392b', style='italic')
+
+    # 180° arc annotation
+    arc = Arc((0, 0), 1.2, 1.2, angle=0, theta1=90, theta2=270, color='#2c3e50', linewidth=2)
+    ax_a.add_patch(arc)
+    ax_a.text(-0.9, 0, '180°', ha='center', va='center', fontsize=12, fontweight='bold', color='#2c3e50')
+
+    # Sun-Earth line
+    ax_a.plot([0, 0], [-0.5, -1.8], 'b-', alpha=0.4, linewidth=1.5, zorder=2)
+    ax_a.plot([0, 0], [0.5, 1.8], 'r-', alpha=0.4, linewidth=1.5, zorder=2)
+
+    ax_a.set_title('(a) Opposition Geometry (2011-02-06)', fontsize=12, fontweight='bold', pad=10)
+
+    # =========================================================================
+    # Panel (b): Temperature-ordered coupling hierarchy by pair type
+    # =========================================================================
+    categories = list(pair_categories.keys())
+    x = np.arange(len(categories))
+    width = 0.35
+
+    euvi_vals = []
+    aia_vals = []
+    colors = []
+
+    for cat, info in pair_categories.items():
+        euvi_pair = info["euvi"]
+        aia_pair = info["aia"]
+        euvi_vals.append(stereo_data["euvi_results"][euvi_pair]["delta_mi"])
+        aia_vals.append(stereo_data["aia_results"][aia_pair])
+        colors.append(info["color"])
+
+    bars_euvi = ax_b.bar(x - width/2, euvi_vals, width, label='EUVI (far hemisphere)',
+                          color='#e74c3c', edgecolor='#c0392b', alpha=0.8)
+    bars_aia = ax_b.bar(x + width/2, aia_vals, width, label='AIA (near hemisphere)',
+                         color='#3498db', edgecolor='#2980b9', alpha=0.8)
+
+    # Add value labels on bars
+    for bar, val in zip(bars_euvi, euvi_vals):
+        ax_b.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.008,
+                  f'{val:.3f}', ha='center', va='bottom', fontsize=9, color='#c0392b')
+    for bar, val in zip(bars_aia, aia_vals):
+        ax_b.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.008,
+                  f'{val:.3f}', ha='center', va='bottom', fontsize=9, color='#2980b9')
+
+    ax_b.set_xticks(x)
+    ax_b.set_xticklabels(['Coronal Core\n(171–193/195 Å)', 'Coronal–Chromospheric\n(171–304 Å)',
+                          'Transition Layer\n(193/195–304 Å)'], fontsize=9)
+    ax_b.set_ylabel('ΔMI_sector (bits)', fontsize=11)
+    ax_b.set_ylim(0, max(aia_vals) * 1.25)
+    ax_b.legend(loc='upper right', fontsize=9)
+    ax_b.grid(True, alpha=0.3, axis='y')
+
+    # Add ranking arrows
+    ax_b.annotate('', xy=(2.3, 0.05), xytext=(2.3, 0.28),
+                  arrowprops=dict(arrowstyle='->', color='#7f8c8d', lw=2))
+    ax_b.text(2.45, 0.16, 'Ranking\npreserved', ha='left', va='center', fontsize=8, color='#7f8c8d')
+
+    ax_b.set_title('(b) Temperature-Ordered Coupling Hierarchy', fontsize=12, fontweight='bold')
+
+    # =========================================================================
+    # Panel (c): Scatter comparison of ΔMI_sector values
+    # =========================================================================
+    euvi_mi = [p["euvi_mi"] for p in common_pairs]
+    aia_mi = [p["aia_mi"] for p in common_pairs]
+
+    # Scatter plot
+    scatter_colors = ['#e74c3c', '#3498db', '#27ae60']
+    for i, p in enumerate(common_pairs):
+        ax_c.scatter(p["aia_mi"], p["euvi_mi"], s=200, c=scatter_colors[i],
+                     edgecolors='black', linewidth=2, zorder=10,
+                     label=f'{p["euvi_pair"]} / {p["aia_pair"]}')
+
+    # Add 1:1 reference line
+    max_val = max(max(euvi_mi), max(aia_mi)) * 1.1
+    ax_c.plot([0, max_val], [0, max_val], 'k--', alpha=0.3, linewidth=1, label='1:1 line')
+
+    # Add regression line
+    slope, intercept, r_val, p_val, std_err = stats.linregress(aia_mi, euvi_mi)
+    x_line = np.array([0, max_val])
+    ax_c.plot(x_line, slope * x_line + intercept, 'r-', alpha=0.7, linewidth=2,
+              label=f'Fit (slope={slope:.2f})')
+
+    # Add ratio annotations
+    for p in common_pairs:
+        ax_c.annotate(f'×{p["ratio"]:.2f}',
+                      xy=(p["aia_mi"], p["euvi_mi"]),
+                      xytext=(10, -10), textcoords='offset points',
+                      fontsize=9, color='#7f8c8d')
+
+    ax_c.set_xlabel('AIA ΔMI_sector (bits)', fontsize=11)
+    ax_c.set_ylabel('EUVI ΔMI_sector (bits)', fontsize=11)
+    ax_c.set_xlim(0, max_val)
+    ax_c.set_ylim(0, max(euvi_mi) * 1.3)
+    ax_c.legend(loc='upper left', fontsize=8)
+    ax_c.grid(True, alpha=0.3)
+
+    # Add correlation annotation
+    ax_c.text(0.95, 0.05, f'ρ = {correlation:.3f}\n(p < 0.05)',
+              transform=ax_c.transAxes, ha='right', va='bottom',
+              fontsize=12, fontweight='bold', color='#27ae60',
+              bbox=dict(boxstyle='round', facecolor='#e8f8f5', edgecolor='#27ae60', alpha=0.9))
+
+    ax_c.set_title('(c) Cross-Instrument ΔMI_sector Comparison', fontsize=12, fontweight='bold')
+
+    # =========================================================================
+    # Panel (d): Rank correlation heatmap
+    # =========================================================================
+    # Create rank comparison matrix
+    euvi_ranks = np.argsort(np.argsort([p["euvi_mi"] for p in common_pairs])[::-1]) + 1
+    aia_ranks = np.argsort(np.argsort([p["aia_mi"] for p in common_pairs])[::-1]) + 1
+
+    pair_labels = ['Coronal\nCore', 'Coronal–\nChromospheric', 'Transition\nLayer']
+
+    # Bar chart showing ranks
+    x = np.arange(len(pair_labels))
+    width = 0.35
+
+    bars_euvi_rank = ax_d.bar(x - width/2, euvi_ranks, width, label='EUVI Rank',
+                               color='#e74c3c', edgecolor='#c0392b', alpha=0.8)
+    bars_aia_rank = ax_d.bar(x + width/2, aia_ranks, width, label='AIA Rank',
+                              color='#3498db', edgecolor='#2980b9', alpha=0.8)
+
+    # Add rank numbers on bars
+    for bar, rank in zip(bars_euvi_rank, euvi_ranks):
+        ax_d.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
+                  f'#{rank}', ha='center', va='bottom', fontsize=11, fontweight='bold', color='#c0392b')
+    for bar, rank in zip(bars_aia_rank, aia_ranks):
+        ax_d.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
+                  f'#{rank}', ha='center', va='bottom', fontsize=11, fontweight='bold', color='#2980b9')
+
+    ax_d.set_xticks(x)
+    ax_d.set_xticklabels(pair_labels, fontsize=10)
+    ax_d.set_ylabel('Rank (1 = highest coupling)', fontsize=11)
+    ax_d.set_ylim(0, 4)
+    ax_d.invert_yaxis()
+    ax_d.legend(loc='lower right', fontsize=9)
+    ax_d.grid(True, alpha=0.3, axis='y')
+
+    # Add correlation result box
+    result_text = f'Rank Correlation\nρ = {correlation:.1%}'
+    ax_d.text(0.5, 0.85, result_text, transform=ax_d.transAxes,
+              ha='center', va='top', fontsize=14, fontweight='bold', color='#27ae60',
+              bbox=dict(boxstyle='round,pad=0.5', facecolor='#e8f8f5', edgecolor='#27ae60', linewidth=2))
+
+    ax_d.set_title('(d) Rank Preservation Across Instruments', fontsize=12, fontweight='bold')
+
+    # =========================================================================
     # Main title
+    # =========================================================================
     fig.suptitle(
-        "Cross-Instrument Validation: STEREO-A/EUVI vs SDO/AIA\n"
-        "180° Angular Separation (Opposite Hemispheres)",
+        'Time-Synchronized Antipodal Validation of Thermal Coupling Hierarchy',
         fontsize=14, fontweight='bold', y=0.98
     )
 
-    plt.tight_layout(rect=[0, 0, 1, 0.93])
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  Saved: {output_path}")

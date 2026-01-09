@@ -116,11 +116,11 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 *State-space contraction during flares. (A) PCA projection showing quiet (green), active (orange), flare (red) regimes. (B) Participation ratio by regime. (C) Volume contraction (>100×). (D) Entropy reduction indicating constraint rather than chaos.*
 
-### Figure 10 — Cross-Instrument Validation (STEREO)
+### Figure 10 — Antipodal Validation (STEREO)
 
-![Figure 10 — STEREO cross-instrument validation](figures/figure6_stereo_validation.png)
+![Figure 10 — STEREO antipodal validation](figures/figure6_stereo_validation.png)
 
-*Cross-instrument validation using STEREO-A/EUVI and SDO/AIA from 180° angular separation (opposite sides of the Sun). Left: Viewing geometry (Feb 6, 2011). Center: Coupling hierarchy comparison—ranking preserved despite different instruments. Right: 90.6% rank correlation establishes temperature-ordered coupling as an intrinsic organizational principle.*
+*Time-synchronized antipodal validation of thermal coupling hierarchy. (a) Opposition geometry (2011-02-06): STEREO-A views far hemisphere, SDO/AIA views near hemisphere. (b) Temperature-ordered coupling for three pair types. (c) Scatter comparison showing ρ = 0.906 rank agreement despite amplitude differences (×0.48–0.76). (d) Rank preservation across instruments confirms intrinsic organizational principle.*
 
 ## Flare Analysis
 
