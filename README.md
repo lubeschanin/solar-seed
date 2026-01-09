@@ -214,7 +214,7 @@ This opens a user-friendly menu:
 
   [1]  Quick Test (synthetic data, ~2 min)
   [2]  Multi-Channel Analysis (21 wavelength pairs)
-  [3]  Rotation Analysis (27 days, real AIA data)
+  [3]  Rotation Analysis (segment-based, scalable)
   [4]  Flare Analysis (X9.0 Event)
   [5]  Render Sun Images (download + visualize)
   [6]  Status: Check running analysis
@@ -223,8 +223,9 @@ This opens a user-friendly menu:
 ```
 
 Features:
+- **Segment-Based Analysis**: Each day analyzed independently, scalable to 100+ days
 - **Checkpoint/Resume**: Long analyses save progress automatically
-- **Auto-Push**: Git push checkpoints for cross-system resume (`--auto-push`)
+- **Auto-Push**: Git push segments for cross-system resume (`--auto-push`)
 - **Timezone Support**: Enter local times with automatic UTC conversion
 - **Mirror Fallback**: Automatic failover to backup data sources (ROB, SDAC, CfA)
 
@@ -246,11 +247,14 @@ uv run python -m solar_seed.multichannel --real --hours 1 --start "2024-01-15T12
 # Final analyses
 uv run python -m solar_seed.final_analysis
 
-# 27-day rotation analysis (with checkpoint/resume)
-uv run python -m solar_seed.final_analysis --rotation --start "2024-01-01"
+# Segment-based rotation analysis (recommended, scalable)
+uv run python -m solar_seed.final_analysis --segments --start 2025-12-01 --end 2025-12-27
+uv run python -m solar_seed.final_analysis --segment 2025-12-15  # Single day
+uv run python -m solar_seed.final_analysis --aggregate           # Combine segments
+uv run python -m solar_seed.final_analysis --convert-checkpoint  # Convert legacy data
 
-# With auto-push for cross-system resume
-uv run python -m solar_seed.final_analysis --rotation --start "2024-01-01" --auto-push
+# Legacy rotation analysis (monolithic, with checkpoint)
+uv run python -m solar_seed.final_analysis --rotation --start "2024-01-01"
 
 # Flare analysis (X9.0 event)
 uv run python -m solar_seed.flare_analysis --real
@@ -290,10 +294,14 @@ results/
 │   ├── flare_analysis.txt      # X9.0 flare phase comparison
 │   └── flare_analysis.json
 ├── rotation/
-│   ├── rotation_analysis.txt   # 27-day analysis results
+│   ├── segments/               # Segment-based analysis (recommended)
+│   │   ├── 2025-12-01.json     # Day 1 raw data + stats
+│   │   ├── 2025-12-02.json     # Day 2 ...
+│   │   └── ...
+│   ├── rotation_analysis.txt   # Aggregated results
 │   ├── rotation_analysis.json
 │   ├── coupling_evolution.csv  # Time series for all pairs
-│   └── checkpoint.json         # Resume checkpoint
+│   └── checkpoint.json         # Legacy checkpoint (optional)
 ├── final/
 │   ├── timescale_comparison.txt
 │   ├── timescale_comparison.json
