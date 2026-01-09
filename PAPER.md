@@ -346,7 +346,7 @@ Notably, the 304–211 Å pair exhibits the highest temporal stability (r = 0.47
 
 ### 5.11 Cross-Instrument Validation: STEREO-A/EUVI
 
-To test whether the observed coupling hierarchy is intrinsic to the solar atmosphere or an artifact of viewing geometry, we performed time-locked cross-instrument comparisons using simultaneous observations from SDO/AIA and STEREO-A/EUVI at two angular separations: 51° (2025-12-01) and 180° (2011-02-06).
+To test whether the observed coupling hierarchy is intrinsic to the solar atmosphere or an artifact of viewing geometry, we performed time-locked cross-instrument comparisons using simultaneous observations from SDO/AIA and STEREO-A/EUVI at two angular separations: 51° (2025-12-01) and 180° (2011-02-06). Figure 10 summarizes the antipodal validation geometry and results.
 
 **180° Cross-Hemisphere Comparison.** The most stringent test uses data from 2011-02-06, when STEREO-A was positioned on the opposite side of the Sun from Earth. To ensure methodological rigor, all EUVI frames were synchronized to within 2.5 minutes maximum inter-channel time difference. SDO/AIA data were acquired at 12:15 UTC with sub-minute internal synchronization.
 
