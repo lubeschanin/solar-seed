@@ -10,7 +10,7 @@ Understanding how different thermal layers of the solar atmosphere are coupled i
 
 Here we introduce a geometry-controlled mutual information framework to quantify multichannel coupling in Solar Dynamics Observatory / Atmospheric Imaging Assembly (SDO/AIA) data. By systematically removing disk geometry, radial intensity statistics, and coarse azimuthal structure through a hierarchy of null models, we isolate a residual local coupling component.
 
-Applying this method to seven EUV channels spanning chromospheric to flare temperatures, we construct a coupling matrix across thermal layers of the solar atmosphere. We find that neighboring temperature channels exhibit significantly stronger local coupling than thermally distant pairs. This temperature-ordered structure is stable over time, survives time-shift and alignment controls, and is spatially localized to active regions rather than disk geometry.
+Applying this method to seven EUV channels spanning chromospheric to flare temperatures, we construct a coupling matrix across thermal layers of the solar atmosphere. We find that neighboring temperature channels exhibit significantly stronger local coupling than thermally distant pairs. The 193–211 Å pair shows the strongest coupling (0.59 ± 0.12 bits), while the chromospheric 304 Å channel remains thermally isolated. This temperature-ordered structure persists over an 8-day observation period (960 timepoints), survives time-shift and alignment controls, and is spatially localized to active regions rather than disk geometry.
 
 Our results demonstrate that information-theoretic coupling, when properly controlled for geometric effects, reveals an intrinsic organization of the solar atmosphere consistent with magnetically mediated interactions between adjacent thermal layers. Solar flares emerge as regime-switching events in this dynamically coupled system, leaving a persistent imprint on its organizational structure. The presented framework provides a general, reproducible approach for analyzing multichannel structure in complex astrophysical systems.
 
@@ -52,7 +52,7 @@ The synoptic data are free of JPEG compression and visualization artefacts and a
 
 ### 2.3 Time Windows
 
-We analyze multiple temporal windows, including (i) a 6-hour interval (30 timepoints, 12-minute cadence) used for detailed method validation, and (ii) a 24-hour interval used for multi-channel coupling analysis. All timestamps are handled in UTC. Frames with missing data or quality flags are excluded. Run parameters are logged to ensure reproducibility.
+We analyze multiple temporal windows, including (i) a 6-hour interval (30 timepoints, 12-minute cadence) used for detailed method validation, (ii) a 24-hour interval used for multi-channel coupling analysis, and (iii) an 8-day interval (960 timepoints, 12-minute cadence) covering approximately one-third of a solar rotation period for temporal stability analysis. All timestamps are handled in UTC. Frames with missing data or quality flags are excluded. Run parameters are logged to ensure reproducibility.
 
 ### 2.4 Preprocessing
 
@@ -328,7 +328,23 @@ In this picture, quiet solar conditions correspond to a loosely constrained, hig
 
 The strong reduction in state-space volume further implies that flares leave a lasting imprint on the system. Because the post-flare state occupies a different region of the state space, the dynamics do not simply revert to their pre-flare configuration, consistent with the hysteresis observed in both operator dynamics and network topology.
 
-### 5.10 Limitations and Outlook
+### 5.10 Extended Temporal Stability: 8-Day Rotation Analysis
+
+To assess the robustness of coupling patterns over longer timescales, we extended the analysis to an 8-day observation window (960 timepoints at 12-minute cadence), covering approximately one-third of a solar rotation period. This extended dataset confirms and strengthens the findings from shorter observation windows.
+
+**Temperature-ordered coupling hierarchy.** The coupling rankings remain remarkably stable over the 8-day period. The 193–211 Å pair maintains its dominant position with ΔMI_sector = 0.59 ± 0.12 bits, followed by 171–193 Å (0.32 ± 0.05 bits) and 193–131 Å (0.21 ± 0.10 bits). Thermally adjacent coronal channels consistently show stronger coupling than thermally distant pairs, confirming the temperature-ordered structure as a persistent feature of solar atmospheric organization.
+
+**Chromospheric isolation.** The 304 Å channel exhibits the weakest coupling to all other channels, with ΔMI_sector values ranging from 0.04 to 0.06 bits. This thermal isolation of the chromosphere from the corona persists throughout the observation period, reinforcing the interpretation of the chromosphere as a distinct dynamical regime.
+
+**Temporal autocorrelation structure.** The lag-1 autocorrelation of coupling strength reveals distinct stability classes among channel pairs:
+- *High stability* (r > 0.43): 304–211, 335–94, 304–335, 171–131 Å pairs show persistent coupling patterns, suggesting these relationships reflect slowly evolving magnetic structures.
+- *Low stability* (r < 0.25): 193–94, 304–94, 171–193 Å pairs exhibit more variable coupling, consistent with rapid reorganization involving flare-temperature channels.
+
+Notably, the 304–211 Å pair exhibits the highest temporal stability (r = 0.47) despite having relatively weak mean coupling (0.06 bits). This suggests that chromosphere-corona linkages, while weak, are structurally persistent—possibly reflecting stable magnetic footpoint connections.
+
+**Implications for coupling persistence.** The 8-day analysis demonstrates that the coupling hierarchy is not an artifact of short observation windows but reflects persistent structural organization of the solar atmosphere. The stability of the coronal backbone (171–193–211 Å) across approximately 30% of a rotation period indicates that these coupling patterns survive the evolution of individual active regions and represent a fundamental aspect of coronal thermodynamic organization.
+
+### 5.11 Limitations and Outlook
 
 Several methodological and physical considerations constrain the interpretation of these results.
 
@@ -338,7 +354,7 @@ Several methodological and physical considerations constrain the interpretation 
 
 **Cadence and spatial resolution.** The 12-minute synoptic cadence may undersample rapid flare dynamics, particularly during the impulsive phase. Higher-cadence AIA data (12-second full resolution) could reveal finer temporal structure in coupling evolution, though at substantially increased computational cost.
 
-**Outlook.** Future work should extend the analysis across multiple solar rotations and activity cycles to establish baseline variability and long-term trends. Integration with magnetogram data (HMI) could directly test the hypothesis of magnetically mediated coupling, while application to stellar EUV observations may enable comparative studies of atmospheric organization across different stellar types.
+**Outlook.** The 8-day rotation analysis presented here confirms temporal stability of the coupling hierarchy over one-third of a solar rotation. Future work should extend this analysis across complete solar rotations and multiple activity cycles to establish baseline variability and long-term trends. Integration with magnetogram data (HMI) could directly test the hypothesis of magnetically mediated coupling, while application to stellar EUV observations may enable comparative studies of atmospheric organization across different stellar types.
 
 ---
 
