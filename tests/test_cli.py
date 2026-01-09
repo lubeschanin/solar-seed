@@ -10,6 +10,7 @@ from unittest.mock import patch, MagicMock
 from solar_seed.cli import (
     show_status_bar,
     check_checkpoint,
+    check_segments,
     get_number,
     get_date,
     get_time,
@@ -109,6 +110,60 @@ class TestCheckCheckpoint:
         assert result["start_date"] == "2024-01-01"
         assert result["hours"] == 648
         assert result["cadence"] == 60
+
+
+class TestCheckSegments:
+    """Tests for check_segments function."""
+
+    def test_no_segments(self, tmp_path, monkeypatch):
+        """Test when no segments exist."""
+        monkeypatch.chdir(tmp_path)
+
+        result = check_segments()
+
+        assert result["exists"] is False
+        assert result["count"] == 0
+        assert result["dates"] == []
+        assert result["total_points"] == 0
+
+    def test_with_segments(self, tmp_path, monkeypatch):
+        """Test when segments exist."""
+        monkeypatch.chdir(tmp_path)
+
+        # Create segment directory and files
+        segment_dir = tmp_path / "results" / "rotation" / "segments"
+        segment_dir.mkdir(parents=True)
+
+        # Create two segment files
+        for date in ["2025-12-01", "2025-12-02"]:
+            segment_data = {
+                "date": date,
+                "n_points": 120,
+                "timestamps": [f"{date}T{h:02d}:00:00" for h in range(24)]
+            }
+            with open(segment_dir / f"{date}.json", "w") as f:
+                json.dump(segment_data, f)
+
+        result = check_segments()
+
+        assert result["exists"] is True
+        assert result["count"] == 2
+        assert result["dates"] == ["2025-12-01", "2025-12-02"]
+        assert result["first_date"] == "2025-12-01"
+        assert result["last_date"] == "2025-12-02"
+        assert result["total_points"] == 240
+
+    def test_empty_segment_dir(self, tmp_path, monkeypatch):
+        """Test when segment directory exists but is empty."""
+        monkeypatch.chdir(tmp_path)
+
+        segment_dir = tmp_path / "results" / "rotation" / "segments"
+        segment_dir.mkdir(parents=True)
+
+        result = check_segments()
+
+        assert result["exists"] is False
+        assert result["count"] == 0
 
 
 class TestGetNumber:
