@@ -3,12 +3,12 @@
 Solar Seed Hypothesis Test
 ==========================
 
-EINE Hypothese. EIN Test. EINE Antwort.
+ONE hypothesis. ONE test. ONE answer.
 
-H1: Bestimmte AIA-Wellenlängenpaare zeigen höhere Mutual Information 
-    als durch unabhängige thermische Prozesse erklärbar.
+H1: Certain AIA wavelength pairs show higher mutual information
+    than explainable by independent thermal processes.
 
-Ausführung:
+Usage:
     python -m solar_seed.hypothesis_test
     python -m solar_seed.hypothesis_test --real-data
 """
@@ -51,7 +51,7 @@ from solar_seed.control_tests import (
 
 @dataclass
 class TestConfig:
-    """Konfiguration für den Hypothesentest."""
+    """Configuration for the hypothesis test."""
     downsample_factor: int = 8
     n_bins: int = 64
     n_shuffles: int = 100
@@ -61,7 +61,7 @@ class TestConfig:
 
 @dataclass
 class TestResult:
-    """Ergebnis eines einzelnen Tests."""
+    """Result of a single test."""
     label: str
     mi_real: float
     nmi_real: float
@@ -84,16 +84,16 @@ def run_single_test(
     config: TestConfig
 ) -> TestResult:
     """
-    Führt einen einzelnen Hypothesentest durch.
-    
+    Runs a single hypothesis test.
+
     Args:
-        data_1: Erster Kanal
-        data_2: Zweiter Kanal
-        label: Bezeichnung des Tests
-        config: Test-Konfiguration
-        
+        data_1: First channel
+        data_2: Second channel
+        label: Test label
+        config: Test configuration
+
     Returns:
-        TestResult mit allen Metriken
+        TestResult with all metrics
     """
     # Downsample
     ds = config.downsample_factor
@@ -150,18 +150,18 @@ def run_single_test(
 
 def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestResult]:
     """
-    Führt alle Tests durch.
-    
+    Runs all tests.
+
     Args:
-        config: Test-Konfiguration
-        use_real_data: Versuche echte Sonnendaten zu laden
-        
+        config: Test configuration
+        use_real_data: Try to load real solar data
+
     Returns:
-        Liste aller TestResults
+        List of all TestResults
     """
     results = []
-    
-    # TEST 1: Reines Rauschen (Nullhypothese wahr)
+
+    # TEST 1: Pure noise (null hypothesis true)
     print("\n" + "="*72)
     print("TEST 1: VALIDIERUNG - Reines Rauschen (unabhängig)")
     print("="*72)
@@ -170,7 +170,7 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
     data_1, data_2 = generate_pure_noise(shape=(512, 512), seed=config.seed)
     results.append(run_single_test(data_1, data_2, "Reines Rauschen", config))
     
-    # TEST 2: Korreliertes Rauschen (Alternative wahr)
+    # TEST 2: Correlated noise (alternative true)
     print("\n" + "="*72)
     print("TEST 2: VALIDIERUNG - Korreliertes Rauschen (r=0.5)")
     print("="*72)
@@ -179,7 +179,7 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
     data_1, data_2 = generate_correlated_noise(shape=(512, 512), correlation=0.5, seed=config.seed)
     results.append(run_single_test(data_1, data_2, "Korreliert (r=0.5)", config))
     
-    # TEST 3: Synthetische Sonne - Nur Geometrie
+    # TEST 3: Synthetic sun - Geometry only
     print("\n" + "="*72)
     print("TEST 3: SYNTHETISCHE SONNE - Nur gemeinsame Geometrie")
     print("="*72)
@@ -188,7 +188,7 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
     data_1, data_2 = generate_synthetic_sun(shape=(512, 512), extra_correlation=0.0, seed=config.seed)
     results.append(run_single_test(data_1, data_2, "Sonne (Geometrie)", config))
     
-    # TEST 4: Synthetische Sonne - Mit Extra-Korrelation
+    # TEST 4: Synthetic sun - With extra correlation
     print("\n" + "="*72)
     print("TEST 4: SYNTHETISCHE SONNE - Mit extra Korrelation")
     print("="*72)
@@ -197,7 +197,7 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
     data_1, data_2 = generate_synthetic_sun(shape=(512, 512), extra_correlation=0.5, seed=config.seed)
     results.append(run_single_test(data_1, data_2, "Sonne (extra r=0.5)", config))
     
-    # TEST 5: Synthetische Sonne - Residuen (nur Geometrie)
+    # TEST 5: Synthetic sun - Residuals (geometry only)
     print("\n" + "="*72)
     print("TEST 5: RESIDUAL-ANALYSE - Sonne ohne Geometrie")
     print("="*72)
@@ -208,7 +208,7 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
     residual_1, residual_2, _ = prepare_pair_for_residual_mi(data_1, data_2)
     results.append(run_single_test(residual_1, residual_2, "Residual (Geometrie)", config))
 
-    # TEST 6: Synthetische Sonne - Residuen mit Extra-Korrelation
+    # TEST 6: Synthetic sun - Residuals with extra correlation
     print("\n" + "="*72)
     print("TEST 6: RESIDUAL-ANALYSE - Mit extra Korrelation")
     print("="*72)
@@ -218,7 +218,7 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
     residual_1, residual_2, _ = prepare_pair_for_residual_mi(data_1, data_2)
     results.append(run_single_test(residual_1, residual_2, "Residual (extra r=0.5)", config))
 
-    # TEST 7: Echte Daten (optional)
+    # TEST 7: Real data (optional)
     if use_real_data:
         print("\n" + "="*72)
         print("TEST 7: ECHTE SONNENDATEN")
@@ -236,7 +236,7 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
 
 
 def print_summary(results: list[TestResult]) -> None:
-    """Gibt Zusammenfassung aus."""
+    """Prints summary."""
     
     print("\n" + "="*72)
     print("ZUSAMMENFASSUNG")
@@ -251,16 +251,16 @@ def print_summary(results: list[TestResult]) -> None:
 
 def run_spatial_analysis(config: TestConfig) -> None:
     """
-    Führt räumliche MI-Analyse durch.
+    Runs spatial MI analysis.
 
-    Zeigt wo auf der (synthetischen) Sonne die höchste Residual-MI ist.
+    Shows where on the (synthetic) Sun the highest residual MI is.
     """
     print("\n" + "="*72)
     print("RÄUMLICHE MI-ANALYSE")
     print("="*72)
     print("  Wo auf der Sonne ist die Residual-MI am höchsten?")
 
-    # Generiere synthetische Sonne mit Extra-Korrelation
+    # Generate synthetic sun with extra correlation
     data_1, data_2 = generate_synthetic_sun(
         shape=(512, 512),
         extra_correlation=0.5,
@@ -283,18 +283,18 @@ def run_spatial_analysis(config: TestConfig) -> None:
 
 def run_control_tests(config: TestConfig) -> None:
     """
-    Führt alle Kontroll-Tests durch.
+    Runs all control tests.
 
-    Testet ob die gemessene Residual-MI durch Artefakte verursacht wird.
+    Tests whether the measured residual MI is caused by artifacts.
     """
     print("\n" + "="*72)
     print("KONTROLL-TESTS")
     print("="*72)
     print("  Validierung der Residual-MI Messung")
 
-    # Generiere synthetische Sonne mit Extra-Korrelation
+    # Generate synthetic sun with extra correlation
     data_1, data_2 = generate_synthetic_sun(
-        shape=(256, 256),  # Kleiner für schnellere Kontrollen
+        shape=(256, 256),  # Smaller for faster controls
         extra_correlation=0.5,
         n_active_regions=5,
         seed=config.seed
@@ -314,7 +314,7 @@ def run_control_tests(config: TestConfig) -> None:
 
 
 def print_interpretation() -> None:
-    """Gibt Interpretationshilfe aus."""
+    """Prints interpretation help."""
 
     print("""
 ═══════════════════════════════════════════════════════════════════════

@@ -1,6 +1,6 @@
 """
-Tests für Radialprofil-Analyse
-==============================
+Tests for Radial Profile Analysis
+==================================
 """
 
 import numpy as np
@@ -18,10 +18,10 @@ from solar_seed.data_loader import generate_synthetic_sun
 
 
 class TestFindDiskCenter:
-    """Tests für Zentrum-Erkennung."""
+    """Tests for center detection."""
 
     def test_centered_disk(self):
-        """Zentrierte Scheibe sollte Bildmitte ergeben."""
+        """Centered disk should yield image center."""
         shape = (100, 100)
         y, x = np.ogrid[:shape[0], :shape[1]]
         center = (50, 50)
@@ -34,7 +34,7 @@ class TestFindDiskCenter:
         assert abs(found_center[1] - 50) < 2
 
     def test_offset_disk(self):
-        """Verschobene Scheibe sollte korrektes Zentrum finden."""
+        """Offset disk should find correct center."""
         shape = (100, 100)
         y, x = np.ogrid[:shape[0], :shape[1]]
         center = (60, 40)
@@ -47,7 +47,7 @@ class TestFindDiskCenter:
         assert abs(found_center[1] - 40) < 3
 
     def test_empty_image(self):
-        """Leeres Bild sollte Bildmitte zurückgeben."""
+        """Empty image should return image center."""
         image = np.zeros((100, 100))
         center = find_disk_center(image)
 
@@ -55,10 +55,10 @@ class TestFindDiskCenter:
 
 
 class TestRadialProfile:
-    """Tests für Radialprofil-Berechnung."""
+    """Tests for radial profile calculation."""
 
     def test_profile_shape(self):
-        """Profil sollte korrekte Länge haben."""
+        """Profile should have correct length."""
         image = np.random.random((100, 100)) * 1000
         n_bins = 50
         profile = compute_radial_profile(image, n_bins=n_bins)
@@ -68,7 +68,7 @@ class TestRadialProfile:
         assert len(profile.counts) == n_bins
 
     def test_limb_darkening_profile(self):
-        """Limb-Darkening sollte abnehmende Intensität zeigen."""
+        """Limb darkening should show decreasing intensity."""
         shape = (100, 100)
         y, x = np.ogrid[:shape[0], :shape[1]]
         center = (50, 50)
@@ -81,13 +81,13 @@ class TestRadialProfile:
 
         profile = compute_radial_profile(image, n_bins=20, center=center)
 
-        # Intensität sollte mit Radius abnehmen (bis zum Rand)
+        # Intensity should decrease with radius (up to the edge)
         inner_bins = profile.intensities[:10]
-        # Überprüfe, dass der Trend abnehmend ist
+        # Check that the trend is decreasing
         assert inner_bins[0] > inner_bins[5]
 
     def test_custom_center(self):
-        """Custom-Zentrum sollte verwendet werden."""
+        """Custom center should be used."""
         image = np.random.random((100, 100))
         custom_center = (30, 70)
         profile = compute_radial_profile(image, center=custom_center)
@@ -96,10 +96,10 @@ class TestRadialProfile:
 
 
 class TestReconstruction:
-    """Tests für Profil-Rekonstruktion."""
+    """Tests for profile reconstruction."""
 
     def test_reconstruction_shape(self):
-        """Rekonstruktion sollte korrekte Shape haben."""
+        """Reconstruction should have correct shape."""
         image = np.random.random((100, 100)) * 1000
         profile = compute_radial_profile(image, n_bins=50)
         reconstructed = reconstruct_from_profile(profile, image.shape)
@@ -107,21 +107,21 @@ class TestReconstruction:
         assert reconstructed.shape == image.shape
 
     def test_reconstruction_circular_symmetry(self):
-        """Rekonstruktion sollte kreissymmetrisch sein."""
+        """Reconstruction should be circularly symmetric."""
         image = np.random.random((100, 100)) * 1000
         profile = compute_radial_profile(image, n_bins=50, center=(50, 50))
         reconstructed = reconstruct_from_profile(profile, image.shape)
 
-        # Punkte mit gleichem Abstand vom Zentrum sollten gleich sein
+        # Points with equal distance from center should be equal
         assert abs(reconstructed[50, 60] - reconstructed[50, 40]) < 1e-10
         assert abs(reconstructed[60, 50] - reconstructed[40, 50]) < 1e-10
 
 
 class TestResidual:
-    """Tests für Residuum-Berechnung."""
+    """Tests for residual calculation."""
 
     def test_ratio_method(self):
-        """Ratio-Methode sollte Division durchführen."""
+        """Ratio method should perform division."""
         image = np.ones((10, 10)) * 100
         model = np.ones((10, 10)) * 50
 
@@ -130,7 +130,7 @@ class TestResidual:
         np.testing.assert_array_almost_equal(residual, np.ones((10, 10)) * 2)
 
     def test_difference_method(self):
-        """Differenz-Methode sollte Subtraktion durchführen."""
+        """Difference method should perform subtraction."""
         image = np.ones((10, 10)) * 100
         model = np.ones((10, 10)) * 30
 
@@ -139,7 +139,7 @@ class TestResidual:
         np.testing.assert_array_almost_equal(residual, np.ones((10, 10)) * 70)
 
     def test_epsilon_prevents_division_by_zero(self):
-        """Epsilon sollte Division durch Null verhindern."""
+        """Epsilon should prevent division by zero."""
         image = np.ones((10, 10)) * 100
         model = np.zeros((10, 10))
 
@@ -150,10 +150,10 @@ class TestResidual:
 
 
 class TestSubtractRadialGeometry:
-    """Tests für den kompletten Workflow."""
+    """Tests for the complete workflow."""
 
     def test_workflow_returns_correct_types(self):
-        """Workflow sollte korrekte Typen zurückgeben."""
+        """Workflow should return correct types."""
         image = np.random.random((100, 100)) * 1000
         residual, profile, model = subtract_radial_geometry(image)
 
@@ -162,8 +162,8 @@ class TestSubtractRadialGeometry:
         assert hasattr(profile, 'radii')
 
     def test_residual_reduces_geometry(self):
-        """Residuum sollte geometrische Variation reduzieren."""
-        # Erstelle Bild mit starkem Limb Darkening
+        """Residual should reduce geometric variation."""
+        # Create image with strong limb darkening
         shape = (100, 100)
         y, x = np.ogrid[:shape[0], :shape[1]]
         center = (50, 50)
@@ -175,17 +175,17 @@ class TestSubtractRadialGeometry:
 
         residual, _, _ = subtract_radial_geometry(image, method="ratio")
 
-        # Residuum sollte geringere Variation haben (nach Normalisierung)
-        # Im Zentrum sollte das Residuum nahe 1 sein
+        # Residual should have lower variation (after normalization)
+        # In the center, the residual should be close to 1
         center_region = residual[45:55, 45:55]
         assert np.std(center_region) < np.std(image[45:55, 45:55]) / 100
 
 
 class TestPreparePairForResidualMI:
-    """Tests für die Paar-Vorbereitung."""
+    """Tests for pair preparation."""
 
     def test_returns_correct_shapes(self):
-        """Funktion sollte zwei Residuen und Info zurückgeben."""
+        """Function should return two residuals and info."""
         image_1 = np.random.random((100, 100)) * 1000
         image_2 = np.random.random((100, 100)) * 1000
 
@@ -199,7 +199,7 @@ class TestPreparePairForResidualMI:
         assert "model_2" in info
 
     def test_shared_center(self):
-        """Mit shared_center sollte gleiches Zentrum verwendet werden."""
+        """With shared_center, the same center should be used."""
         image_1 = np.random.random((100, 100)) * 1000
         image_2 = np.random.random((100, 100)) * 1000
 
@@ -210,12 +210,12 @@ class TestPreparePairForResidualMI:
         assert info["profile_1"].center == info["profile_2"].center
 
     def test_with_synthetic_sun(self):
-        """Test mit synthetischen Sonnendaten."""
+        """Test with synthetic sun data."""
         data_1, data_2 = generate_synthetic_sun(shape=(128, 128), seed=42)
 
         res_1, res_2, info = prepare_pair_for_residual_mi(data_1, data_2)
 
-        # Residuen sollten keine negativen Werte haben (bei ratio method)
+        # Residuals should not have negative values (with ratio method)
         assert res_1.min() >= 0
         assert res_2.min() >= 0
 

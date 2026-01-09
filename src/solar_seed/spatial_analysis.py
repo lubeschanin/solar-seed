@@ -1,11 +1,11 @@
 """
-Räumliche MI-Analyse für Solar Seed
-====================================
+Spatial MI Analysis for Solar Seed
+===================================
 
-Berechnet MI-Karten über die Sonnenscheibe um zu identifizieren,
-wo die höchste (Residual-)MI auftritt.
+Computes MI maps over the solar disk to identify
+where the highest (residual) MI occurs.
 
-Fragestellung: Wo auf der Sonne ist die "Extra-Information"?
+Question: Where on the Sun is the "extra information"?
 """
 
 import numpy as np
@@ -19,34 +19,34 @@ from solar_seed.radial_profile import prepare_pair_for_residual_mi
 
 @dataclass
 class SpatialMIResult:
-    """Ergebnis der räumlichen MI-Analyse."""
-    mi_map: NDArray[np.float64]  # MI pro Region
+    """Result of the spatial MI analysis."""
+    mi_map: NDArray[np.float64]  # MI per region
     grid_size: Tuple[int, int]  # (rows, cols)
-    cell_size: Tuple[int, int]  # Pixelgröße pro Zelle
-    image_shape: Tuple[int, int]  # Originalbild-Größe
+    cell_size: Tuple[int, int]  # Pixel size per cell
+    image_shape: Tuple[int, int]  # Original image size
 
-    # Statistiken
+    # Statistics
     mi_mean: float
     mi_std: float
     mi_max: float
     mi_min: float
 
-    # Hotspot-Info
-    hotspot_idx: Tuple[int, int]  # (row, col) des Maximums
+    # Hotspot info
+    hotspot_idx: Tuple[int, int]  # (row, col) of maximum
     hotspot_value: float
 
 
 @dataclass
 class SpatialComparisonResult:
-    """Vergleich von Original-MI und Residual-MI Maps."""
+    """Comparison of original MI and residual MI maps."""
     original: SpatialMIResult
     residual: SpatialMIResult
 
-    # Differenz-Analyse
+    # Difference analysis
     mi_reduction_map: NDArray[np.float64]  # original - residual
     mi_reduction_percent: NDArray[np.float64]  # (orig - res) / orig * 100
 
-    # Wo bleibt die meiste MI nach Subtraktion?
+    # Where does the most MI remain after subtraction?
     residual_hotspot_idx: Tuple[int, int]
     residual_hotspot_value: float
 
@@ -59,19 +59,19 @@ def compute_spatial_mi_map(
     min_valid_pixels: int = 100
 ) -> SpatialMIResult:
     """
-    Berechnet eine räumliche MI-Karte.
+    Computes a spatial MI map.
 
-    Teilt die Bilder in ein Grid und berechnet MI pro Zelle.
+    Divides the images into a grid and computes MI per cell.
 
     Args:
-        image_1: Erstes Bild (z.B. 193 Å)
-        image_2: Zweites Bild (z.B. 211 Å)
-        grid_size: (rows, cols) Anzahl der Grid-Zellen
-        bins: Bins für MI-Berechnung (weniger für kleinere Regionen)
-        min_valid_pixels: Mindestanzahl nicht-null Pixel für MI-Berechnung
+        image_1: First image (e.g., 193 Å)
+        image_2: Second image (e.g., 211 Å)
+        grid_size: (rows, cols) number of grid cells
+        bins: Bins for MI calculation (fewer for smaller regions)
+        min_valid_pixels: Minimum number of non-zero pixels for MI calculation
 
     Returns:
-        SpatialMIResult mit MI-Karte und Statistiken
+        SpatialMIResult with MI map and statistics
     """
     rows, cols = grid_size
     h, w = image_1.shape
@@ -83,7 +83,7 @@ def compute_spatial_mi_map(
 
     for i in range(rows):
         for j in range(cols):
-            # Extrahiere Region
+            # Extract region
             y_start = i * cell_h
             y_end = (i + 1) * cell_h if i < rows - 1 else h
             x_start = j * cell_w
@@ -92,7 +92,7 @@ def compute_spatial_mi_map(
             region_1 = image_1[y_start:y_end, x_start:x_end]
             region_2 = image_2[y_start:y_end, x_start:x_end]
 
-            # Prüfe ob genug valide Pixel vorhanden
+            # Check if enough valid pixels present
             valid_mask = (region_1 > 0) & (region_2 > 0)
             n_valid = valid_mask.sum()
 
@@ -105,7 +105,7 @@ def compute_spatial_mi_map(
             else:
                 mi_map[i, j] = np.nan
 
-    # Statistiken (ignoriere NaN)
+    # Statistics (ignore NaN)
     valid_mi = mi_map[~np.isnan(mi_map)]
     if len(valid_mi) > 0:
         mi_mean = float(np.mean(valid_mi))
@@ -113,7 +113,7 @@ def compute_spatial_mi_map(
         mi_max = float(np.max(valid_mi))
         mi_min = float(np.min(valid_mi))
 
-        # Finde Hotspot
+        # Find hotspot
         max_idx = np.unravel_index(np.nanargmax(mi_map), mi_map.shape)
         hotspot_idx = (int(max_idx[0]), int(max_idx[1]))
         hotspot_value = float(mi_map[hotspot_idx])
@@ -144,33 +144,33 @@ def compute_spatial_residual_mi_map(
     n_profile_bins: int = 100
 ) -> SpatialComparisonResult:
     """
-    Berechnet und vergleicht Original- und Residual-MI-Karten.
+    Computes and compares original and residual MI maps.
 
     Args:
-        image_1: Erstes Bild
-        image_2: Zweites Bild
-        grid_size: Grid-Größe
-        bins: Bins für MI
-        n_profile_bins: Bins für Radialprofil
+        image_1: First image
+        image_2: Second image
+        grid_size: Grid size
+        bins: Bins for MI
+        n_profile_bins: Bins for radial profile
 
     Returns:
-        SpatialComparisonResult mit beiden Karten und Vergleich
+        SpatialComparisonResult with both maps and comparison
     """
-    # Original MI-Karte
+    # Original MI map
     original = compute_spatial_mi_map(image_1, image_2, grid_size, bins)
 
-    # Residuen berechnen
+    # Compute residuals
     residual_1, residual_2, _ = prepare_pair_for_residual_mi(
         image_1, image_2, n_bins=n_profile_bins
     )
 
-    # Residual MI-Karte
+    # Residual MI map
     residual = compute_spatial_mi_map(residual_1, residual_2, grid_size, bins)
 
-    # Reduktions-Analyse
+    # Reduction analysis
     mi_reduction_map = original.mi_map - residual.mi_map
 
-    # Prozentuale Reduktion (vermeide Division durch 0)
+    # Percentage reduction (avoid division by 0)
     with np.errstate(divide='ignore', invalid='ignore'):
         mi_reduction_percent = np.where(
             original.mi_map > 0,
@@ -193,19 +193,19 @@ def find_top_hotspots(
     n: int = 5
 ) -> List[Tuple[Tuple[int, int], float]]:
     """
-    Findet die Top-N Hotspots (höchste MI-Werte).
+    Finds the top N hotspots (highest MI values).
 
     Args:
         result: SpatialMIResult
-        n: Anzahl Hotspots
+        n: Number of hotspots
 
     Returns:
-        Liste von ((row, col), mi_value) Tupeln
+        List of ((row, col), mi_value) tuples
     """
     mi_map = result.mi_map.copy()
     mi_map = np.nan_to_num(mi_map, nan=-np.inf)
 
-    # Flache Indizes sortiert nach Wert
+    # Flat indices sorted by value
     flat_indices = np.argsort(mi_map.ravel())[::-1]
 
     hotspots = []
@@ -223,14 +223,14 @@ def get_region_coordinates(
     grid_idx: Tuple[int, int]
 ) -> Tuple[int, int, int, int]:
     """
-    Gibt die Pixelkoordinaten einer Grid-Region zurück.
+    Returns the pixel coordinates of a grid region.
 
     Args:
         result: SpatialMIResult
-        grid_idx: (row, col) im Grid
+        grid_idx: (row, col) in grid
 
     Returns:
-        (y_start, y_end, x_start, x_end) in Pixeln
+        (y_start, y_end, x_start, x_end) in pixels
     """
     row, col = grid_idx
     cell_h, cell_w = result.cell_size
@@ -246,7 +246,7 @@ def get_region_coordinates(
 
 
 # ============================================================================
-# ASCII VISUALISIERUNG
+# ASCII VISUALIZATION
 # ============================================================================
 
 def mi_map_to_ascii(
@@ -255,25 +255,25 @@ def mi_map_to_ascii(
     show_values: bool = False
 ) -> str:
     """
-    Konvertiert MI-Karte zu ASCII-Art für Terminal-Ausgabe.
+    Converts MI map to ASCII art for terminal output.
 
     Args:
-        mi_map: 2D MI-Karte
-        width: Breite der Ausgabe in Zeichen
-        show_values: Zeige numerische Werte
+        mi_map: 2D MI map
+        width: Width of output in characters
+        show_values: Show numerical values
 
     Returns:
-        ASCII-String der MI-Karte
+        ASCII string of MI map
     """
-    # Intensitäts-Zeichen (von niedrig zu hoch)
+    # Intensity characters (from low to high)
     chars = " ·:░▒▓█"
 
     rows, cols = mi_map.shape
 
-    # Normalisiere auf [0, 1]
+    # Normalize to [0, 1]
     valid_mask = ~np.isnan(mi_map)
     if not valid_mask.any():
-        return "Keine gültigen Daten"
+        return "No valid data"
 
     mi_min = np.nanmin(mi_map)
     mi_max = np.nanmax(mi_map)
@@ -282,12 +282,12 @@ def mi_map_to_ascii(
     normalized = (mi_map - mi_min) / mi_range
     normalized = np.nan_to_num(normalized, nan=0)
 
-    # Berechne Zeichenbreite pro Zelle
+    # Calculate character width per cell
     char_per_cell = max(1, width // cols)
 
     lines = []
 
-    # Oberer Rahmen
+    # Top border
     lines.append("┌" + "─" * (cols * char_per_cell) + "┐")
 
     for i in range(rows):
@@ -303,10 +303,10 @@ def mi_map_to_ascii(
         line += "│"
         lines.append(line)
 
-    # Unterer Rahmen
+    # Bottom border
     lines.append("└" + "─" * (cols * char_per_cell) + "┘")
 
-    # Legende
+    # Legend
     lines.append(f"  MI: {mi_min:.3f} {'·' * 3} {mi_max:.3f}")
 
     return "\n".join(lines)
@@ -314,62 +314,62 @@ def mi_map_to_ascii(
 
 def print_spatial_comparison(
     result: SpatialComparisonResult,
-    title: str = "Räumliche MI-Analyse"
+    title: str = "Spatial MI Analysis"
 ) -> None:
     """
-    Gibt einen formatierten Vergleich der räumlichen MI aus.
+    Prints a formatted comparison of the spatial MI.
 
     Args:
         result: SpatialComparisonResult
-        title: Titel für die Ausgabe
+        title: Title for the output
     """
     print(f"\n{'='*72}")
     print(f"  {title}")
     print(f"{'='*72}")
 
     print(f"\n  Grid: {result.original.grid_size[0]}x{result.original.grid_size[1]}")
-    print(f"  Zellgröße: {result.original.cell_size[0]}x{result.original.cell_size[1]} Pixel")
+    print(f"  Cell size: {result.original.cell_size[0]}x{result.original.cell_size[1]} pixels")
 
     # Original MI
     print(f"\n  ORIGINAL MI:")
-    print(f"    Mittel: {result.original.mi_mean:.4f} ± {result.original.mi_std:.4f}")
-    print(f"    Bereich: [{result.original.mi_min:.4f}, {result.original.mi_max:.4f}]")
-    print(f"    Hotspot: Zelle {result.original.hotspot_idx} = {result.original.hotspot_value:.4f}")
+    print(f"    Mean: {result.original.mi_mean:.4f} ± {result.original.mi_std:.4f}")
+    print(f"    Range: [{result.original.mi_min:.4f}, {result.original.mi_max:.4f}]")
+    print(f"    Hotspot: Cell {result.original.hotspot_idx} = {result.original.hotspot_value:.4f}")
 
-    print(f"\n  ORIGINAL MI-KARTE:")
+    print(f"\n  ORIGINAL MI MAP:")
     print(mi_map_to_ascii(result.original.mi_map))
 
     # Residual MI
-    print(f"\n  RESIDUAL MI (nach Geometrie-Subtraktion):")
-    print(f"    Mittel: {result.residual.mi_mean:.4f} ± {result.residual.mi_std:.4f}")
-    print(f"    Bereich: [{result.residual.mi_min:.4f}, {result.residual.mi_max:.4f}]")
-    print(f"    Hotspot: Zelle {result.residual.hotspot_idx} = {result.residual.hotspot_value:.4f}")
+    print(f"\n  RESIDUAL MI (after geometry subtraction):")
+    print(f"    Mean: {result.residual.mi_mean:.4f} ± {result.residual.mi_std:.4f}")
+    print(f"    Range: [{result.residual.mi_min:.4f}, {result.residual.mi_max:.4f}]")
+    print(f"    Hotspot: Cell {result.residual.hotspot_idx} = {result.residual.hotspot_value:.4f}")
 
-    print(f"\n  RESIDUAL MI-KARTE:")
+    print(f"\n  RESIDUAL MI MAP:")
     print(mi_map_to_ascii(result.residual.mi_map))
 
-    # Reduktions-Analyse
+    # Reduction analysis
     valid_reduction = result.mi_reduction_percent[~np.isnan(result.mi_reduction_percent)]
     if len(valid_reduction) > 0:
         mean_reduction = np.mean(valid_reduction)
-        print(f"\n  REDUKTION DURCH GEOMETRIE-SUBTRAKTION:")
-        print(f"    Mittlere Reduktion: {mean_reduction:.1f}%")
+        print(f"\n  REDUCTION FROM GEOMETRY SUBTRACTION:")
+        print(f"    Mean reduction: {mean_reduction:.1f}%")
 
-        # Wo bleibt am meisten MI?
+        # Where does the most MI remain?
         min_reduction_idx = np.unravel_index(
             np.nanargmin(result.mi_reduction_percent),
             result.mi_reduction_percent.shape
         )
         min_reduction = result.mi_reduction_percent[min_reduction_idx]
-        print(f"    Geringste Reduktion: Zelle {min_reduction_idx} ({min_reduction:.1f}%)")
-        print(f"    → Diese Region hat die meiste 'Extra-Information'")
+        print(f"    Smallest reduction: Cell {min_reduction_idx} ({min_reduction:.1f}%)")
+        print(f"    → This region has the most 'extra information'")
 
-    # Top Hotspots im Residual
-    print(f"\n  TOP 5 RESIDUAL-HOTSPOTS:")
+    # Top hotspots in residual
+    print(f"\n  TOP 5 RESIDUAL HOTSPOTS:")
     hotspots = find_top_hotspots(result.residual, n=5)
     for rank, (idx, value) in enumerate(hotspots, 1):
         coords = get_region_coordinates(result.residual, idx)
-        print(f"    {rank}. Zelle {idx}: MI={value:.4f} (Pixel {coords[0]}-{coords[1]}, {coords[2]}-{coords[3]})")
+        print(f"    {rank}. Cell {idx}: MI={value:.4f} (Pixels {coords[0]}-{coords[1]}, {coords[2]}-{coords[3]})")
 
 
 def create_disk_mask(
@@ -378,15 +378,15 @@ def create_disk_mask(
     radius_fraction: float = 0.9
 ) -> NDArray[np.bool_]:
     """
-    Erstellt eine kreisförmige Maske für die Sonnenscheibe.
+    Creates a circular mask for the solar disk.
 
     Args:
-        shape: (height, width) des Bildes
-        center: (y, x) Zentrum, oder None für Bildmitte
-        radius_fraction: Radius als Anteil der halben Bildgröße
+        shape: (height, width) of the image
+        center: (y, x) center, or None for image center
+        radius_fraction: Radius as fraction of half image size
 
     Returns:
-        Boolesche Maske (True = innerhalb der Scheibe)
+        Boolean mask (True = inside the disk)
     """
     h, w = shape
     if center is None:
@@ -406,23 +406,23 @@ def compute_disk_spatial_mi(
     bins: int = 32
 ) -> SpatialComparisonResult:
     """
-    Berechnet räumliche MI nur innerhalb der Sonnenscheibe.
+    Computes spatial MI only within the solar disk.
 
-    Pixel außerhalb der Scheibe werden auf 0 gesetzt.
+    Pixels outside the disk are set to 0.
 
     Args:
-        image_1: Erstes Bild
-        image_2: Zweites Bild
-        grid_size: Grid-Größe
-        bins: Bins für MI
+        image_1: First image
+        image_2: Second image
+        grid_size: Grid size
+        bins: Bins for MI
 
     Returns:
         SpatialComparisonResult
     """
-    # Erstelle Disk-Maske
+    # Create disk mask
     mask = create_disk_mask(image_1.shape)
 
-    # Wende Maske an
+    # Apply mask
     image_1_masked = image_1.copy()
     image_2_masked = image_2.copy()
     image_1_masked[~mask] = 0

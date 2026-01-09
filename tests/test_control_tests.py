@@ -1,6 +1,6 @@
 """
-Tests für Kontroll-Tests
-========================
+Tests for Control Tests
+=======================
 """
 
 import numpy as np
@@ -29,10 +29,10 @@ from solar_seed.data_loader import generate_synthetic_sun
 
 
 class TestTimeShiftNull:
-    """Tests für C1: Time-Shift Null."""
+    """Tests for C1: Time-Shift Null."""
 
     def test_returns_result(self):
-        """Sollte TimeShiftResult zurückgeben."""
+        """Should return TimeShiftResult."""
         data_1, data_2 = generate_synthetic_sun(shape=(64, 64), seed=42)
         result = time_shift_null(data_1, data_2)
 
@@ -41,7 +41,7 @@ class TestTimeShiftNull:
         assert result.mi_shifted >= 0
 
     def test_mi_reduces_after_shift(self):
-        """MI sollte nach Zeit-Shift reduziert sein."""
+        """MI should be reduced after time shift."""
         data_1, data_2 = generate_synthetic_sun(
             shape=(64, 64),
             extra_correlation=0.5,
@@ -49,27 +49,27 @@ class TestTimeShiftNull:
         )
         result = time_shift_null(data_1, data_2)
 
-        # MI sollte nach Shuffle deutlich niedriger sein
+        # MI should be significantly lower after shuffle
         assert result.mi_shifted < result.mi_original
         assert result.mi_reduction > 0
 
     def test_with_uncorrelated_data(self):
-        """Bei unkorrelierten Daten sollte Reduktion gering sein."""
+        """For uncorrelated data, reduction should be small."""
         rng = np.random.default_rng(42)
         data_1 = rng.random((64, 64)) * 1000
         data_2 = rng.random((64, 64)) * 1000
 
         result = time_shift_null(data_1, data_2)
 
-        # Bei unkorrelierten Daten ist die Reduktion geringer
+        # For uncorrelated data, the reduction is smaller
         assert result.mi_reduction_percent < 90
 
 
 class TestRingWiseShuffle:
-    """Tests für C2: Ring-wise Shuffle."""
+    """Tests for C2: Ring-wise Shuffle."""
 
     def test_returns_result(self):
-        """Sollte RingShuffleResult zurückgeben."""
+        """Should return RingShuffleResult."""
         data_1, data_2 = generate_synthetic_sun(shape=(64, 64), seed=42)
         result = ring_wise_shuffle_test(data_1, data_2)
 
@@ -77,25 +77,25 @@ class TestRingWiseShuffle:
         assert result.mi_original >= 0
 
     def test_creates_radial_bins(self):
-        """Radiale Bins sollten korrekt erstellt werden."""
+        """Radial bins should be created correctly."""
         bins = create_radial_bins((100, 100), (50, 50), n_rings=10)
 
         assert bins.shape == (100, 100)
         assert bins.min() == 0
         assert bins.max() == 9
 
-        # Zentrum sollte Ring 0 sein
+        # Center should be ring 0
         assert bins[50, 50] == 0
 
     def test_ring_shuffle_preserves_radial_stats(self):
-        """Ring-Shuffle sollte radiale Statistik erhalten."""
+        """Ring shuffle should preserve radial statistics."""
         rng = np.random.default_rng(42)
         image = rng.random((100, 100)) * 1000
         bins = create_radial_bins((100, 100), (50, 50), n_rings=10)
 
         shuffled = ring_shuffle(image, bins, seed=42)
 
-        # Mittelwert pro Ring sollte gleich bleiben
+        # Mean per ring should remain the same
         for ring_idx in range(10):
             mask = bins == ring_idx
             if mask.sum() > 0:
@@ -104,7 +104,7 @@ class TestRingWiseShuffle:
                 assert abs(original_mean - shuffled_mean) < 1e-10
 
     def test_both_shuffles_reduce_mi(self):
-        """Beide Shuffle-Methoden sollten MI reduzieren."""
+        """Both shuffle methods should reduce MI."""
         data_1, data_2 = generate_synthetic_sun(
             shape=(64, 64),
             extra_correlation=0.5,
@@ -117,10 +117,10 @@ class TestRingWiseShuffle:
 
 
 class TestSectorRingShuffle:
-    """Tests für erweiterten C2: Sector-Ring Shuffle."""
+    """Tests for extended C2: Sector-Ring Shuffle."""
 
     def test_returns_result(self):
-        """Sollte SectorRingShuffleResult zurückgeben."""
+        """Should return SectorRingShuffleResult."""
         data_1, data_2 = generate_synthetic_sun(shape=(64, 64), seed=42)
         result = sector_ring_shuffle_test(data_1, data_2)
 
@@ -128,7 +128,7 @@ class TestSectorRingShuffle:
         assert result.mi_original >= 0
 
     def test_creates_sector_ring_bins(self):
-        """Sector-Ring Bins sollten korrekt erstellt werden."""
+        """Sector-ring bins should be created correctly."""
         ring_bins, sector_bins = create_sector_ring_bins(
             (100, 100), (50, 50), n_rings=10, n_sectors=8
         )
@@ -141,7 +141,7 @@ class TestSectorRingShuffle:
         assert sector_bins.max() == 7
 
     def test_sector_shuffle_preserves_sector_stats(self):
-        """Sector-Shuffle sollte Statistik pro Sektor×Ring erhalten."""
+        """Sector shuffle should preserve statistics per sector×ring."""
         rng = np.random.default_rng(42)
         image = rng.random((100, 100)) * 1000
         ring_bins, sector_bins = create_sector_ring_bins(
@@ -150,7 +150,7 @@ class TestSectorRingShuffle:
 
         shuffled = sector_ring_shuffle(image, ring_bins, sector_bins, seed=42)
 
-        # Mittelwert pro Ring×Sektor sollte gleich bleiben
+        # Mean per ring×sector should remain the same
         for r in range(5):
             for s in range(4):
                 mask = (ring_bins == r) & (sector_bins == s)
@@ -160,7 +160,7 @@ class TestSectorRingShuffle:
                     assert abs(original_mean - shuffled_mean) < 1e-10
 
     def test_hierarchy_of_shuffles(self):
-        """Global < Ring < Sector < Original MI sollte gelten."""
+        """Global < Ring < Sector < Original MI should hold."""
         data_1, data_2 = generate_synthetic_sun(
             shape=(64, 64),
             extra_correlation=0.5,
@@ -168,13 +168,13 @@ class TestSectorRingShuffle:
         )
         result = sector_ring_shuffle_test(data_1, data_2)
 
-        # Je mehr Struktur erhalten, desto höher die MI
+        # The more structure preserved, the higher the MI
         assert result.mi_global_shuffled <= result.mi_ring_shuffled
         assert result.mi_ring_shuffled <= result.mi_sector_shuffled
         assert result.mi_sector_shuffled <= result.mi_original
 
     def test_contributions_sum_up(self):
-        """Beiträge sollten sich sinnvoll zusammensetzen."""
+        """Contributions should add up sensibly."""
         data_1, data_2 = generate_synthetic_sun(
             shape=(64, 64),
             extra_correlation=0.5,
@@ -192,10 +192,10 @@ class TestSectorRingShuffle:
 
 
 class TestPSFBlurMatching:
-    """Tests für C3: PSF/Blur Matching."""
+    """Tests for C3: PSF/Blur Matching."""
 
     def test_returns_result(self):
-        """Sollte BlurMatchResult zurückgeben."""
+        """Should return BlurMatchResult."""
         data_1, data_2 = generate_synthetic_sun(shape=(64, 64), seed=42)
         result = psf_blur_matching(data_1, data_2, sigma=2.0)
 
@@ -203,17 +203,17 @@ class TestPSFBlurMatching:
         assert result.blur_sigma == 2.0
 
     def test_gaussian_blur(self):
-        """Gaussian Blur sollte Bild glätten."""
+        """Gaussian blur should smooth image."""
         rng = np.random.default_rng(42)
         image = rng.random((100, 100)) * 1000
 
         blurred = apply_gaussian_blur(image, sigma=5.0)
 
-        # Blurred sollte geringere Varianz haben
+        # Blurred should have lower variance
         assert blurred.std() < image.std()
 
     def test_blur_changes_mi(self):
-        """Blur sollte MI verändern (erhöhen oder reduzieren)."""
+        """Blur should change MI (increase or decrease)."""
         data_1, data_2 = generate_synthetic_sun(
             shape=(64, 64),
             extra_correlation=0.5,
@@ -221,16 +221,16 @@ class TestPSFBlurMatching:
         )
         result = psf_blur_matching(data_1, data_2, sigma=2.0)
 
-        # MI sollte sich ändern (nicht exakt gleich bleiben)
-        # Bei großem Blur kann sich MI ändern
+        # MI should change (not stay exactly the same)
+        # With large blur, MI can change
         assert result.mi_blurred >= 0
 
 
 class TestCoAlignmentCheck:
-    """Tests für C4: Co-alignment Check."""
+    """Tests for C4: Co-alignment Check."""
 
     def test_returns_result(self):
-        """Sollte CoAlignmentResult zurückgeben."""
+        """Should return CoAlignmentResult."""
         data_1, data_2 = generate_synthetic_sun(shape=(64, 64), seed=42)
         result = co_alignment_check(data_1, data_2, max_offset=2)
 
@@ -238,22 +238,22 @@ class TestCoAlignmentCheck:
         assert result.mi_map.shape == (5, 5)  # 2*2+1 = 5
 
     def test_shift_image(self):
-        """Bild-Shift sollte korrekt funktionieren."""
+        """Image shift should work correctly."""
         image = np.arange(100).reshape(10, 10).astype(float)
 
-        # Shift nach rechts-unten
+        # Shift right-down
         shifted = shift_image(image, (1, 1))
 
-        # Obere linke Ecke sollte 0 sein (aufgefüllt)
+        # Upper left corner should be 0 (padded)
         assert shifted[0, 0] == 0
         assert shifted[0, 1] == 0
         assert shifted[1, 0] == 0
 
-        # Verschobener Inhalt
+        # Shifted content
         assert shifted[1, 1] == image[0, 0]
 
     def test_aligned_data_centered(self):
-        """Bei ausgerichteten Daten sollte Maximum bei (0,0) sein."""
+        """For aligned data, maximum should be at (0,0)."""
         data_1, data_2 = generate_synthetic_sun(
             shape=(64, 64),
             extra_correlation=0.5,
@@ -261,13 +261,13 @@ class TestCoAlignmentCheck:
         )
         result = co_alignment_check(data_1, data_2, max_offset=2)
 
-        # Maximum sollte bei oder nahe (0, 0) sein
-        # Bei synthetischen Daten ist perfekte Ausrichtung erwartet
+        # Maximum should be at or near (0, 0)
+        # For synthetic data, perfect alignment is expected
         assert abs(result.max_shift[0]) <= 1
         assert abs(result.max_shift[1]) <= 1
 
     def test_mi_map_shape(self):
-        """MI-Karte sollte korrekte Größe haben."""
+        """MI map should have correct size."""
         data_1, data_2 = generate_synthetic_sun(shape=(64, 64), seed=42)
 
         result = co_alignment_check(data_1, data_2, max_offset=3)
@@ -276,10 +276,10 @@ class TestCoAlignmentCheck:
 
 
 class TestRunAllControls:
-    """Tests für kombinierte Kontrollen."""
+    """Tests for combined controls."""
 
     def test_runs_all_controls(self):
-        """Sollte alle vier Kontrollen durchführen."""
+        """Should run all four controls."""
         data_1, data_2 = generate_synthetic_sun(
             shape=(64, 64),
             extra_correlation=0.5,
@@ -294,7 +294,7 @@ class TestRunAllControls:
         assert result.c4_co_alignment is not None
 
     def test_all_passed_property(self):
-        """all_passed Property sollte funktionieren."""
+        """all_passed property should work."""
         data_1, data_2 = generate_synthetic_sun(
             shape=(64, 64),
             extra_correlation=0.5,
@@ -303,15 +303,15 @@ class TestRunAllControls:
 
         result = run_all_controls(data_1, data_2, verbose=False)
 
-        # all_passed ist ein bool
+        # all_passed is a bool
         assert isinstance(result.all_passed, bool)
 
 
 class TestEdgeCases:
-    """Tests für Randfälle."""
+    """Tests for edge cases."""
 
     def test_small_images(self):
-        """Sollte mit kleinen Bildern funktionieren."""
+        """Should work with small images."""
         data_1, data_2 = generate_synthetic_sun(shape=(32, 32), seed=42)
 
         result = run_all_controls(data_1, data_2, verbose=False)
@@ -319,10 +319,10 @@ class TestEdgeCases:
         assert result.c1_time_shift is not None
 
     def test_with_zeros(self):
-        """Sollte mit Nullen im Bild umgehen können."""
+        """Should handle zeros in the image."""
         data_1, data_2 = generate_synthetic_sun(shape=(64, 64), seed=42)
 
-        # Füge einige Nullen hinzu
+        # Add some zeros
         data_1[:10, :10] = 0
         data_2[:10, :10] = 0
 

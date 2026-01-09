@@ -1,11 +1,11 @@
 """
-Nullmodell für Hypothesentest
-=============================
+Null Model for Hypothesis Test
+==============================
 
-Shuffle-basiertes Nullmodell zur statistischen Validierung.
+Shuffle-based null model for statistical validation.
 
-Die Idee: Wenn zwei Kanäle unabhängig sind, sollte das Shufflen
-eines Kanals die MI nicht ändern.
+The idea: If two channels are independent, shuffling
+one channel should not change the MI.
 """
 
 import numpy as np
@@ -17,14 +17,14 @@ from solar_seed.mutual_info import mutual_information
 
 def shuffle_array(arr: NDArray[np.float64], seed: int | None = None) -> NDArray[np.float64]:
     """
-    Shuffelt ein Array (flach).
-    
+    Shuffles an array (flat).
+
     Args:
-        arr: Input Array
-        seed: Random Seed für Reproduzierbarkeit
-        
+        arr: Input array
+        seed: Random seed for reproducibility
+
     Returns:
-        Gesuffletes Array mit gleicher Shape
+        Shuffled array with same shape
     """
     rng = np.random.default_rng(seed)
     flat = arr.ravel().copy()
@@ -33,7 +33,7 @@ def shuffle_array(arr: NDArray[np.float64], seed: int | None = None) -> NDArray[
 
 
 def compute_null_distribution(
-    x: NDArray[np.float64], 
+    x: NDArray[np.float64],
     y: NDArray[np.float64],
     n_shuffles: int = 100,
     bins: int = 64,
@@ -41,27 +41,27 @@ def compute_null_distribution(
     verbose: bool = False
 ) -> Tuple[float, float, List[float]]:
     """
-    Berechnet Nullverteilung durch wiederholtes Shufflen.
-    
+    Computes null distribution through repeated shuffling.
+
     Args:
-        x: Erstes Array (bleibt unverändert)
-        y: Zweites Array (wird geshufflet)
-        n_shuffles: Anzahl Shuffle-Durchläufe
-        bins: Bins für MI-Berechnung
-        seed: Base-Seed für Reproduzierbarkeit
-        verbose: Fortschrittsausgabe
-        
+        x: First array (remains unchanged)
+        y: Second array (gets shuffled)
+        n_shuffles: Number of shuffle iterations
+        bins: Bins for MI calculation
+        seed: Base seed for reproducibility
+        verbose: Progress output
+
     Returns:
-        mean: Mittlere MI unter Nullhypothese
-        std: Standardabweichung
-        distribution: Liste aller MI-Werte
+        mean: Mean MI under null hypothesis
+        std: Standard deviation
+        distribution: List of all MI values
     """
     mi_values: List[float] = []
     
     base_rng = np.random.default_rng(seed)
     
     for i in range(n_shuffles):
-        # Generiere neuen Seed für diesen Durchlauf
+        # Generate new seed for this iteration
         shuffle_seed = base_rng.integers(0, 2**31)
         
         y_shuffled = shuffle_array(y, seed=shuffle_seed)
@@ -75,22 +75,22 @@ def compute_null_distribution(
 
 
 def compute_z_score(
-    mi_real: float, 
-    mi_null_mean: float, 
+    mi_real: float,
+    mi_null_mean: float,
     mi_null_std: float
 ) -> float:
     """
-    Berechnet Z-Score.
-    
+    Computes Z-score.
+
     Z = (MI_real - MI_null_mean) / MI_null_std
-    
+
     Args:
-        mi_real: Beobachtete MI
-        mi_null_mean: Mittlere MI aus Nullmodell
-        mi_null_std: Standardabweichung aus Nullmodell
-        
+        mi_real: Observed MI
+        mi_null_mean: Mean MI from null model
+        mi_null_std: Standard deviation from null model
+
     Returns:
-        Z-Score (Standardabweichungen über Nullmodell)
+        Z-score (standard deviations above null model)
     """
     if mi_null_std < 1e-10:
         return float('inf') if mi_real > mi_null_mean else 0.0
@@ -99,20 +99,20 @@ def compute_z_score(
 
 
 def compute_p_value(
-    mi_real: float, 
+    mi_real: float,
     mi_null_distribution: List[float]
 ) -> float:
     """
-    Berechnet empirischen p-Wert.
-    
-    p = Anteil der Null-MI-Werte >= MI_real
-    
+    Computes empirical p-value.
+
+    p = proportion of null MI values >= MI_real
+
     Args:
-        mi_real: Beobachtete MI
-        mi_null_distribution: Liste der MI-Werte aus Nullmodell
-        
+        mi_real: Observed MI
+        mi_null_distribution: List of MI values from null model
+
     Returns:
-        p-Wert (1-seitig, rechtsseitig)
+        p-value (one-sided, right-tailed)
     """
     if not mi_null_distribution:
         return 1.0
@@ -122,37 +122,37 @@ def compute_p_value(
 
 
 def interpret_result(
-    z_score: float, 
+    z_score: float,
     p_value: float
 ) -> Tuple[str, str]:
     """
-    Interpretiert statistische Ergebnisse.
-    
+    Interprets statistical results.
+
     Returns:
-        status: Kurzer Status-String
-        interpretation: Längere Erklärung
+        status: Short status string
+        interpretation: Longer explanation
     """
     if z_score > 3 and p_value < 0.01:
         return (
-            "✓ SIGNIFIKANT",
-            "MI ist hochsignifikant höher als erwartet (p < 0.01). "
-            "Die Kanäle teilen Information, die nicht durch Zufall erklärbar ist."
+            "✓ SIGNIFICANT",
+            "MI is highly significantly higher than expected (p < 0.01). "
+            "The channels share information that cannot be explained by chance."
         )
     elif z_score > 2 and p_value < 0.05:
         return (
-            "~ TENDENZIELL",
-            "MI ist tendenziell höher als erwartet (p < 0.05). "
-            "Weitere Untersuchung empfohlen."
+            "~ TRENDING",
+            "MI tends to be higher than expected (p < 0.05). "
+            "Further investigation recommended."
         )
     elif z_score < -2:
         return (
-            "? UNERWARTET NIEDRIG",
-            "MI ist niedriger als erwartet. "
-            "Dies könnte auf Anti-Korrelation oder Datenartefakte hindeuten."
+            "? UNEXPECTEDLY LOW",
+            "MI is lower than expected. "
+            "This could indicate anti-correlation or data artifacts."
         )
     else:
         return (
-            "✗ NICHT SIGNIFIKANT",
-            "MI liegt im erwarteten Bereich des Nullmodells. "
-            "Keine Evidenz für zusätzliche Struktur."
+            "✗ NOT SIGNIFICANT",
+            "MI is within the expected range of the null model. "
+            "No evidence for additional structure."
         )
