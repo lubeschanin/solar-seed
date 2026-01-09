@@ -9,8 +9,8 @@ DATA SOURCE:
   Reference:    Lemen et al. 2012, Solar Physics, 275, 17-40
 
 ANALYSIS PARAMETERS:
-  Period:       2025-12-01 to 2025-12-09
-  Duration:     192.0h (8.0 days)
+  Period:       2025-12-01 to 2025-12-08
+  Duration:     192h (8.0 days)
   Cadence:      12 min
   Datapoints:   960
 

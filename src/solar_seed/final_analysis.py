@@ -1274,6 +1274,503 @@ def print_rotation_summary(result: RotationAnalysisResult) -> None:
 
 
 # ============================================================================
+# SEGMENT-BASED ROTATION ANALYSIS
+# ============================================================================
+
+@dataclass
+class SegmentResult:
+    """Ergebnis eines einzelnen Segments (z.B. ein Tag)."""
+    date: str  # YYYY-MM-DD
+    start_time: str
+    end_time: str
+    n_points: int
+    cadence_minutes: int
+
+    # Rohdaten für dieses Segment
+    timestamps: List[str]
+    pair_values: Dict[str, List[float]]  # "304-171" -> [values]
+
+    # Segment-Statistiken
+    pair_means: Dict[str, float]
+    pair_stds: Dict[str, float]
+
+
+def run_segment_analysis(
+    date: str,  # "2025-12-01"
+    cadence_minutes: int = 12,
+    seed: int = 42,
+    output_dir: str = "results/rotation/segments",
+    verbose: bool = True
+) -> Optional[SegmentResult]:
+    """
+    Analysiert ein einzelnes Segment (einen Tag).
+
+    Args:
+        date: Datum im Format YYYY-MM-DD
+        cadence_minutes: Kadenz in Minuten
+        seed: Random seed
+        output_dir: Output-Verzeichnis
+        verbose: Ausführliche Ausgabe
+
+    Returns:
+        SegmentResult oder None bei Fehler
+    """
+    import os
+    import gc
+    from solar_seed.multichannel import load_aia_multichannel
+
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    # Segment-Datei prüfen (bereits analysiert?)
+    segment_file = out_path / f"{date}.json"
+    if segment_file.exists():
+        if verbose:
+            print(f"  ✓ Segment {date} bereits vorhanden, überspringe")
+        return load_segment(segment_file)
+
+    # Zeitbereich für diesen Tag
+    start_time = datetime.fromisoformat(f"{date}T00:00:00")
+    end_time = start_time + timedelta(days=1)
+    n_points = int(24 * 60 / cadence_minutes)  # 120 bei 12-min Kadenz
+
+    if verbose:
+        print(f"\n  📅 Segment {date}: {n_points} Zeitpunkte")
+
+    # Initialisiere Datenstrukturen
+    pair_keys = [f"{a}-{b}" for a, b in combinations(WAVELENGTHS, 2)]
+    pair_values: Dict[str, List[float]] = {key: [] for key in pair_keys}
+    timestamps: List[str] = []
+    failed_count = 0
+
+    # Analysiere jeden Zeitpunkt
+    t = start_time
+    for i in range(n_points):
+        timestamp = t.isoformat()
+
+        if verbose:
+            print(f"    [{i+1}/{n_points}] {timestamp[:19]}...", end=" ", flush=True)
+
+        channels, metadata = load_aia_multichannel(
+            timestamp,
+            data_dir="data/aia",
+            cleanup=True
+        )
+
+        if channels is not None:
+            # Analysiere alle Paare
+            pair_results = analyze_pairs_parallel(channels, bins=64, seed=seed + i)
+
+            for pair, delta_mi in pair_results.items():
+                key = f"{pair[0]}-{pair[1]}"
+                pair_values[key].append(delta_mi)
+
+            timestamps.append(timestamp)
+            failed_count = 0
+
+            if verbose:
+                print("✓")
+
+            # Garbage Collection
+            if (i + 1) % 10 == 0:
+                gc.collect()
+        else:
+            failed_count += 1
+            if verbose:
+                print("⚠️")
+
+            if failed_count >= 10:
+                if verbose:
+                    print(f"    ✗ Abbruch: 10 aufeinanderfolgende Fehler")
+                break
+
+        t += timedelta(minutes=cadence_minutes)
+
+    # Keine Daten?
+    if not timestamps:
+        if verbose:
+            print(f"    ✗ Keine Daten für {date}")
+        return None
+
+    # Berechne Statistiken
+    pair_means = {key: float(np.mean(vals)) if vals else 0.0
+                  for key, vals in pair_values.items()}
+    pair_stds = {key: float(np.std(vals)) if vals else 0.0
+                 for key, vals in pair_values.items()}
+
+    # Erstelle Ergebnis
+    result = SegmentResult(
+        date=date,
+        start_time=start_time.isoformat(),
+        end_time=end_time.isoformat(),
+        n_points=len(timestamps),
+        cadence_minutes=cadence_minutes,
+        timestamps=timestamps,
+        pair_values=pair_values,
+        pair_means=pair_means,
+        pair_stds=pair_stds
+    )
+
+    # Speichern
+    save_segment(result, segment_file)
+
+    if verbose:
+        print(f"    ✓ Segment {date}: {len(timestamps)} Punkte gespeichert")
+
+    return result
+
+
+def save_segment(result: SegmentResult, path: Path) -> None:
+    """Speichert ein Segment als JSON."""
+    data = {
+        "date": result.date,
+        "start_time": result.start_time,
+        "end_time": result.end_time,
+        "n_points": result.n_points,
+        "cadence_minutes": result.cadence_minutes,
+        "timestamps": result.timestamps,
+        "pair_values": result.pair_values,
+        "pair_means": result.pair_means,
+        "pair_stds": result.pair_stds
+    }
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+
+def load_segment(path: Path) -> SegmentResult:
+    """Lädt ein Segment aus JSON."""
+    with open(path) as f:
+        data = json.load(f)
+    return SegmentResult(**data)
+
+
+def aggregate_segments(
+    segment_dir: str = "results/rotation/segments",
+    output_dir: str = "results/rotation",
+    verbose: bool = True
+) -> Optional[RotationAnalysisResult]:
+    """
+    Aggregiert alle vorhandenen Segmente zu einem Gesamtergebnis.
+
+    Args:
+        segment_dir: Verzeichnis mit Segment-Dateien
+        output_dir: Output-Verzeichnis für aggregiertes Ergebnis
+        verbose: Ausführliche Ausgabe
+
+    Returns:
+        RotationAnalysisResult oder None
+    """
+    seg_path = Path(segment_dir)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    # Finde alle Segment-Dateien
+    segment_files = sorted(seg_path.glob("*.json"))
+
+    if not segment_files:
+        if verbose:
+            print("  ✗ Keine Segmente gefunden")
+        return None
+
+    if verbose:
+        print(f"\n  📊 Aggregiere {len(segment_files)} Segmente...")
+
+    # Lade alle Segmente
+    segments: List[SegmentResult] = []
+    for sf in segment_files:
+        seg = load_segment(sf)
+        segments.append(seg)
+        if verbose:
+            print(f"    ✓ {seg.date}: {seg.n_points} Punkte")
+
+    # Kombiniere Daten
+    all_timestamps: List[str] = []
+    pair_timeseries: Dict[Tuple[int, int], List[float]] = {
+        pair: [] for pair in combinations(WAVELENGTHS, 2)
+    }
+
+    for seg in segments:
+        all_timestamps.extend(seg.timestamps)
+        for key, values in seg.pair_values.items():
+            a, b = map(int, key.split("-"))
+            pair_timeseries[(a, b)].extend(values)
+
+    # Berechne Gesamtstatistiken
+    total_hours = len(segments) * 24
+    cadence = segments[0].cadence_minutes if segments else 12
+
+    # Erstelle RotationAnalysisResult
+    pair_means = {pair: float(np.mean(vals)) if vals else 0.0
+                  for pair, vals in pair_timeseries.items()}
+    pair_stds = {pair: float(np.std(vals)) if vals else 0.0
+                 for pair, vals in pair_timeseries.items()}
+
+    # Autokorrelation
+    temporal_correlations = {}
+    for pair, vals in pair_timeseries.items():
+        if len(vals) > 1:
+            arr = np.array(vals)
+            if np.std(arr) > 0:
+                corr = np.corrcoef(arr[:-1], arr[1:])[0, 1]
+                temporal_correlations[pair] = float(corr) if not np.isnan(corr) else 0.0
+            else:
+                temporal_correlations[pair] = 0.0
+        else:
+            temporal_correlations[pair] = 0.0
+
+    # Rankings
+    sorted_pairs = sorted(pair_means.items(), key=lambda x: -x[1])
+    pair_rankings = {pair: rank for rank, (pair, _) in enumerate(sorted_pairs, 1)}
+
+    result = RotationAnalysisResult(
+        hours=total_hours,
+        n_points=len(all_timestamps),
+        cadence_minutes=cadence,
+        start_time=segments[0].start_time if segments else "",
+        end_time=segments[-1].end_time if segments else "",
+        pair_timeseries=pair_timeseries,
+        pair_means=pair_means,
+        pair_stds=pair_stds,
+        temporal_correlations=temporal_correlations,
+        pair_rankings=pair_rankings
+    )
+
+    # Speichern
+    save_rotation_results(result, out_path, all_timestamps)
+
+    if verbose:
+        print(f"\n  ✓ Aggregiert: {len(segments)} Tage, {len(all_timestamps)} Punkte")
+        print(f"    → {out_path / 'rotation_analysis.json'}")
+
+    return result
+
+
+def convert_checkpoint_to_segments(
+    checkpoint_path: str = "results/rotation/checkpoint.json",
+    output_dir: str = "results/rotation/segments",
+    verbose: bool = True
+) -> int:
+    """
+    Konvertiert bestehenden monolithischen Checkpoint in Segmente.
+
+    Args:
+        checkpoint_path: Pfad zum Checkpoint
+        output_dir: Output-Verzeichnis für Segmente
+        verbose: Ausführliche Ausgabe
+
+    Returns:
+        Anzahl erstellter Segmente
+    """
+    ckpt_path = Path(checkpoint_path)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    if not ckpt_path.exists():
+        if verbose:
+            print(f"  ✗ Checkpoint nicht gefunden: {checkpoint_path}")
+        return 0
+
+    # Lade Checkpoint
+    with open(ckpt_path) as f:
+        data = json.load(f)
+
+    timestamps = data.get("timestamps", [])
+    pair_data = data.get("pair_timeseries", {})
+
+    if not timestamps:
+        if verbose:
+            print("  ✗ Keine Daten im Checkpoint")
+        return 0
+
+    if verbose:
+        print(f"\n  📦 Konvertiere {len(timestamps)} Zeitpunkte zu Segmenten...")
+
+    # Gruppiere nach Datum
+    from collections import defaultdict
+    daily_indices: Dict[str, List[int]] = defaultdict(list)
+
+    for i, ts in enumerate(timestamps):
+        date = ts[:10]  # YYYY-MM-DD
+        daily_indices[date].append(i)
+
+    # Erstelle Segmente
+    segments_created = 0
+
+    for date in sorted(daily_indices.keys()):
+        indices = daily_indices[date]
+        segment_file = out_path / f"{date}.json"
+
+        if segment_file.exists():
+            if verbose:
+                print(f"    ⏭️  {date}: bereits vorhanden")
+            continue
+
+        # Extrahiere Daten für diesen Tag
+        day_timestamps = [timestamps[i] for i in indices]
+        day_pair_values: Dict[str, List[float]] = {}
+
+        for pair_key, values in pair_data.items():
+            day_pair_values[pair_key] = [values[i] for i in indices if i < len(values)]
+
+        # Berechne Statistiken
+        pair_means = {key: float(np.mean(vals)) if vals else 0.0
+                      for key, vals in day_pair_values.items()}
+        pair_stds = {key: float(np.std(vals)) if vals else 0.0
+                     for key, vals in day_pair_values.items()}
+
+        # Bestimme Kadenz aus Timestamps
+        if len(day_timestamps) >= 2:
+            t1 = datetime.fromisoformat(day_timestamps[0].replace('Z', '+00:00'))
+            t2 = datetime.fromisoformat(day_timestamps[1].replace('Z', '+00:00'))
+            cadence = int((t2 - t1).total_seconds() / 60)
+        else:
+            cadence = 12
+
+        # Erstelle Segment
+        result = SegmentResult(
+            date=date,
+            start_time=f"{date}T00:00:00",
+            end_time=f"{date}T23:59:59",
+            n_points=len(day_timestamps),
+            cadence_minutes=cadence,
+            timestamps=day_timestamps,
+            pair_values=day_pair_values,
+            pair_means=pair_means,
+            pair_stds=pair_stds
+        )
+
+        save_segment(result, segment_file)
+        segments_created += 1
+
+        if verbose:
+            print(f"    ✓ {date}: {len(day_timestamps)} Punkte")
+
+    if verbose:
+        print(f"\n  ✓ {segments_created} Segmente erstellt in {output_dir}")
+
+    return segments_created
+
+
+def run_segmented_rotation(
+    start_date: str,
+    end_date: str,
+    cadence_minutes: int = 12,
+    output_dir: str = "results/rotation",
+    verbose: bool = True,
+    auto_push: bool = False
+) -> Optional[RotationAnalysisResult]:
+    """
+    Führt segment-basierte Rotationsanalyse durch.
+
+    Analysiert jeden Tag einzeln und aggregiert am Ende.
+    Bereits analysierte Tage werden übersprungen.
+
+    Args:
+        start_date: Startdatum (YYYY-MM-DD)
+        end_date: Enddatum (YYYY-MM-DD)
+        cadence_minutes: Kadenz
+        output_dir: Output-Verzeichnis
+        verbose: Ausführliche Ausgabe
+        auto_push: Git push nach jedem Segment
+
+    Returns:
+        Aggregiertes RotationAnalysisResult
+    """
+    segment_dir = f"{output_dir}/segments"
+
+    # Parse Daten
+    start = datetime.fromisoformat(start_date)
+    end = datetime.fromisoformat(end_date)
+    n_days = (end - start).days + 1
+
+    if verbose:
+        print(f"""
+╔═══════════════════════════════════════════════════════════════════════╗
+║          🌞 SEGMENT-BASIERTE ROTATIONSANALYSE 🌱                       ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+  Zeitraum:    {start_date} → {end_date} ({n_days} Tage)
+  Kadenz:      {cadence_minutes} min
+  Segmente:    {segment_dir}
+""")
+
+    # Analysiere jeden Tag
+    current = start
+    completed = 0
+
+    while current <= end:
+        date_str = current.strftime("%Y-%m-%d")
+
+        result = run_segment_analysis(
+            date=date_str,
+            cadence_minutes=cadence_minutes,
+            output_dir=segment_dir,
+            verbose=verbose
+        )
+
+        if result is not None:
+            completed += 1
+
+            # Auto-push nach jedem Segment
+            if auto_push:
+                _git_push_segment(segment_dir, date_str, completed, n_days)
+
+        current += timedelta(days=1)
+
+    if verbose:
+        print(f"\n  ════════════════════════════════════════════════════════════")
+        print(f"  ✓ {completed}/{n_days} Segmente analysiert")
+
+    # Aggregiere alle Segmente
+    return aggregate_segments(segment_dir, output_dir, verbose)
+
+
+def _git_push_segment(segment_dir: str, date: str, current: int, total: int) -> None:
+    """Git push nach Segment-Analyse."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=segment_dir,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            return
+
+        project_root = Path(result.stdout.strip())
+        seg_path = Path(segment_dir).resolve()
+
+        # Add segment file
+        seg_file = seg_path / f"{date}.json"
+        if seg_file.exists():
+            rel_path = seg_file.relative_to(project_root)
+            subprocess.run(["git", "add", str(rel_path)], cwd=project_root, capture_output=True)
+
+        # Commit
+        commit_msg = f"Segment {date}: {current}/{total} days"
+        commit_result = subprocess.run(
+            ["git", "commit", "-m", commit_msg, "--no-verify"],
+            cwd=project_root,
+            capture_output=True,
+            text=True
+        )
+
+        if commit_result.returncode != 0:
+            if "nothing to commit" in commit_result.stdout + commit_result.stderr:
+                return
+            return
+
+        # Push
+        subprocess.run(["git", "push"], cwd=project_root, capture_output=True)
+        print(f"    📤 Segment {date} gepusht")
+
+    except Exception:
+        pass
+
+
+# ============================================================================
 # COMBINED FINAL ANALYSIS
 # ============================================================================
 
@@ -1396,11 +1893,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Beispiele:
+  # Standard-Analysen
   python -m solar_seed.final_analysis
   python -m solar_seed.final_analysis --timescale-only
   python -m solar_seed.final_analysis --activity-only
-  python -m solar_seed.final_analysis --real
-  python -m solar_seed.final_analysis --rotation --start "2024-01-01T00:00:00"
+
+  # Legacy: Monolithische Rotation (alt)
+  python -m solar_seed.final_analysis --rotation --start "2024-01-01"
+
+  # NEU: Segment-basierte Rotation (empfohlen)
+  python -m solar_seed.final_analysis --segments --start 2025-12-01 --end 2025-12-27
+  python -m solar_seed.final_analysis --segment 2025-12-15
+  python -m solar_seed.final_analysis --aggregate
+  python -m solar_seed.final_analysis --convert-checkpoint
         """
     )
     parser.add_argument("--output", type=str, default="results/final",
@@ -1411,29 +1916,79 @@ Beispiele:
                         help="Nur Zeitskalen-Vergleich")
     parser.add_argument("--activity-only", action="store_true",
                         help="Nur Aktivitäts-Konditionierung")
+
+    # Legacy rotation
     parser.add_argument("--rotation", action="store_true",
-                        help="27-Tage-Rotationsanalyse mit echten AIA-Daten")
+                        help="27-Tage-Rotationsanalyse (legacy, monolithisch)")
     parser.add_argument("--short-hours", type=float, default=24.0,
                         help="Kurze Zeitskala in Stunden")
     parser.add_argument("--long-hours", type=float, default=648.0,
                         help="Lange Zeitskala in Stunden (27d = 648)")
+
+    # Segment-based rotation (neu)
+    parser.add_argument("--segments", action="store_true",
+                        help="Segment-basierte Rotationsanalyse (empfohlen)")
+    parser.add_argument("--segment", type=str, default=None,
+                        help="Einzelnes Segment analysieren (YYYY-MM-DD)")
+    parser.add_argument("--aggregate", action="store_true",
+                        help="Alle Segmente aggregieren")
+    parser.add_argument("--convert-checkpoint", action="store_true",
+                        help="Bestehenden Checkpoint in Segmente konvertieren")
+
+    # Gemeinsame Optionen
     parser.add_argument("--start", type=str, default=None,
-                        help="Startzeit für Rotationsanalyse (ISO format)")
-    parser.add_argument("--cadence", type=int, default=60,
-                        help="Kadenz in Minuten für Rotationsanalyse (default: 60)")
+                        help="Startdatum (YYYY-MM-DD oder ISO format)")
+    parser.add_argument("--end", type=str, default=None,
+                        help="Enddatum für Segment-Analyse (YYYY-MM-DD)")
+    parser.add_argument("--cadence", type=int, default=12,
+                        help="Kadenz in Minuten (default: 12)")
     parser.add_argument("--no-resume", action="store_true",
                         help="Nicht von Checkpoint fortsetzen, neu starten")
     parser.add_argument("--auto-push", action="store_true",
-                        help="Git push nach jedem Checkpoint (für Cross-System Resume)")
+                        help="Git push nach jedem Segment/Checkpoint")
 
     args = parser.parse_args()
 
-    if args.rotation:
-        run_rotation_analysis(
-            hours=args.long_hours,  # Über --long-hours einstellbar
+    # Segment-basierte Analyse (neu, empfohlen)
+    if args.segments:
+        if not args.start or not args.end:
+            print("Fehler: --segments benötigt --start und --end")
+            print("Beispiel: --segments --start 2025-12-01 --end 2025-12-27")
+            return
+        run_segmented_rotation(
+            start_date=args.start[:10],  # Nur Datum
+            end_date=args.end[:10],
             cadence_minutes=args.cadence,
             output_dir="results/rotation",
-            use_real_data=True,  # Immer echte Daten für Rotation
+            verbose=True,
+            auto_push=args.auto_push
+        )
+    elif args.segment:
+        run_segment_analysis(
+            date=args.segment,
+            cadence_minutes=args.cadence,
+            output_dir="results/rotation/segments",
+            verbose=True
+        )
+    elif args.aggregate:
+        aggregate_segments(
+            segment_dir="results/rotation/segments",
+            output_dir="results/rotation",
+            verbose=True
+        )
+    elif args.convert_checkpoint:
+        convert_checkpoint_to_segments(
+            checkpoint_path="results/rotation/checkpoint.json",
+            output_dir="results/rotation/segments",
+            verbose=True
+        )
+    # Legacy rotation
+    elif args.rotation:
+        run_rotation_analysis(
+            hours=args.long_hours,
+            cadence_minutes=args.cadence,
+            output_dir="results/rotation",
+            use_real_data=True,
             start_time_str=args.start,
             verbose=True,
             resume=not args.no_resume,

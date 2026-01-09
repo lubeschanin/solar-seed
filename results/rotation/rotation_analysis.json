@@ -1,11 +1,11 @@
 {
   "metadata": {
-    "hours": 192.0,
+    "hours": 192,
     "days": 8.0,
     "n_points": 960,
     "cadence_minutes": 12,
     "start_time": "2025-12-01T00:00:00",
-    "end_time": "2025-12-09T00:00:00"
+    "end_time": "2025-12-08T23:59:59"
   },
   "pair_means": {
     "304-171": 0.05905080664659571,
