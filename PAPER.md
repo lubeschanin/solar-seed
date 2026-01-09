@@ -369,6 +369,8 @@ The corona, as a magnetically dominated plasma extending across the solar disk, 
 
 This establishes temperature-ordered coupling as an intrinsic organizational principle of the solar atmosphere, independent of viewing geometry, active region population, or instrumental calibration.
 
+**Axiom (Viewpoint Invariance).** *The temperature-ordered coupling hierarchy is invariant under viewpoint reversal, as demonstrated by antipodal observations with independent instruments.*
+
 ### 5.12 Limitations and Outlook
 
 Several methodological and physical considerations constrain the interpretation of these results.
