@@ -41,6 +41,18 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 **Key finding:** Flares **contract** the state space (0.58× dimensionality, 360× volume reduction), channeling dynamics through fewer degrees of freedom.
 
+### Cross-Instrument Validation (STEREO-A/EUVI)
+
+180° cross-hemisphere validation establishes temperature-ordered coupling as an **intrinsic organizational principle**:
+
+| Instrument | Separation | Rank Correlation |
+|------------|------------|------------------|
+| SDO/AIA vs STEREO-A/EUVI | 180° | **90.6%** |
+
+- Absolute amplitudes differ (ratio 0.48–0.76) due to instrumental calibration
+- **Ranking preserved**: coronal pairs strongest, chromospheric coupling weakest
+- Independent of viewing geometry, active region population, or instrument
+
 ### Regime-Switching & Hysteresis
 
 - **Operator difference:** ‖A_F − A_N‖ = 2.90 (distinct flare dynamics)
@@ -103,6 +115,12 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 ![Figure 9 — State space contraction](figures/figure9_state_space.png)
 
 *State-space contraction during flares. (A) PCA projection showing quiet (green), active (orange), flare (red) regimes. (B) Participation ratio by regime. (C) Volume contraction (>100×). (D) Entropy reduction indicating constraint rather than chaos.*
+
+### Figure 10 — Cross-Instrument Validation (STEREO)
+
+![Figure 10 — STEREO cross-instrument validation](figures/figure6_stereo_validation.png)
+
+*Cross-instrument validation using STEREO-A/EUVI and SDO/AIA from 180° angular separation (opposite sides of the Sun). Left: Viewing geometry (Feb 6, 2011). Center: Coupling hierarchy comparison—ranking preserved despite different instruments. Right: 90.6% rank correlation establishes temperature-ordered coupling as an intrinsic organizational principle.*
 
 ## Flare Analysis
 
@@ -316,6 +334,7 @@ figures/
 ├── figure4_coupling_matrix.png
 ├── figure5_flare_phases.png
 ├── figure6_operator_dynamics.png
+├── figure6_stereo_validation.png          # Cross-instrument validation
 ├── figure7_phase_transitions.png
 ├── figure8_redundancy_structure.png
 └── figure9_state_space.png

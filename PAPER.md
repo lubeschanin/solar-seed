@@ -493,6 +493,12 @@ Beyond solar physics, the methodology is directly applicable to other multichann
 
 *Contraction of the effective solar atmospheric state space during flares. (A) Projection of the solar state vector, constructed from the coupling invariants I₁–I₅ and their temporal derivatives, onto the leading principal components. Quiet (green), active (orange), and flare (red) states occupy progressively smaller regions of the state space. (B) Effective dimensionality quantified by the participation ratio for different activity regimes. While quiet conditions span a higher-dimensional region of the embedding space, flare states collapse onto a reduced number of dominant modes. (C) Normalized state-space volume occupied by each regime, showing a contraction by more than two orders of magnitude during flares relative to quiet conditions. (D) Entropy of the eigenvalue spectrum of the state-space covariance matrix. The reduction in entropy during flares indicates increased dynamical constraint rather than enhanced variability. Together, these panels demonstrate that major solar flares correspond to a contraction of the accessible state space onto a low-dimensional manifold, reflecting a transition from distributed coronal organization to strongly constrained dynamics.*
 
+### Figure 10 — Cross-Instrument Validation (STEREO-A/EUVI)
+
+![Figure 10](figures/figure6_stereo_validation.png)
+
+*Cross-instrument validation using STEREO-A/EUVI and SDO/AIA observations from 180° angular separation (opposite sides of the Sun). Left: Viewing geometry on February 6, 2011, with STEREO-A positioned at 180° from Earth. Center: Comparison of coupling hierarchies between EUVI (red) and AIA (blue) for corresponding wavelength pairs (171–195/193, 171–304, 195–304/193–304). Despite different instrumental response functions and viewing angles, the ranking of coupling strength is preserved. Right: Rank correlation of 90.6% (p < 0.05), establishing that the temperature-ordered coupling hierarchy is an intrinsic organizational principle of the solar atmosphere, independent of viewing geometry or instrumental calibration. Absolute coupling amplitudes differ between instruments (ratio 0.48–0.76), reflecting calibration differences, while the relative ordering—coronal pairs strongest, chromospheric coupling weakest—is preserved across hemispheres.*
+
 ---
 
 ## References
