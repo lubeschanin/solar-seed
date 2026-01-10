@@ -33,11 +33,24 @@ Usage:
 import sys
 import json
 import time
+import signal
 import argparse
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from urllib.request import urlopen, Request
 from urllib.error import URLError
+
+# Global flag for graceful shutdown
+_shutdown_requested = False
+
+def _signal_handler(signum, frame):
+    """Handle Ctrl+C gracefully."""
+    global _shutdown_requested
+    _shutdown_requested = True
+    print("\n  Shutdown requested... (press again to force)")
+
+# Register signal handler
+signal.signal(signal.SIGINT, _signal_handler)
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -828,6 +841,9 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
 
 def monitor_loop(interval: int = 60, with_coupling: bool = False, store_db: bool = True):
     """Continuous monitoring loop."""
+    global _shutdown_requested
+    _shutdown_requested = False
+
     print(f"\n  Starting continuous monitoring (interval: {interval}s)")
     if store_db:
         print(f"  Database: {get_monitoring_db().db_path}")
@@ -836,21 +852,29 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, store_db: bool
     coupling_interval = 600  # Run coupling every 10 minutes
     last_coupling = 0
 
-    while True:
-        try:
-            xray = get_goes_xray()
-            solar_wind = get_dscovr_solar_wind()
-            alerts = get_noaa_alerts()
+    while not _shutdown_requested:
+        xray = get_goes_xray()
+        if _shutdown_requested:
+            break
 
-            # Store in database
-            if store_db:
-                store_goes_reading(xray)
-                if solar_wind:
-                    risk, risk_level = assess_geomagnetic_risk(solar_wind)
-                    store_solar_wind_reading(solar_wind, risk, risk_level)
+        solar_wind = get_dscovr_solar_wind()
+        if _shutdown_requested:
+            break
 
-            coupling = None
-            if with_coupling and (time.time() - last_coupling) > coupling_interval:
+        alerts = get_noaa_alerts()
+        if _shutdown_requested:
+            break
+
+        # Store in database
+        if store_db:
+            store_goes_reading(xray)
+            if solar_wind:
+                risk, risk_level = assess_geomagnetic_risk(solar_wind)
+                store_solar_wind_reading(solar_wind, risk, risk_level)
+
+        coupling = None
+        if with_coupling and (time.time() - last_coupling) > coupling_interval:
+            if not _shutdown_requested:
                 coupling = run_coupling_analysis()
                 last_coupling = time.time()
                 # Store coupling
@@ -858,20 +882,26 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, store_db: bool
                     now = datetime.now(timezone.utc)
                     store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling)
 
-            print_status_report(xray, solar_wind, alerts, coupling)
-
-            # Alert on significant events
-            if xray and xray['severity'] >= 3:
-                print(f"\a")  # Terminal bell
-
-            time.sleep(interval)
-
-        except KeyboardInterrupt:
-            print("\n  Monitoring stopped.")
-            if store_db:
-                stats = get_monitoring_db().get_database_stats()
-                print(f"  Database stats: {stats['goes_xray']} X-ray, {stats['solar_wind']} wind, {stats['coupling_measurements']} coupling")
+        if _shutdown_requested:
             break
+
+        print_status_report(xray, solar_wind, alerts, coupling)
+
+        # Alert on significant events
+        if xray and xray['severity'] >= 3:
+            print(f"\a")  # Terminal bell
+
+        # Interruptible sleep (check every second)
+        for _ in range(interval):
+            if _shutdown_requested:
+                break
+            time.sleep(1)
+
+    # Cleanup
+    print("\n  Monitoring stopped.")
+    if store_db:
+        stats = get_monitoring_db().get_database_stats()
+        print(f"  Database stats: {stats['goes_xray']} X-ray, {stats['solar_wind']} wind, {stats['coupling_measurements']} coupling")
 
 
 def main():
