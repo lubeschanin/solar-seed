@@ -588,6 +588,163 @@ def store_coupling_reading(timestamp: str, coupling: dict):
         )
 
 
+# =============================================================================
+# STEREO-A EUVI Data Loading
+# =============================================================================
+
+# STEREO-A position info (updated periodically)
+STEREO_A_INFO = {
+    'separation_deg': 51.0,  # Degrees ahead of Earth
+    'light_travel_min': 7.0,  # Light travel time to Earth
+    'advance_warning_days': 3.9,  # How many days ahead it sees (51° / 13.2°/day)
+}
+
+# EUVI to AIA wavelength mapping
+EUVI_TO_AIA = {
+    171: 171,  # Fe IX - same
+    195: 193,  # Fe XII - similar to AIA 193
+    284: 211,  # Fe XV - similar to AIA 211
+    304: 304,  # He II - same
+}
+
+
+def load_stereo_a_latest(wavelengths: list[int] = None, max_age_minutes: int = 120) -> tuple[dict, str, dict] | tuple[None, None, None]:
+    """
+    Load most recent STEREO-A EUVI data.
+
+    STEREO-A is ~51° ahead of Earth, providing ~3.9 days advance warning.
+
+    Args:
+        wavelengths: EUVI wavelengths to load [171, 195, 284, 304]
+        max_age_minutes: How far back to search (STEREO data may be delayed)
+
+    Returns:
+        (channels_dict, timestamp, metadata) or (None, None, None)
+    """
+    if wavelengths is None:
+        wavelengths = [195, 284, 304]  # Similar to AIA 193, 211, 304
+
+    try:
+        from sunpy.net import Fido, attrs as a
+        import astropy.units as u
+        from sunpy.map import Map
+        import tempfile
+        import os
+
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(minutes=max_age_minutes)
+
+        channels = {}
+        actual_timestamp = None
+
+        print(f"\n  STEREO-A EUVI ({STEREO_A_INFO['separation_deg']:.0f}° ahead, ~{STEREO_A_INFO['advance_warning_days']:.1f} days warning)")
+
+        for wl in wavelengths:
+            print(f"    Searching EUVI {wl} Å (last {max_age_minutes} min)...")
+
+            # Search STEREO-A EUVI data
+            result = Fido.search(
+                a.Time(start, now),
+                a.Source('STEREO_A'),
+                a.Instrument('EUVI'),
+                a.Wavelength(wl * u.Angstrom)
+            )
+
+            if len(result) > 0 and len(result[0]) > 0:
+                n_results = len(result[0])
+                latest_idx = n_results - 1
+
+                try:
+                    result_time = result[0][latest_idx]['Start Time']
+                    print(f"    Found {n_results} images, using latest: {result_time}")
+                except:
+                    print(f"    Found {n_results} images, using latest")
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    files = Fido.fetch(result[0, latest_idx], path=tmpdir, progress=False)
+                    if files:
+                        smap = Map(files[0])
+                        channels[wl] = smap.data
+
+                        if actual_timestamp is None:
+                            actual_timestamp = smap.date.isot
+                            print(f"    Actual image time: {actual_timestamp}")
+
+                        os.remove(files[0])
+            else:
+                print(f"    No EUVI {wl} Å images found")
+
+        metadata = {
+            'source': 'STEREO-A',
+            'instrument': 'EUVI',
+            'separation_deg': STEREO_A_INFO['separation_deg'],
+            'advance_warning_days': STEREO_A_INFO['advance_warning_days'],
+        }
+
+        return (channels, actual_timestamp, metadata) if channels else (None, None, None)
+
+    except Exception as e:
+        print(f"    STEREO-A load error: {e}")
+        return None, None, None
+
+
+def run_stereo_coupling_analysis() -> dict | None:
+    """
+    Run coupling analysis on STEREO-A EUVI data.
+
+    This shows what's coming ~3.9 days before it faces Earth.
+    """
+    print("\n  Running STEREO-A coupling analysis...")
+
+    try:
+        from solar_seed.radial_profile import subtract_radial_geometry
+        from solar_seed.control_tests import sector_ring_shuffle_test
+
+        # Load STEREO-A data
+        channels, timestamp, metadata = load_stereo_a_latest([195, 284, 304], max_age_minutes=180)
+
+        if not channels or len(channels) < 2:
+            print("  Could not load STEREO-A EUVI data")
+            return None
+
+        print(f"  Using STEREO-A data from: {timestamp}")
+
+        results = {
+            '_stereo_metadata': metadata,
+            '_timestamp': timestamp,
+        }
+
+        # Map EUVI wavelengths to AIA-equivalent pairs
+        # EUVI 195 ≈ AIA 193, EUVI 284 ≈ AIA 211, EUVI 304 = AIA 304
+        pairs = [
+            (195, 284, '193-211'),  # Corona pair (EUVI equiv)
+            (195, 304, '193-304'),  # Corona-Chromosphere (EUVI equiv)
+        ]
+
+        for wl1, wl2, pair_name in pairs:
+            if wl1 in channels and wl2 in channels:
+                res1, _, _ = subtract_radial_geometry(channels[wl1])
+                res2, _, _ = subtract_radial_geometry(channels[wl2])
+
+                shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
+                delta_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
+
+                results[pair_name] = {
+                    'delta_mi': delta_mi,
+                    'mi_original': shuffle_result.mi_original,
+                    'euvi_wavelengths': f"{wl1}-{wl2}",
+                    'source': 'STEREO-A',
+                }
+
+        return results
+
+    except Exception as e:
+        print(f"  STEREO-A analysis error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def load_aia_latest(wavelengths: list[int], max_age_minutes: int = 60) -> tuple[dict, str] | tuple[None, None]:
     """
     Load the most recent available AIA data.
@@ -762,7 +919,7 @@ def run_coupling_analysis() -> dict | None:
         return None
 
 
-def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: dict = None):
+def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: dict = None, stereo: dict = None):
     """Print formatted status report."""
     now = datetime.now(timezone.utc)
 
@@ -890,6 +1047,34 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
             print(f"     → {transfer['interpretation']}")
 
+    # STEREO-A advance warning (3.9 days ahead)
+    if stereo:
+        meta = stereo.get('_stereo_metadata', {})
+        ts = stereo.get('_timestamp', 'unknown')
+        sep = meta.get('separation_deg', 51)
+        days = meta.get('advance_warning_days', 3.9)
+
+        print(f"\n  STEREO-A EUVI ({sep:.0f}° ahead → ~{days:.1f} days warning)")
+        print(f"  {'-'*40}")
+        print(f"  Image time: {ts}")
+
+        for pair, data in stereo.items():
+            if pair.startswith('_'):
+                continue
+            euvi_wl = data.get('euvi_wavelengths', '')
+            print(f"  {pair} Å: {data['delta_mi']:.3f} bits  (EUVI {euvi_wl})")
+
+        # Compare with current SDO if available
+        if coupling:
+            print(f"\n  Comparison (STEREO-A vs SDO/AIA):")
+            for pair in ['193-211', '193-304']:
+                if pair in stereo and pair in coupling:
+                    stereo_mi = stereo[pair]['delta_mi']
+                    sdo_mi = coupling[pair]['delta_mi']
+                    diff_pct = (stereo_mi - sdo_mi) / sdo_mi * 100 if sdo_mi else 0
+                    arrow = "↑" if diff_pct > 10 else "↓" if diff_pct < -10 else "≈"
+                    print(f"    {pair}: STEREO {stereo_mi:.3f} vs SDO {sdo_mi:.3f} ({arrow} {diff_pct:+.0f}%)")
+
     # Active alerts
     if alerts:
         print(f"\n  NOAA ALERTS (last 24h)")
@@ -900,7 +1085,7 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
     print(f"\n{'='*70}\n")
 
 
-def monitor_loop(interval: int = 60, with_coupling: bool = False, store_db: bool = True):
+def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: bool = False, store_db: bool = True):
     """Continuous monitoring loop."""
     global _shutdown_requested
     _shutdown_requested = False
@@ -911,7 +1096,9 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, store_db: bool
     print(f"  Press Ctrl+C to stop\n")
 
     coupling_interval = 600  # Run coupling every 10 minutes
+    stereo_interval = 1800   # Run STEREO every 30 minutes (data updates less frequently)
     last_coupling = 0
+    last_stereo = 0
 
     while not _shutdown_requested:
         xray = get_goes_xray()
@@ -946,7 +1133,17 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, store_db: bool
         if _shutdown_requested:
             break
 
-        print_status_report(xray, solar_wind, alerts, coupling)
+        # STEREO-A analysis (less frequent due to data latency)
+        stereo = None
+        if with_stereo and (time.time() - last_stereo) > stereo_interval:
+            if not _shutdown_requested:
+                stereo = run_stereo_coupling_analysis()
+                last_stereo = time.time()
+
+        if _shutdown_requested:
+            break
+
+        print_status_report(xray, solar_wind, alerts, coupling, stereo)
 
         # Alert on significant events
         if xray and xray['severity'] >= 3:
@@ -972,7 +1169,9 @@ def main():
     parser.add_argument('--interval', type=int, default=60,
                         help='Monitoring interval in seconds (default: 60)')
     parser.add_argument('--coupling', action='store_true',
-                        help='Include AIA coupling analysis')
+                        help='Include SDO/AIA coupling analysis')
+    parser.add_argument('--stereo', action='store_true',
+                        help='Include STEREO-A EUVI analysis (~3.9 days ahead)')
     parser.add_argument('--no-db', action='store_true',
                         help='Disable database storage')
     parser.add_argument('--db-stats', action='store_true',
@@ -1015,20 +1214,22 @@ def main():
 
     print("""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║          SOLAR EARLY WARNING SYSTEM - Prototype v0.2                  ║
+║          SOLAR EARLY WARNING SYSTEM - Prototype v0.3                  ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
   Data Sources:
     - GOES X-ray flux (NOAA SWPC)
     - DSCOVR solar wind plasma & magnetic field (L1)
     - NOAA Space Weather Alerts
-    - SDO/AIA coupling analysis (optional)
+    - SDO/AIA coupling analysis (--coupling)
+    - STEREO-A EUVI 51° ahead (--stereo) → ~3.9 days warning
 """)
 
     store_db = not args.no_db
 
     if args.monitor:
-        monitor_loop(interval=args.interval, with_coupling=args.coupling, store_db=store_db)
+        monitor_loop(interval=args.interval, with_coupling=args.coupling,
+                     with_stereo=args.stereo, store_db=store_db)
     else:
         # Single check
         xray = get_goes_xray()
@@ -1049,7 +1250,11 @@ def main():
                 now = datetime.now(timezone.utc)
                 store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling)
 
-        print_status_report(xray, solar_wind, alerts, coupling)
+        stereo = None
+        if args.stereo:
+            stereo = run_stereo_coupling_analysis()
+
+        print_status_report(xray, solar_wind, alerts, coupling, stereo)
 
         if store_db:
             print(f"  Data stored in: {get_monitoring_db().db_path}")
