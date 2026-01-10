@@ -50,9 +50,11 @@ def print_menu():
   │                                                                     │
   │   [6]  Early Warning System (real-time monitoring)                  │
   │                                                                     │
-  │   [7]  Status: Check running analysis                               │
+  │   [7]  Reports (daily/weekly summary, precursor stats)              │
   │                                                                     │
-  │   [8]  View Results                                                 │
+  │   [8]  Status: Check running analysis                               │
+  │                                                                     │
+  │   [9]  View Results                                                 │
   │                                                                     │
   │   [q]  Quit                                                         │
   │                                                                     │
@@ -724,6 +726,150 @@ def run_early_warning():
             print("\n  Monitoring stopped.")
 
 
+def run_reports():
+    """Generate and view reports."""
+    clear_screen()
+    print_header()
+    print("""
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                        REPORTS                                      │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  Generate summary reports from the monitoring database.
+  Includes precursor detection statistics (Precision/Recall).
+""")
+
+    # Import report module
+    scripts_path = Path(__file__).parent.parent.parent / "scripts"
+    sys.path.insert(0, str(scripts_path))
+
+    try:
+        from report import ReportGenerator
+    except ImportError as e:
+        print(f"\n  Error importing report module: {e}")
+        print("  Make sure scripts/report.py exists.")
+        return
+
+    print("  Select report type:")
+    print("    [1] Daily Summary (last 24h)")
+    print("    [2] Weekly Summary (last 7 days)")
+    print("    [3] Monthly Summary (last 30 days)")
+    print("    [4] Precursor Statistics Only")
+    print("    [5] Export Report (md/html/json)")
+    print("    [6] Cancel")
+
+    choice = get_choice("Choose [1-6]:", ["1", "2", "3", "4", "5", "6"])
+
+    if choice == "6":
+        print("\n  Cancelled.")
+        return
+
+    report = ReportGenerator()
+
+    if choice == "4":
+        # Precursor statistics only
+        stats = report.get_precursor_statistics()
+        print("""
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │              PRECURSOR DETECTION STATISTICS                         │
+  └─────────────────────────────────────────────────────────────────────┘
+""")
+        print(f"  Detection Window: {stats['window_min_hours']:.1f} - {stats['window_max_hours']:.1f} hours after break")
+        print()
+        print(f"  Total Breaks Detected:  {stats['total_breaks']}")
+        print(f"  Total Flares (C+):      {stats['total_flares']}")
+        print()
+        print(f"  True Positives (TP):    {stats['true_positives']}")
+        print(f"  False Positives (FP):   {stats['false_positives']}")
+        print(f"  False Negatives (FN):   {stats['false_negatives']}")
+        print()
+
+        if stats['precision'] is not None:
+            print(f"  Precision:  {stats['precision']:.1%}")
+        else:
+            print(f"  Precision:  N/A (no breaks detected)")
+
+        if stats['recall'] is not None:
+            print(f"  Recall:     {stats['recall']:.1%}")
+        else:
+            print(f"  Recall:     N/A (no flares recorded)")
+
+        if stats['f1_score'] is not None:
+            print(f"  F1 Score:   {stats['f1_score']:.3f}")
+
+        if stats['avg_lead_time_hours'] is not None:
+            print()
+            print(f"  Avg Lead Time:  {stats['avg_lead_time_hours']:.1f} hours")
+            print(f"  Min Lead Time:  {stats['min_lead_time_hours']:.1f} hours")
+            print(f"  Max Lead Time:  {stats['max_lead_time_hours']:.1f} hours")
+
+        print()
+        return
+
+    if choice == "5":
+        # Export options
+        print("\n  Select export format:")
+        print("    [1] Markdown (.md)")
+        print("    [2] HTML (.html)")
+        print("    [3] JSON (.json)")
+
+        fmt_choice = get_choice("Choose [1-3]:", ["1", "2", "3"])
+        fmt_map = {"1": "md", "2": "html", "3": "json"}
+        fmt = fmt_map[fmt_choice]
+
+        print("\n  Select period:")
+        print("    [1] Daily (1 day)")
+        print("    [2] Weekly (7 days)")
+        print("    [3] Monthly (30 days)")
+
+        period_choice = get_choice("Choose [1-3]:", ["1", "2", "3"])
+        days_map = {"1": 1, "2": 7, "3": 30}
+        days = days_map[period_choice]
+
+        # Generate filename
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        default_filename = f"results/early_warning/report_{timestamp}.{fmt}"
+
+        filename = input(f"\n  Output file [{default_filename}]: ").strip()
+        if not filename:
+            filename = default_filename
+
+        # Generate report
+        print(f"\n  Generating {fmt.upper()} report...")
+
+        if fmt == "md":
+            content = report.format_markdown(days)
+        elif fmt == "html":
+            content = report.format_html(days)
+        else:
+            import json
+            data = {
+                'summary': report.get_summary_stats(days),
+                'precursor': report.get_precursor_statistics(),
+                'daily': report.get_daily_breakdown(days),
+                'events': report.get_recent_events(24),
+            }
+            content = json.dumps(data, indent=2, default=str)
+
+        # Save file
+        output_path = Path(filename)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content)
+
+        print(f"\n  ✓ Report saved to: {filename}")
+        return
+
+    # Display summary report
+    days_map = {"1": 1, "2": 7, "3": 30}
+    days = days_map[choice]
+    period_names = {"1": "Daily", "2": "Weekly", "3": "Monthly"}
+
+    print(f"\n  Generating {period_names[choice]} Report...\n")
+    content = report.format_text(days)
+    print(content)
+
+
 def show_status():
     """Show status of running analyses."""
     clear_screen()
@@ -892,7 +1038,7 @@ def main():
         print_header()
         print_menu()
 
-        choice = get_choice("Your choice:", ["1", "2", "3", "4", "5", "6", "7", "8", "q"])
+        choice = get_choice("Your choice:", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "q"])
 
         if choice == "1":
             run_quicktest()
@@ -913,8 +1059,11 @@ def main():
             run_early_warning()
             input("\n  [Enter] Back to menu")
         elif choice == "7":
-            show_status()
+            run_reports()
+            input("\n  [Enter] Back to menu")
         elif choice == "8":
+            show_status()
+        elif choice == "9":
             show_results()
         elif choice == "q":
             clear_screen()
