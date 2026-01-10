@@ -1664,26 +1664,22 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
                 elif bd.get('vetoed'):
                     diagnostic_breaks.append(pair)
 
-        # Show actionable alert only for validated breaks
+        # =================================================================
+        # ALERT ENGINE (strict) - Only actionable, validated breaks
+        # =================================================================
         if actionable_breaks:
-            print(f"\n  *** ACTIONABLE: VALIDATED COUPLING BREAK ***")
+            print(f"\n  ╔═══════════════════════════════════════════════════════════╗")
+            print(f"  ║  ALERT ENGINE                                             ║")
+            print(f"  ╚═══════════════════════════════════════════════════════════╝")
+            print(f"\n  *** VALIDATED COUPLING BREAK ***")
             print(f"  Reduced coupling may indicate magnetic stress buildup")
             print(f"  Recommend: Monitor for potential flare activity")
-        elif diagnostic_breaks and any_alert:
-            print(f"\n  DIAGNOSTIC ONLY — anomaly observed but not validated")
-            print(f"  Coupling anomaly detected, but artifact screening failed")
-            print(f"  Status: Not reliable for triggering alerts")
 
-        if actionable_breaks or diagnostic_breaks:
-            print(f"\n  ANOMALY STATUS (Actionable vs Diagnostic)")
-            print(f"  {'-'*40}")
-
-            # Show VALIDATED breaks (actionable)
             for pair in actionable_breaks:
                 bd = breaks.get(pair, {})
                 status = anomaly_statuses.get(pair, {})
                 z_mad = bd.get('z_mad', status.get('z_mad', 0))
-                print(f"  {pair}: ✓ VALIDATED_BREAK [ACTIONABLE]")
+                print(f"\n  {pair}: ✓ VALIDATED_BREAK")
                 print(f"    Criterion: {bd.get('criterion', '?')}")
                 print(f"    Deviation: {z_mad:.1f} MAD below median")
 
@@ -1692,53 +1688,61 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
                 for test in passed:
                     print(f"    ✓ {test}")
 
-            # Show VETOED breaks (diagnostic only)
-            for pair in diagnostic_breaks:
-                bd = breaks.get(pair, {})
-                status = anomaly_statuses.get(pair, {})
-                z_mad = bd.get('z_mad', status.get('z_mad', 0))
-                veto_reasons = status.get('veto_reasons', [bd.get('vetoed', 'unknown')])
+        elif not diagnostic_breaks:
+            # No breaks at all - quiet engine
+            pass
 
-                print(f"  {pair}: ✗ ANOMALY_VETOED [DIAGNOSTIC ONLY]")
-                print(f"    Deviation: {z_mad:.1f} MAD below median")
-                print(f"    Veto reason(s):")
-                for reason in veto_reasons:
-                    print(f"      - {reason}")
-
-                # Show passed tests (if any)
-                passed = status.get('passed_tests', [])
-                if passed:
-                    print(f"    Passed tests:")
-                    for test in passed:
-                        print(f"      ✓ {test}")
-
-                # Show failed tests
-                failed = status.get('failed_tests', [])
-                if failed:
-                    print(f"    Failed tests:")
-                    for test in failed:
-                        print(f"      ✗ {test}")
-
-        # Transfer state detection
+        # =================================================================
+        # PHYSICS DIAGNOSTICS (contextual) - Vetoed breaks, state analysis
+        # =================================================================
         transfer = coupling.get('_transfer_state')
-        if transfer:
-            state_icons = {'TRANSFER_STATE': '', 'RECOVERY_STATE': ''}
-            icon = state_icons.get(transfer['state'], '')
-            degraded = transfer.get('degraded', False)
+        has_diagnostics = diagnostic_breaks or transfer
 
-            if degraded:
-                print(f"\n  {icon} [{transfer['state']}] DEGRADED ({transfer['confidence']} confidence)")
-                print(f"     {transfer['description']}")
-                print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
-                print(f"     ⚠ DIAGNOSTIC ONLY — involved channel unreliable:")
-                for reason in transfer.get('degraded_reasons', []):
-                    print(f"       - {reason}")
-                print(f"     → Observation logged; not used for triggering")
-            else:
-                print(f"\n  {icon} [{transfer['state']}] ({transfer['confidence']} confidence)")
-                print(f"     {transfer['description']}")
-                print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
-                print(f"     → {transfer['interpretation']}")
+        if has_diagnostics:
+            print(f"\n  ┌───────────────────────────────────────────────────────────┐")
+            print(f"  │  PHYSICS DIAGNOSTICS (contextual, not for triggering)     │")
+            print(f"  └───────────────────────────────────────────────────────────┘")
+
+            # Vetoed anomalies (observed but not trigger-grade)
+            if diagnostic_breaks:
+                print(f"\n  Observed Anomalies (vetoed — interpretable, not actionable):")
+                for pair in diagnostic_breaks:
+                    bd = breaks.get(pair, {})
+                    status = anomaly_statuses.get(pair, {})
+                    z_mad = bd.get('z_mad', status.get('z_mad', 0))
+                    veto_reasons = status.get('veto_reasons', [bd.get('vetoed', 'unknown')])
+
+                    print(f"\n  {pair}: {z_mad:.1f}σ anomaly (VETOED)")
+                    print(f"    Veto: {', '.join(veto_reasons)}")
+
+                    # Show what passed
+                    passed = status.get('passed_tests', [])
+                    if passed:
+                        print(f"    Passed: {', '.join(passed)}")
+
+            # Transfer/Recovery state analysis
+            if transfer:
+                state_icons = {'TRANSFER_STATE': '↓↑', 'RECOVERY_STATE': '↑↓'}
+                icon = state_icons.get(transfer['state'], '⟷')
+                degraded = transfer.get('degraded', False)
+
+                print(f"\n  State Analysis:")
+                if degraded:
+                    print(f"  {icon} {transfer['state']} (degraded — {transfer['confidence']} confidence)")
+                    print(f"     {transfer['description']}")
+                    print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
+                    print(f"     Note: Involved channel binning-sensitive; state interpretable but not trigger-grade")
+                    for reason in transfer.get('degraded_reasons', []):
+                        print(f"       - {reason}")
+                else:
+                    print(f"  {icon} {transfer['state']} ({transfer['confidence']} confidence)")
+                    print(f"     {transfer['description']}")
+                    print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
+                    print(f"     Interpretation: {transfer['interpretation']}")
+
+            print(f"\n  ─────────────────────────────────────────────────────────────")
+            print(f"  Note: Diagnostics remain interpretable even when robustness")
+            print(f"        vetoes prevent actionable alerts (\"vetoed ≠ blind\").")
 
     # STEREO-A advance warning (3.9 days ahead)
     if stereo:
