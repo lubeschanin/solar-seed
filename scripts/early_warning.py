@@ -585,6 +585,9 @@ def store_coupling_reading(timestamp: str, coupling: dict):
     db = get_monitoring_db()
 
     for pair, data in coupling.items():
+        # Skip internal metadata fields
+        if pair.startswith('_'):
+            continue
         db.insert_coupling(
             timestamp=timestamp,
             pair=pair,
