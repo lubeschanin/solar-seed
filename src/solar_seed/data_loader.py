@@ -113,9 +113,9 @@ def generate_synthetic_sun(
     # Limb Darkening: I = I_0 * sqrt(1 - (r/R)^2)
     mu = np.sqrt(np.maximum(0, 1 - (r / r_max)**2))
     base = mu * 10000
-    base[r > r_max] = 0  # Außerhalb der Sonne = 0
-    
-    # Aktive Regionen (gemeinsam, aber unterschiedliche Intensität)
+    base[r > r_max] = 0  # Outside the sun = 0
+
+    # Active regions (common, but different intensity)
     for _ in range(n_active_regions):
         rx = rng.integers(shape[0] // 4, 3 * shape[0] // 4)
         ry = rng.integers(shape[1] // 4, 3 * shape[1] // 4)

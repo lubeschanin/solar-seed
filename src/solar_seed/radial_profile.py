@@ -22,7 +22,7 @@ from dataclasses import dataclass
 class RadialProfile:
     """Ergebnis der Radialprofil-Berechnung."""
     radii: NDArray[np.float64]  # Mittelpunkte der Radius-Bins
-    intensities: NDArray[np.float64]  # Mittlere Intensität pro Bin
+    intensities: NDArray[np.float64]  # Mean intensity per bin
     counts: NDArray[np.int64]  # Anzahl Pixel pro Bin
     center: Tuple[float, float]  # Verwendetes Zentrum (y, x)
     n_bins: int
@@ -167,7 +167,7 @@ def compute_residual(
         Residuum-Bild
     """
     if method == "ratio":
-        # Ratio ist besser für multiplikative Effekte (Limb Darkening)
+        # Ratio is better for multiplicative effects (limb darkening)
         return image / (model + epsilon)
     elif method == "difference":
         return image - model

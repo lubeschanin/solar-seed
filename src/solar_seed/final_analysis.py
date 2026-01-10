@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-Finale Analysen für Solar Seed
-==============================
+Final Analyses for Solar Seed
+=============================
 
-Zwei Abschluss-Analysen:
+Two concluding analyses:
 
 1. TIMESCALE COMPARISON (24h vs 27d)
-   - Bleibt die Temperatur-Ordnung über verschiedene Zeitskalen erhalten?
-   - Spearman-Korrelation der Rankings
-   - Stabilität als Validierung
+   - Does the temperature ordering persist across different timescales?
+   - Spearman correlation of rankings
+   - Stability as validation
 
 2. ACTIVITY CONDITIONING
-   - ΔMI_sector vs 94Å-Proxy
-   - Konditionierung auf ruhig (low 94Å) vs aktiv (high 94Å)
-   - Zeigt physikalische Kopplung zwischen Aktivität und Struktur
+   - ΔMI_sector vs 94Å proxy
+   - Conditioning on quiet (low 94Å) vs active (high 94Å)
+   - Shows physical coupling between activity and structure
 """
 
-# Fix für macOS: Fork-Crash vermeiden bei async-Bibliotheken (SunPy/aiohttp)
-# Muss VOR allen anderen Imports stehen!
+# Fix for macOS: Avoid fork crash with async libraries (SunPy/aiohttp)
+# Must be BEFORE all other imports!
 import multiprocessing
 try:
     multiprocessing.set_start_method('spawn', force=False)
 except RuntimeError:
-    pass  # Bereits gesetzt
+    pass  # Already set
 
 import numpy as np
 from numpy.typing import NDArray
@@ -125,50 +125,50 @@ def analyze_pairs_parallel(
 
 @dataclass
 class TimescaleResult:
-    """Ergebnis des Zeitskalen-Vergleichs."""
+    """Result of the timescale comparison."""
     timescale_hours: float
     n_points: int
-    pair_rankings: Dict[Tuple[int, int], int]  # Paar -> Rang
-    pair_values: Dict[Tuple[int, int], float]  # Paar -> ΔMI_sector
+    pair_rankings: Dict[Tuple[int, int], int]  # Pair -> Rank
+    pair_values: Dict[Tuple[int, int], float]  # Pair -> ΔMI_sector
     timestamp: str
 
 
 @dataclass
 class TimescaleComparison:
-    """Vergleich zwischen verschiedenen Zeitskalen."""
+    """Comparison between different timescales."""
     short_scale: TimescaleResult
     long_scale: TimescaleResult
 
-    # Korrelationen
+    # Correlations
     spearman_rho: float
     spearman_p: float
     kendall_tau: float
     kendall_p: float
 
-    # Stabilität
-    top5_overlap: int  # Wie viele der Top-5 Paare sind gleich?
-    rank_changes: Dict[Tuple[int, int], int]  # Rang-Differenzen
+    # Stability
+    top5_overlap: int  # How many of the top-5 pairs match?
+    rank_changes: Dict[Tuple[int, int], int]  # Rank differences
 
 
 @dataclass
 class ActivityBin:
-    """Ergebnis für einen Aktivitäts-Bereich."""
+    """Result for an activity range."""
     bin_label: str  # "quiet", "moderate", "active"
     mean_94A_intensity: float
     n_samples: int
-    pair_values: Dict[Tuple[int, int], float]  # Paar -> mittlerer ΔMI_sector
+    pair_values: Dict[Tuple[int, int], float]  # Pair -> mean ΔMI_sector
     pair_stds: Dict[Tuple[int, int], float]
 
 
 @dataclass
 class ActivityConditioningResult:
-    """Ergebnis der Aktivitäts-Konditionierung."""
+    """Result of activity conditioning."""
     bins: List[ActivityBin]
 
-    # Korrelation zwischen Aktivität und Kopplung
-    activity_vs_coupling: Dict[Tuple[int, int], Tuple[float, float]]  # Paar -> (r, p)
+    # Correlation between activity and coupling
+    activity_vs_coupling: Dict[Tuple[int, int], Tuple[float, float]]  # Pair -> (r, p)
 
-    # Stärkstes Signal
+    # Strongest signal
     most_activity_dependent: List[Tuple[Tuple[int, int], float]]  # Top-5
 
 
@@ -201,9 +201,9 @@ def analyze_timescale(
     n_points = max(1, int(n_hours * 60 / cadence_minutes))
 
     if verbose:
-        print(f"  📊 Analysiere {n_hours}h ({n_points} Zeitpunkte)...")
+        print(f"  📊 Analyzing {n_hours}h ({n_points} timepoints)...")
 
-    # Generiere oder lade Daten
+    # Generate or load data
     if use_real_data:
         if start_time_str is None:
             start_time_str = (datetime.now() - timedelta(hours=n_hours + 24)).isoformat()
@@ -218,7 +218,7 @@ def analyze_timescale(
         from solar_seed.multichannel import generate_multichannel_timeseries
         timeseries = generate_multichannel_timeseries(n_points, seed=seed)
 
-    # Sammle Ergebnisse
+    # Collect results
     pair_values: Dict[Tuple[int, int], List[float]] = {
         pair: [] for pair in combinations(WAVELENGTHS, 2)
     }
@@ -233,7 +233,7 @@ def analyze_timescale(
             )
             pair_values[(wl1, wl2)].append(result.delta_mi_sector)
 
-    # Mittelwerte
+    # Mean values
     mean_values = {pair: float(np.mean(vals)) for pair, vals in pair_values.items()}
 
     # Rankings
@@ -261,7 +261,7 @@ def compare_timescales(
     short_ranks = [short_result.pair_rankings[p] for p in pairs]
     long_ranks = [long_result.pair_rankings[p] for p in pairs]
 
-    # Spearman Korrelation
+    # Spearman correlation
     spearman_rho, spearman_p = stats.spearmanr(short_ranks, long_ranks)
 
     # Kendall Tau
@@ -300,7 +300,7 @@ def run_timescale_comparison(
     verbose: bool = True
 ) -> TimescaleComparison:
     """
-    Führt den Zeitskalen-Vergleich durch.
+    Runs the timescale comparison.
 
     Args:
         short_hours: Kurze Zeitskala (default: 24h)
@@ -330,7 +330,7 @@ def run_timescale_comparison(
     Lang:  {long_hours}h ({long_hours/24:.0f} Tage)
 """)
 
-    # Analysiere beide Zeitskalen
+    # Analyze both timescales
     short_result = analyze_timescale(
         short_hours,
         cadence_minutes=cadence_minutes,
@@ -341,16 +341,16 @@ def run_timescale_comparison(
 
     long_result = analyze_timescale(
         long_hours,
-        cadence_minutes=cadence_minutes * 10,  # Gröbere Kadenz für lange Zeitskala
+        cadence_minutes=cadence_minutes * 10,  # Coarser cadence for long timescale
         seed=seed + 1000,
         use_real_data=use_real_data,
         verbose=verbose
     )
 
-    # Vergleiche
+    # Compare
     comparison = compare_timescales(short_result, long_result)
 
-    # Speichere und drucke
+    # Save and print
     save_timescale_results(comparison, out_path)
 
     if verbose:
@@ -360,16 +360,16 @@ def run_timescale_comparison(
 
 
 def save_timescale_results(result: TimescaleComparison, output_dir: Path) -> None:
-    """Speichert Zeitskalen-Ergebnisse."""
+    """Saves timescale results."""
 
     with open(output_dir / "timescale_comparison.txt", "w") as f:
         f.write("ZEITSKALEN-VERGLEICH\n")
         f.write("=" * 70 + "\n\n")
 
         f.write(f"Kurze Zeitskala: {result.short_scale.timescale_hours}h "
-                f"({result.short_scale.n_points} Zeitpunkte)\n")
-        f.write(f"Lange Zeitskala: {result.long_scale.timescale_hours}h "
-                f"({result.long_scale.n_points} Zeitpunkte)\n\n")
+                f"({result.short_scale.n_points} timepoints)\n")
+        f.write(f"Long timescale: {result.long_scale.timescale_hours}h "
+                f"({result.long_scale.n_points} timepoints)\n\n")
 
         f.write("KORRELATIONEN:\n")
         f.write("-" * 40 + "\n")
@@ -423,7 +423,7 @@ def save_timescale_results(result: TimescaleComparison, output_dir: Path) -> Non
 
 
 def print_timescale_summary(result: TimescaleComparison) -> None:
-    """Druckt Zusammenfassung."""
+    """Prints summary."""
 
     stability = "STABIL" if result.spearman_rho > 0.8 else "VARIABEL" if result.spearman_rho > 0.5 else "INSTABIL"
 
@@ -463,10 +463,10 @@ def run_activity_conditioning(
     verbose: bool = True
 ) -> ActivityConditioningResult:
     """
-    Führt Aktivitäts-Konditionierung durch.
+    Runs activity conditioning.
 
-    Verwendet 94Å als Proxy für Sonnenaktivität und berechnet
-    ΔMI_sector für verschiedene Aktivitätsniveaus.
+    Uses 94Å as proxy for solar activity and calculates
+    ΔMI_sector for different activity levels.
 
     Args:
         n_hours: Zeitraum
@@ -502,7 +502,7 @@ def run_activity_conditioning(
   Zeitraum: {n_hours}h ({n_points} Zeitpunkte)
 """)
 
-    # Generiere oder lade Daten
+    # Generate or load data
     if use_real_data:
         start_time_str = (datetime.now() - timedelta(hours=n_hours + 24)).isoformat()
         timeseries = load_aia_multichannel_timeseries(
@@ -516,16 +516,16 @@ def run_activity_conditioning(
         timeseries = generate_multichannel_timeseries(n_points, seed=seed)
 
     if verbose:
-        print(f"  📊 Analysiere {len(timeseries)} Zeitpunkte...")
+        print(f"  📊 Analyzing {len(timeseries)} timepoints...")
 
-    # Sammle alle Daten
+    # Collect all data
     all_data: List[Dict] = []
 
     for t_idx, (channels, timestamp) in enumerate(timeseries):
-        # 94Å Intensität als Aktivitäts-Proxy
+        # 94Å intensity as activity proxy
         intensity_94 = float(np.mean(channels[94][channels[94] > 0]))
 
-        # Analysiere alle Paare
+        # Analyze all pairs
         pair_results = {}
         for wl1, wl2 in combinations(WAVELENGTHS, 2):
             result = analyze_pair(
@@ -542,7 +542,7 @@ def run_activity_conditioning(
             "pair_results": pair_results
         })
 
-    # Teile in Aktivitäts-Bins
+    # Divide into activity bins
     intensities = np.array([d["intensity_94"] for d in all_data])
     percentiles = np.percentile(intensities, [100/n_bins * i for i in range(1, n_bins)])
 
@@ -583,7 +583,7 @@ def run_activity_conditioning(
     if verbose:
         print(f"  📈 Berechne Korrelationen...")
 
-    # Korrelation zwischen Aktivität und Kopplung pro Paar
+    # Correlation between activity and coupling per pair
     activity_vs_coupling: Dict[Tuple[int, int], Tuple[float, float]] = {}
 
     for pair in combinations(WAVELENGTHS, 2):
@@ -593,7 +593,7 @@ def run_activity_conditioning(
         r, p = stats.pearsonr(activities, couplings)
         activity_vs_coupling[pair] = (r, p)
 
-    # Top-5 aktivitätsabhängige Paare
+    # Top-5 activity-dependent pairs
     sorted_by_correlation = sorted(
         activity_vs_coupling.items(),
         key=lambda x: abs(x[1][0]),
@@ -607,7 +607,7 @@ def run_activity_conditioning(
         most_activity_dependent=most_activity_dependent
     )
 
-    # Speichere und drucke
+    # Save and print
     save_activity_results(result, out_path)
 
     if verbose:
@@ -617,7 +617,7 @@ def run_activity_conditioning(
 
 
 def save_activity_results(result: ActivityConditioningResult, output_dir: Path) -> None:
-    """Speichert Aktivitäts-Ergebnisse."""
+    """Saves activity results."""
 
     with open(output_dir / "activity_conditioning.txt", "w") as f:
         f.write("AKTIVITÄTS-KONDITIONIERUNG\n")
@@ -680,7 +680,7 @@ def save_activity_results(result: ActivityConditioningResult, output_dir: Path) 
 
 
 def print_activity_summary(result: ActivityConditioningResult) -> None:
-    """Druckt Zusammenfassung."""
+    """Prints summary."""
 
     print(f"""
   ════════════════════════════════════════════════════════════════════════
@@ -701,7 +701,7 @@ def print_activity_summary(result: ActivityConditioningResult) -> None:
         direction = "+" if r > 0 else "-"
         print(f"    {i}. {pair[0]}-{pair[1]} Å: r = {direction}{abs(r):.3f}")
 
-    # Vergleiche quiet vs active für Top-Paar
+    # Compare quiet vs active for top pair
     if len(result.bins) >= 2:
         top_pair = result.most_activity_dependent[0][0]
         quiet_val = result.bins[0].pair_values.get(top_pair, 0)
@@ -732,20 +732,20 @@ def print_activity_summary(result: ActivityConditioningResult) -> None:
 
 @dataclass
 class RotationAnalysisResult:
-    """Ergebnis der 27-Tage-Rotationsanalyse."""
+    """Result of the 27-day rotation analysis."""
     hours: float
     n_points: int
     cadence_minutes: int
     start_time: str
     end_time: str
 
-    # Kopplungswerte über Zeit
+    # Coupling values over time
     pair_timeseries: Dict[Tuple[int, int], List[float]]
     pair_means: Dict[Tuple[int, int], float]
     pair_stds: Dict[Tuple[int, int], float]
 
-    # Zeitliche Stabilität
-    temporal_correlations: Dict[Tuple[int, int], float]  # Autokorrelation
+    # Temporal stability
+    temporal_correlations: Dict[Tuple[int, int], float]  # Autocorrelation
 
     # Rankings
     pair_rankings: Dict[Tuple[int, int], int]
@@ -759,14 +759,14 @@ def _compute_interim_result(
     start_time: str,
     end_time: str
 ) -> "RotationAnalysisResult":
-    """Berechnet Zwischenergebnis aus aktuellen Daten."""
-    # Mittelwerte und Standardabweichungen
+    """Computes interim result from current data."""
+    # Means and standard deviations
     pair_means = {pair: float(np.mean(vals)) if vals else 0.0
                   for pair, vals in pair_timeseries.items()}
     pair_stds = {pair: float(np.std(vals)) if vals else 0.0
                  for pair, vals in pair_timeseries.items()}
 
-    # Autokorrelation
+    # Autocorrelation
     temporal_correlations = {}
     for pair, values in pair_timeseries.items():
         if len(values) > 2:
@@ -795,11 +795,11 @@ def _compute_interim_result(
 
 
 def load_checkpoint(checkpoint_path: Path) -> Tuple[Dict, List[str], int]:
-    """Lädt Checkpoint falls vorhanden."""
+    """Loads checkpoint if present."""
     if checkpoint_path.exists():
         with open(checkpoint_path) as f:
             data = json.load(f)
-        # Konvertiere String-Keys zurück zu Tupeln
+        # Convert string keys back to tuples
         pair_timeseries = {}
         for key, values in data.get("pair_timeseries", {}).items():
             wl1, wl2 = map(int, key.split("-"))
@@ -815,14 +815,14 @@ def save_checkpoint(
     last_index: int,
     auto_push: bool = False
 ) -> None:
-    """Speichert Checkpoint für Resume.
+    """Saves checkpoint for resume.
 
     Args:
-        checkpoint_path: Pfad zur Checkpoint-Datei
-        pair_timeseries: Zeitreihen-Daten
-        timestamps: Liste der Zeitstempel
-        last_index: Letzter verarbeiteter Index
-        auto_push: Automatisch git commit & push nach Speicherung
+        checkpoint_path: Path to checkpoint file
+        pair_timeseries: Timeseries data
+        timestamps: List of timestamps
+        last_index: Last processed index
+        auto_push: Automatically git commit & push after saving
     """
     data = {
         "pair_timeseries": {f"{p[0]}-{p[1]}": v for p, v in pair_timeseries.items()},
@@ -837,11 +837,11 @@ def save_checkpoint(
 
 
 def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None:
-    """Git commit & push des Checkpoints für Cross-System Resume."""
+    """Git commit & push of checkpoint for cross-system resume."""
     import subprocess
 
     try:
-        # Git root finden - vom Checkpoint-Verzeichnis aus
+        # Find git root - from checkpoint directory
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             cwd=checkpoint_path.parent,
@@ -854,7 +854,7 @@ def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None
 
         project_root = Path(result.stdout.strip())
 
-        # Alle Rotation-Dateien hinzufügen
+        # Add all rotation files
         rotation_dir = checkpoint_path.resolve().parent
         files_to_add = [
             rotation_dir / "checkpoint.json",
@@ -883,7 +883,7 @@ def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None
 
         if commit_result.returncode != 0:
             if "nothing to commit" in commit_result.stdout or "nothing to commit" in commit_result.stderr:
-                return  # Keine Änderungen, kein Push nötig
+                return  # No changes, no push needed
             print(f"    ⚠️  Auto-push: Commit failed - {commit_result.stderr.strip()}")
             return
 
@@ -907,19 +907,19 @@ def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None
 
 def run_rotation_analysis(
     hours: float = 648.0,  # 27 Tage
-    cadence_minutes: int = 60,  # Stündliche Kadenz
+    cadence_minutes: int = 60,  # Hourly cadence
     seed: int = 42,
     output_dir: str = "results/rotation",
     use_real_data: bool = True,
     start_time_str: Optional[str] = None,
     verbose: bool = True,
-    resume: bool = True,  # Automatisch fortsetzen falls Checkpoint existiert
-    auto_push: bool = False  # Git push nach jedem Checkpoint
+    resume: bool = True,  # Automatically resume if checkpoint exists
+    auto_push: bool = False  # Git push after each checkpoint
 ) -> RotationAnalysisResult:
     """
-    Führt 27-Tage-Rotationsanalyse mit echten AIA-Daten durch.
+    Runs 27-day rotation analysis with real AIA data.
 
-    Analysiert die Kopplungsstabilität über eine vollständige Sonnenrotation.
+    Analyzes coupling stability over a complete solar rotation.
 
     Args:
         hours: Zeitraum (default: 648h = 27 Tage)
@@ -974,10 +974,10 @@ def run_rotation_analysis(
         print(f"  Period:       {start_time_str[:10]} to {end_time.isoformat()[:10]}")
         print()
 
-    # Checkpoint-Pfad
+    # Checkpoint path
     checkpoint_path = out_path / "checkpoint.json"
 
-    # Prüfe ob Resume möglich
+    # Check if resume is possible
     pair_timeseries: Dict[Tuple[int, int], List[float]] = {
         pair: [] for pair in combinations(WAVELENGTHS, 2)
     }
@@ -1030,7 +1030,7 @@ def run_rotation_analysis(
                 if verbose:
                     print("✓")
 
-                # Bei jedem Zeitpunkt: Ergebnisse + Checkpoint speichern
+                # Save results + checkpoint at each timepoint
                 interim_result = _compute_interim_result(
                     pair_timeseries, timestamps, hours, cadence_minutes,
                     start_time_str, end_time.isoformat()
@@ -1038,7 +1038,7 @@ def run_rotation_analysis(
                 save_rotation_results(interim_result, out_path, timestamps)
                 save_checkpoint(checkpoint_path, pair_timeseries, timestamps, i + 1, auto_push)
 
-                # Garbage Collection alle 10 Zeitpunkte
+                # Garbage collection every 10 timepoints
                 if (i + 1) % 10 == 0:
                     gc.collect()
             else:
@@ -1091,11 +1091,11 @@ def run_rotation_analysis(
     if verbose:
         print("\n  📈 Computing statistics...")
 
-    # Berechne Mittelwerte, Standardabweichungen
+    # Calculate means, standard deviations
     pair_means = {pair: float(np.mean(vals)) for pair, vals in pair_timeseries.items()}
     pair_stds = {pair: float(np.std(vals)) for pair, vals in pair_timeseries.items()}
 
-    # Zeitliche Autokorrelation (lag-1)
+    # Temporal autocorrelation (lag-1)
     temporal_correlations = {}
     for pair, values in pair_timeseries.items():
         if len(values) > 2:
@@ -1105,7 +1105,7 @@ def run_rotation_analysis(
         else:
             temporal_correlations[pair] = 0.0
 
-    # Rankings nach mittlerem ΔMI_sector
+    # Rankings by mean ΔMI_sector
     sorted_pairs = sorted(pair_means.items(), key=lambda x: -x[1])
     pair_rankings = {pair: rank + 1 for rank, (pair, _) in enumerate(sorted_pairs)}
 
@@ -1139,7 +1139,7 @@ def save_rotation_results(
     output_dir: Path,
     timestamps: List[str]
 ) -> None:
-    """Speichert Rotations-Ergebnisse."""
+    """Saves rotation results."""
 
     # 1. Main result as text
     with open(output_dir / "rotation_analysis.txt", "w") as f:
@@ -1206,7 +1206,7 @@ def save_rotation_results(
                     row.append("")
             writer.writerow(row)
 
-    # 3. JSON für weitere Verarbeitung
+    # 3. JSON for further processing
     data = {
         "metadata": {
             "hours": result.hours,
@@ -1228,12 +1228,12 @@ def save_rotation_results(
 
 
 def print_rotation_summary(result: RotationAnalysisResult) -> None:
-    """Druckt Zusammenfassung der Rotationsanalyse."""
+    """Prints rotation analysis summary."""
 
-    # Top-5 Paare
+    # Top-5 pairs
     sorted_pairs = sorted(result.pair_means.items(), key=lambda x: -x[1])
 
-    # Mittlere Autokorrelation
+    # Mean autocorrelation
     mean_autocorr = np.mean(list(result.temporal_correlations.values()))
 
     print(f"""
@@ -1279,18 +1279,18 @@ def print_rotation_summary(result: RotationAnalysisResult) -> None:
 
 @dataclass
 class SegmentResult:
-    """Ergebnis eines einzelnen Segments (z.B. ein Tag)."""
+    """Result of a single segment (e.g., one day)."""
     date: str  # YYYY-MM-DD
     start_time: str
     end_time: str
     n_points: int
     cadence_minutes: int
 
-    # Rohdaten für dieses Segment
+    # Raw data for this segment
     timestamps: List[str]
     pair_values: Dict[str, List[float]]  # "304-171" -> [values]
 
-    # Segment-Statistiken
+    # Segment statistics
     pair_means: Dict[str, float]
     pair_stds: Dict[str, float]
 
@@ -1322,28 +1322,28 @@ def run_segment_analysis(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # Segment-Datei prüfen (bereits analysiert?)
+    # Check segment file (already analyzed?)
     segment_file = out_path / f"{date}.json"
     if segment_file.exists():
         if verbose:
-            print(f"  ✓ Segment {date} bereits vorhanden, überspringe")
+            print(f"  ✓ Segment {date} already exists, skipping")
         return load_segment(segment_file)
 
-    # Zeitbereich für diesen Tag
+    # Time range for this day
     start_time = datetime.fromisoformat(f"{date}T00:00:00")
     end_time = start_time + timedelta(days=1)
-    n_points = int(24 * 60 / cadence_minutes)  # 120 bei 12-min Kadenz
+    n_points = int(24 * 60 / cadence_minutes)  # 120 at 12-min cadence
 
     if verbose:
-        print(f"\n  📅 Segment {date}: {n_points} Zeitpunkte")
+        print(f"\n  📅 Segment {date}: {n_points} timepoints")
 
-    # Initialisiere Datenstrukturen
+    # Initialize data structures
     pair_keys = [f"{a}-{b}" for a, b in combinations(WAVELENGTHS, 2)]
     pair_values: Dict[str, List[float]] = {key: [] for key in pair_keys}
     timestamps: List[str] = []
     failed_count = 0
 
-    # Analysiere jeden Zeitpunkt
+    # Analyze each timepoint
     t = start_time
     for i in range(n_points):
         timestamp = t.isoformat()
@@ -1358,7 +1358,7 @@ def run_segment_analysis(
         )
 
         if channels is not None:
-            # Analysiere alle Paare
+            # Analyze all pairs
             pair_results = analyze_pairs_parallel(channels, bins=64, seed=seed + i)
 
             for pair, delta_mi in pair_results.items():
@@ -1386,19 +1386,19 @@ def run_segment_analysis(
 
         t += timedelta(minutes=cadence_minutes)
 
-    # Keine Daten?
+    # No data?
     if not timestamps:
         if verbose:
-            print(f"    ✗ Keine Daten für {date}")
+            print(f"    ✗ No data for {date}")
         return None
 
-    # Berechne Statistiken
+    # Calculate statistics
     pair_means = {key: float(np.mean(vals)) if vals else 0.0
                   for key, vals in pair_values.items()}
     pair_stds = {key: float(np.std(vals)) if vals else 0.0
                  for key, vals in pair_values.items()}
 
-    # Erstelle Ergebnis
+    # Create result
     result = SegmentResult(
         date=date,
         start_time=start_time.isoformat(),
@@ -1411,7 +1411,7 @@ def run_segment_analysis(
         pair_stds=pair_stds
     )
 
-    # Speichern
+    # Save
     save_segment(result, segment_file)
 
     if verbose:
@@ -1421,7 +1421,7 @@ def run_segment_analysis(
 
 
 def save_segment(result: SegmentResult, path: Path) -> None:
-    """Speichert ein Segment als JSON."""
+    """Saves a segment as JSON."""
     data = {
         "date": result.date,
         "start_time": result.start_time,
@@ -1438,7 +1438,7 @@ def save_segment(result: SegmentResult, path: Path) -> None:
 
 
 def load_segment(path: Path) -> SegmentResult:
-    """Lädt ein Segment aus JSON."""
+    """Loads a segment from JSON."""
     with open(path) as f:
         data = json.load(f)
     return SegmentResult(**data)
@@ -1450,7 +1450,7 @@ def aggregate_segments(
     verbose: bool = True
 ) -> Optional[RotationAnalysisResult]:
     """
-    Aggregiert alle vorhandenen Segmente zu einem Gesamtergebnis.
+    Aggregates all available segments into an overall result.
 
     Args:
         segment_dir: Verzeichnis mit Segment-Dateien
@@ -1464,7 +1464,7 @@ def aggregate_segments(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # Finde alle Segment-Dateien
+    # Find all segment files
     segment_files = sorted(seg_path.glob("*.json"))
 
     if not segment_files:
@@ -1475,7 +1475,7 @@ def aggregate_segments(
     if verbose:
         print(f"\n  📊 Aggregiere {len(segment_files)} Segmente...")
 
-    # Lade alle Segmente
+    # Load all segments
     segments: List[SegmentResult] = []
     for sf in segment_files:
         seg = load_segment(sf)
@@ -1483,7 +1483,7 @@ def aggregate_segments(
         if verbose:
             print(f"    ✓ {seg.date}: {seg.n_points} Punkte")
 
-    # Kombiniere Daten
+    # Combine data
     all_timestamps: List[str] = []
     pair_timeseries: Dict[Tuple[int, int], List[float]] = {
         pair: [] for pair in combinations(WAVELENGTHS, 2)
@@ -1495,17 +1495,17 @@ def aggregate_segments(
             a, b = map(int, key.split("-"))
             pair_timeseries[(a, b)].extend(values)
 
-    # Berechne Gesamtstatistiken
+    # Calculate total statistics
     total_hours = len(segments) * 24
     cadence = segments[0].cadence_minutes if segments else 12
 
-    # Erstelle RotationAnalysisResult
+    # Create RotationAnalysisResult
     pair_means = {pair: float(np.mean(vals)) if vals else 0.0
                   for pair, vals in pair_timeseries.items()}
     pair_stds = {pair: float(np.std(vals)) if vals else 0.0
                  for pair, vals in pair_timeseries.items()}
 
-    # Autokorrelation
+    # Autocorrelation
     temporal_correlations = {}
     for pair, vals in pair_timeseries.items():
         if len(vals) > 1:
@@ -1535,7 +1535,7 @@ def aggregate_segments(
         pair_rankings=pair_rankings
     )
 
-    # Speichern
+    # Save
     save_rotation_results(result, out_path, all_timestamps)
 
     if verbose:
@@ -1570,7 +1570,7 @@ def convert_checkpoint_to_segments(
             print(f"  ✗ Checkpoint nicht gefunden: {checkpoint_path}")
         return 0
 
-    # Lade Checkpoint
+    # Load checkpoint
     with open(ckpt_path) as f:
         data = json.load(f)
 
@@ -1585,7 +1585,7 @@ def convert_checkpoint_to_segments(
     if verbose:
         print(f"\n  📦 Konvertiere {len(timestamps)} Zeitpunkte zu Segmenten...")
 
-    # Gruppiere nach Datum
+    # Group by date
     from collections import defaultdict
     daily_indices: Dict[str, List[int]] = defaultdict(list)
 
@@ -1593,7 +1593,7 @@ def convert_checkpoint_to_segments(
         date = ts[:10]  # YYYY-MM-DD
         daily_indices[date].append(i)
 
-    # Erstelle Segmente
+    # Create segments
     segments_created = 0
 
     for date in sorted(daily_indices.keys()):
@@ -1605,20 +1605,20 @@ def convert_checkpoint_to_segments(
                 print(f"    ⏭️  {date}: bereits vorhanden")
             continue
 
-        # Extrahiere Daten für diesen Tag
+        # Extract data for this day
         day_timestamps = [timestamps[i] for i in indices]
         day_pair_values: Dict[str, List[float]] = {}
 
         for pair_key, values in pair_data.items():
             day_pair_values[pair_key] = [values[i] for i in indices if i < len(values)]
 
-        # Berechne Statistiken
+        # Calculate statistics
         pair_means = {key: float(np.mean(vals)) if vals else 0.0
                       for key, vals in day_pair_values.items()}
         pair_stds = {key: float(np.std(vals)) if vals else 0.0
                      for key, vals in day_pair_values.items()}
 
-        # Bestimme Kadenz aus Timestamps
+        # Determine cadence from timestamps
         if len(day_timestamps) >= 2:
             t1 = datetime.fromisoformat(day_timestamps[0].replace('Z', '+00:00'))
             t2 = datetime.fromisoformat(day_timestamps[1].replace('Z', '+00:00'))
@@ -1626,7 +1626,7 @@ def convert_checkpoint_to_segments(
         else:
             cadence = 12
 
-        # Erstelle Segment
+        # Create segment
         result = SegmentResult(
             date=date,
             start_time=f"{date}T00:00:00",
@@ -1660,10 +1660,10 @@ def run_segmented_rotation(
     auto_push: bool = False
 ) -> Optional[RotationAnalysisResult]:
     """
-    Führt segment-basierte Rotationsanalyse durch.
+    Runs segment-based rotation analysis.
 
-    Analysiert jeden Tag einzeln und aggregiert am Ende.
-    Bereits analysierte Tage werden übersprungen.
+    Analyzes each day individually and aggregates at the end.
+    Already analyzed days are skipped.
 
     Args:
         start_date: Startdatum (YYYY-MM-DD)
@@ -1694,7 +1694,7 @@ def run_segmented_rotation(
   Segmente:    {segment_dir}
 """)
 
-    # Analysiere jeden Tag
+    # Analyze each day
     current = start
     completed = 0
 
@@ -1764,7 +1764,7 @@ def _git_push_segment(segment_dir: str, date: str, current: int, total: int) -> 
 
         # Push
         subprocess.run(["git", "push"], cwd=project_root, capture_output=True)
-        print(f"    📤 Segment {date} gepusht")
+        print(f"    📤 Segment {date} pushed")
 
     except Exception:
         pass
@@ -1780,7 +1780,7 @@ def run_final_analysis(
     verbose: bool = True
 ) -> Tuple[TimescaleComparison, ActivityConditioningResult]:
     """
-    Führt beide finalen Analysen durch.
+    Runs both final analyses.
 
     Args:
         output_dir: Output-Verzeichnis
@@ -1819,7 +1819,7 @@ def run_final_analysis(
         verbose=verbose
     )
 
-    # Analyse 2: Aktivität
+    # Analysis 2: Activity
     activity_result = run_activity_conditioning(
         n_hours=48.0,
         output_dir=output_dir,
@@ -1827,7 +1827,7 @@ def run_final_analysis(
         verbose=verbose
     )
 
-    # Kombinierte Zusammenfassung
+    # Combined summary
     if verbose:
         print_final_summary(timescale_result, activity_result, out_path)
 
@@ -1839,7 +1839,7 @@ def print_final_summary(
     activity: ActivityConditioningResult,
     output_dir: Path
 ) -> None:
-    """Druckt kombinierte Zusammenfassung."""
+    """Prints combined summary."""
 
     summary = f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
@@ -1875,7 +1875,7 @@ def print_final_summary(
 """
     print(summary)
 
-    # Auch als Datei speichern
+    # Also save as file
     with open(output_dir / "final_summary.txt", "w") as f:
         f.write(summary)
 
@@ -1885,7 +1885,7 @@ def print_final_summary(
 # ============================================================================
 
 def main():
-    """Hauptfunktion."""
+    """Main function."""
     import argparse
 
     parser = argparse.ArgumentParser(

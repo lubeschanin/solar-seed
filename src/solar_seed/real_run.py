@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Real-Data Run für Solar Seed
+Real-Data Run for Solar Seed
 ============================
 
-Reproduzierbarer, zitierfähiger Analysis-Run auf echten AIA-Daten.
+Reproducible, citable analysis run on real AIA data.
 
-Ausführung:
+Execution:
     python -m solar_seed.real_run --hours 6
     python -m solar_seed.real_run --start "2024-01-15T00:00:00" --hours 6
 
 Output:
     results/real_run/
-    ├── timeseries.csv          # MI-Zeitreihe
-    ├── controls_summary.json   # Kontroll-Tests
-    ├── spatial_maps.txt        # Räumliche Analyse
-    └── run_metadata.json       # Konfiguration & Reproduzierbarkeit
+    ├── timeseries.csv          # MI timeseries
+    ├── controls_summary.json   # Control tests
+    ├── spatial_maps.txt        # Spatial analysis
+    └── run_metadata.json       # Configuration & reproducibility
 """
 
 import argparse
@@ -48,7 +48,7 @@ from solar_seed.spatial_analysis import (
 
 @dataclass
 class RunConfig:
-    """Konfiguration für den Real-Run."""
+    """Configuration for the real run."""
     wavelength_1: int = 193
     wavelength_2: int = 211
     start_time: Optional[str] = None  # ISO format, None = now - hours
@@ -62,7 +62,7 @@ class RunConfig:
 
 @dataclass
 class TimePointResult:
-    """Ergebnis für einen Zeitpunkt."""
+    """Result for a timepoint."""
     timestamp: str
 
     # Original MI
@@ -73,12 +73,12 @@ class TimePointResult:
     mi_residual: float
     nmi_residual: float
 
-    # Neue Kennzahlen
+    # New metrics
     mi_ratio: float  # mi_residual / mi_original
     delta_mi_ring: float  # mi_residual - mi_ring_shuffled
     delta_mi_sector: float  # mi_residual - mi_sector_shuffled
 
-    # Nullmodell
+    # Null model
     mi_null_mean: float
     mi_null_std: float
     z_score: float
@@ -89,13 +89,13 @@ class TimePointResult:
 
 @dataclass
 class RunResult:
-    """Gesamtergebnis des Runs."""
+    """Overall result of the run."""
     config: RunConfig
     timeseries: List[TimePointResult]
     controls: Optional[dict]
     spatial: Optional[dict]
 
-    # Aggregierte Statistiken
+    # Aggregated statistics
     mean_mi_ratio: float = 0.0
     std_mi_ratio: float = 0.0
     mean_delta_mi_ring: float = 0.0
@@ -189,7 +189,7 @@ def generate_synthetic_timeseries(
     for i in range(n_points):
         timestamp = (base_time + timedelta(minutes=12 * i)).isoformat()
 
-        # Variiere extra_correlation leicht über Zeit
+        # Vary extra_correlation slightly over time
         corr = extra_correlation + 0.1 * np.sin(2 * np.pi * i / n_points)
 
         data_1, data_2 = generate_synthetic_sun(
@@ -238,7 +238,7 @@ def analyze_timepoint(
     # Ratio
     mi_ratio = mi_residual / mi_original if mi_original > 0 else 0.0
 
-    # Ring und Sector Shuffles für Delta-Metriken
+    # Ring and sector shuffles for delta metrics
     sector_result = sector_ring_shuffle_test(
         image_1, image_2,
         n_rings=20,
@@ -250,10 +250,10 @@ def analyze_timepoint(
     delta_mi_ring = mi_residual - sector_result.mi_ring_shuffled
     delta_mi_sector = mi_residual - sector_result.mi_sector_shuffled
 
-    # Nullmodell für Residual
+    # Null model for residual
     mi_null_mean, mi_null_std, _ = compute_null_distribution(
         res_1, res_2,
-        n_shuffles=min(50, config.n_shuffles),  # Schneller für Zeitreihe
+        n_shuffles=min(50, config.n_shuffles),  # Faster for timeseries
         bins=config.bins,
         seed=config.seed
     )
@@ -555,7 +555,7 @@ def run_real_analysis(
         if verbose:
             print("  📡 Lade echte AIA-Daten...")
         # TODO: Implementiere echte Datenladung
-        # Für jetzt: Fallback auf synthetisch
+        # For now: Fallback to synthetic
         print("  ⚠️  Echte Daten noch nicht implementiert, verwende synthetische")
         data_pairs = generate_synthetic_timeseries(
             n_points=n_points,
@@ -589,7 +589,7 @@ def run_real_analysis(
         verbose=False
     )
 
-    # Räumliche Analyse auf erstem Zeitpunkt
+    # Spatial analysis on first timepoint
     if verbose:
         print("  🗺️  Erstelle räumliche Analyse...")
 

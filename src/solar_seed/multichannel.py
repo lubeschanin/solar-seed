@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-Multi-Channel Analyse für Solar Seed
+Multi-Channel Analysis for Solar Seed
 =====================================
 
-Berechnet die Kopplungs-Matrix zwischen allen AIA EUV-Kanälen.
+Calculates the coupling matrix between all AIA EUV channels.
 
-7 Kanäle × 6 / 2 = 21 einzigartige Paare
+7 channels × 6 / 2 = 21 unique pairs
 
-Kanäle (nach Temperatur sortiert):
-    304 Å  →  0.05 MK  →  Chromosphäre
-    171 Å  →  0.6 MK   →  Ruhige Korona
-    193 Å  →  1.2 MK   →  Korona
-    211 Å  →  2.0 MK   →  Aktive Regionen
-    335 Å  →  2.5 MK   →  Aktive Regionen (heißer)
+Channels (sorted by temperature):
+    304 Å  →  0.05 MK  →  Chromosphere
+    171 Å  →  0.6 MK   →  Quiet Corona
+    193 Å  →  1.2 MK   →  Corona
+    211 Å  →  2.0 MK   →  Active Regions
+    335 Å  →  2.5 MK   →  Active Regions (hotter)
     94 Å   →  6.3 MK   →  Flares
-    131 Å  →  10 MK    →  Flares (sehr heiß)
+    131 Å  →  10 MK    →  Flares (very hot)
 """
 
-# Fix für macOS: Fork-Crash vermeiden bei async-Bibliotheken (SunPy/aiohttp)
-# Muss VOR allen anderen Imports stehen!
+# Fix for macOS: Avoid fork crash with async libraries (SunPy/aiohttp)
+# Must be BEFORE all other imports!
 import multiprocessing
 try:
     multiprocessing.set_start_method('spawn', force=False)
 except RuntimeError:
-    pass  # Bereits gesetzt
+    pass  # Already set
 
 import numpy as np
 from numpy.typing import NDArray
@@ -89,22 +89,22 @@ AIA_CRITICAL_FLAGS = {
 
 @dataclass
 class AIAChannel:
-    """Definition eines AIA-Kanals."""
-    wavelength: int  # Angström
+    """Definition of an AIA channel."""
+    wavelength: int  # Angstrom
     temperature: float  # MK (Megakelvin)
     description: str
-    color: str  # Für Visualisierung
+    color: str  # For visualization
 
 
-# Kanäle nach Temperatur sortiert
+# Channels sorted by temperature
 AIA_CHANNELS = [
-    AIAChannel(304, 0.05, "Chromosphäre", "red"),
-    AIAChannel(171, 0.6, "Ruhige Korona", "yellow"),
-    AIAChannel(193, 1.2, "Korona", "orange"),
-    AIAChannel(211, 2.0, "Aktive Regionen", "purple"),
-    AIAChannel(335, 2.5, "Aktive Regionen (heiß)", "blue"),
+    AIAChannel(304, 0.05, "Chromosphere", "red"),
+    AIAChannel(171, 0.6, "Quiet Corona", "yellow"),
+    AIAChannel(193, 1.2, "Corona", "orange"),
+    AIAChannel(211, 2.0, "Active Regions", "purple"),
+    AIAChannel(335, 2.5, "Active Regions (hot)", "blue"),
     AIAChannel(94, 6.3, "Flares", "green"),
-    AIAChannel(131, 10.0, "Flares (sehr heiß)", "cyan"),
+    AIAChannel(131, 10.0, "Flares (very hot)", "cyan"),
 ]
 
 WAVELENGTHS = [ch.wavelength for ch in AIA_CHANNELS]
@@ -117,7 +117,7 @@ WAVELENGTH_TO_TEMP = {ch.wavelength: ch.temperature for ch in AIA_CHANNELS}
 
 @dataclass
 class PairResult:
-    """Ergebnis für ein Wellenlängen-Paar."""
+    """Result for a wavelength pair."""
     wavelength_1: int
     wavelength_2: int
     mi_original: float
@@ -131,13 +131,13 @@ class PairResult:
 
 @dataclass
 class CouplingMatrix:
-    """Kopplungs-Matrix zwischen allen Kanälen."""
+    """Coupling matrix between all channels."""
     wavelengths: List[int]
     matrix: NDArray[np.float64]  # 7x7 symmetrische Matrix
     metric: str  # "delta_mi_sector", "mi_ratio", etc.
 
     def get_value(self, wl1: int, wl2: int) -> float:
-        """Gibt Kopplungswert für ein Paar zurück."""
+        """Returns coupling value for a pair."""
         i = self.wavelengths.index(wl1)
         j = self.wavelengths.index(wl2)
         return self.matrix[i, j]
@@ -218,11 +218,11 @@ def generate_multichannel_sun(
     r = np.sqrt((x - center[1])**2 + (y - center[0])**2)
     r_max = min(center) * 0.9
 
-    # Basis: Limb Darkening (gemeinsam für alle Kanäle)
+    # Base: Limb darkening (common for all channels)
     mu = np.sqrt(np.maximum(0, 1 - (r / r_max)**2))
     disk_mask = r <= r_max
 
-    # Aktive Regionen (Position und Größe sind gemeinsam, Intensität variiert)
+    # Active regions (position and size are common, intensity varies)
     active_regions = []
     for _ in range(n_active_regions):
         rx = rng.integers(shape[0] // 4, 3 * shape[0] // 4)
@@ -231,11 +231,11 @@ def generate_multichannel_sun(
         intensity = rng.uniform(0.5, 1.5)
         active_regions.append((rx, ry, size, intensity))
 
-    # Gemeinsame Plasma-Fluktuationen (physikalische Kopplung)
-    # Diese schaffen Korrelation zwischen benachbarten Temperatur-Schichten
+    # Common plasma fluctuations (physical coupling)
+    # These create correlation between adjacent temperature layers
     plasma_base = rng.normal(0, 1, shape)
     plasma_smooth = np.zeros_like(plasma_base)
-    # Einfache Glättung
+    # Simple smoothing
     for di in range(-2, 3):
         for dj in range(-2, 3):
             plasma_smooth += np.roll(np.roll(plasma_base, di, 0), dj, 1) / 25
@@ -246,43 +246,43 @@ def generate_multichannel_sun(
         wl = channel.wavelength
         temp = channel.temperature
 
-        # Basis-Intensität skaliert mit Temperatur (hotter = different response)
+        # Base intensity scales with temperature (hotter = different response)
         base_intensity = 10000 * (1.0 + 0.1 * np.log10(temp + 0.1))
 
-        # Limb Darkening ist temperaturabhängig
-        # Heißere Kanäle zeigen weniger Limb Darkening
+        # Limb darkening is temperature-dependent
+        # Hotter channels show less limb darkening
         limb_factor = 0.5 + 0.5 / (1 + temp / 5)
         base = mu ** limb_factor * base_intensity
 
-        # Aktive Regionen Response
-        # 304 Å (Chromosphäre): schwache Response auf aktive Regionen
-        # 94/131 Å (Flares): starke Response nur bei Flares
+        # Active regions response
+        # 304 Å (Chromosphere): weak response to active regions
+        # 94/131 Å (Flares): strong response only during flares
         for rx, ry, size, intensity in active_regions:
             rr = np.sqrt((x - ry)**2 + (y - rx)**2)
 
-            # Temperatur-Response-Funktion
-            if temp < 0.1:  # 304 Å - Chromosphäre
+            # Temperature response function
+            if temp < 0.1:  # 304 Å - Chromosphere
                 response = 0.3 * intensity
-            elif temp < 1.0:  # 171 Å - kühle Korona
+            elif temp < 1.0:  # 171 Å - cool corona
                 response = 0.8 * intensity
-            elif temp < 3.0:  # 193, 211, 335 Å - Korona/aktive Regionen
+            elif temp < 3.0:  # 193, 211, 335 Å - Corona/active regions
                 response = 1.2 * intensity
-            else:  # 94, 131 Å - Flare-Temperaturen
-                # Nur bei "heißen" Regionen sichtbar
+            else:  # 94, 131 Å - Flare temperatures
+                # Only visible in "hot" regions
                 response = 0.5 * intensity if intensity > 1.0 else 0.1
 
             region = np.exp(-rr**2 / size) * response * 3000
             base += region
 
-        # Temperatur-spezifisches Rauschen
+        # Temperature-specific noise
         noise_level = 200 + 50 * np.log10(temp + 0.1)
         noise = rng.normal(0, noise_level, shape)
 
-        # Plasma-Kopplung zwischen benachbarten Temperaturen
-        # Stärker für ähnliche Temperaturen
+        # Plasma coupling between adjacent temperatures
+        # Stronger for similar temperatures
         plasma_contribution = plasma_smooth * 500
 
-        # Finale Zusammensetzung
+        # Final composition
         image = base + noise + plasma_contribution
         image[~disk_mask] = 0
         image = np.maximum(0, image)
@@ -316,7 +316,7 @@ def generate_multichannel_timeseries(
     for i in range(n_points):
         timestamp = (base_time + timedelta(minutes=cadence_minutes * i)).isoformat()
 
-        # Variiere aktive Regionen über Zeit
+        # Vary active regions over time
         n_regions = 3 + (i % 5)
 
         channels = generate_multichannel_sun(
@@ -419,12 +419,12 @@ def load_aia_multichannel(
                         time.sleep(2)
                         continue
 
-                    # Lade Map - prüfe auf Truncation nach dem Laden
+                    # Load map - check for truncation after loading
                     with warnings.catch_warnings(record=True) as caught_warnings:
                         warnings.simplefilter("always")
                         aia_map = sunpy.map.Map(file_path)
 
-                        # Prüfe ob Truncation-Warning aufgetreten
+                        # Check if truncation warning occurred
                         for w in caught_warnings:
                             if "truncat" in str(w.message).lower():
                                 print(f"    ⚠️  Truncated file, Retry...")
@@ -444,7 +444,7 @@ def load_aia_multichannel(
                         next_site = sites_to_try[min(attempt + 1, len(sites_to_try) - 1)]
                         mirror_info = f" (trying {next_site} mirror)" if next_site else ""
                         print(f"    ⚠️  Retry {attempt+1}/{max_retries}{mirror_info}: {str(e)[:60]}")
-                        # Lösche fehlerhafte Datei falls vorhanden
+                        # Delete faulty file if present
                         try:
                             if 'file_path' in locals():
                                 Path(file_path).unlink()
@@ -500,10 +500,10 @@ def load_aia_multichannel(
             channels[wl] = aia_map.data.astype(np.float64)
             metadata["files"][wl] = str(file_path)
 
-            # Explizit Map freigeben
+            # Explicitly release map
             del aia_map
 
-        # Cleanup: FITS-Dateien löschen um Speicherplatz zu sparen
+        # Cleanup: Delete FITS files to save disk space
         if cleanup:
             for f in files_to_delete:
                 try:
@@ -790,7 +790,7 @@ def run_multichannel_analysis(
             cadence_minutes=cadence_minutes
         )
 
-    # Sammle Ergebnisse für alle Paare über alle Zeitpunkte
+    # Collect results for all pairs across all timepoints
     all_pair_results: Dict[Tuple[int, int], List[PairResult]] = {
         pair: [] for pair in combinations(WAVELENGTHS, 2)
     }
@@ -802,7 +802,7 @@ def run_multichannel_analysis(
         if verbose and (t_idx + 1) % 10 == 0:
             print(f"     Zeitpunkt {t_idx + 1}/{n_points}...")
 
-        # Analysiere alle Paare für diesen Zeitpunkt
+        # Analyze all pairs for this timepoint
         for wl1, wl2 in combinations(WAVELENGTHS, 2):
             result = analyze_pair(
                 channels[wl1], channels[wl2],
@@ -812,7 +812,7 @@ def run_multichannel_analysis(
             )
             all_pair_results[(wl1, wl2)].append(result)
 
-    # Aggregiere über Zeit: Mittelwerte pro Paar
+    # Aggregate over time: means per pair
     if verbose:
         print("\n  📈 Aggregiere Ergebnisse...")
 
@@ -922,7 +922,7 @@ def save_multichannel_results(result: MultiChannelResult, output_dir: Path) -> N
                 f"{pr.delta_mi_ring:.4f}", f"{pr.delta_mi_sector:.4f}", f"{pr.z_score:.1f}"
             ])
 
-    # 3. Matrizen als JSON (für weitere Verarbeitung)
+    # 3. Matrices as JSON (for further processing)
     matrix_data = {
         "wavelengths": result.coupling_delta_sector.wavelengths,
         "delta_mi_sector": result.coupling_delta_sector.matrix.tolist(),

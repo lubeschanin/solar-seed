@@ -1,14 +1,14 @@
 """
-Kontroll-Tests für Residual-MI
-==============================
+Control Tests for Residual-MI
+=============================
 
-Vier Kontrollen um sicherzustellen, dass die gemessene MI
-nicht durch Artefakte verursacht wird:
+Four controls to ensure that the measured MI
+is not caused by artifacts:
 
-C1: Time-Shift Null     - Zeitliche Entkopplung
-C2: Ring-wise Shuffle   - Azimutale Entkopplung bei erhaltener Radialstatistik
-C3: PSF/Blur Matching   - Auflösungs-Angleichung
-C4: Co-alignment Check  - Räumliche Registrierung prüfen
+C1: Time-Shift Null     - Temporal decoupling
+C2: Ring-wise Shuffle   - Azimuthal decoupling with preserved radial statistics
+C3: PSF/Blur Matching   - Resolution matching
+C4: Co-alignment Check  - Verify spatial registration
 """
 
 import numpy as np
@@ -30,12 +30,12 @@ from solar_seed.radial_profile import (
 
 @dataclass
 class TimeShiftResult:
-    """Ergebnis des Time-Shift Tests."""
+    """Result of the time-shift test."""
     mi_original: float
     mi_shifted: float
     mi_reduction: float
     mi_reduction_percent: float
-    passed: bool  # True wenn MI deutlich fällt
+    passed: bool  # True if MI drops significantly
 
 
 def time_shift_null(
@@ -47,42 +47,42 @@ def time_shift_null(
     """
     C1: Time-Shift Null Test.
 
-    Simuliert zeitliche Entkopplung durch vollständiges Shufflen von Kanal B.
-    Bei echten Zeitreihen: verwende Bild von anderer Zeit.
+    Simulates temporal decoupling by completely shuffling channel B.
+    For real timeseries: use image from different time.
 
-    Erwartung: MI_residual fällt deutlich, weil räumliche Strukturen
-    nicht mehr korrelieren.
+    Expectation: MI_residual drops significantly because spatial structures
+    no longer correlate.
 
     Args:
-        image_1: Erstes Bild (Kanal A)
-        image_2: Zweites Bild (Kanal B)
+        image_1: First image (Channel A)
+        image_2: Second image (Channel B)
         seed: Random seed
-        bins: Bins für MI-Berechnung
+        bins: Bins for MI calculation
 
     Returns:
-        TimeShiftResult mit Vergleich Original vs. Shifted
+        TimeShiftResult with comparison Original vs. Shifted
     """
-    # Original Residual-MI
+    # Original residual MI
     res_1, res_2, _ = prepare_pair_for_residual_mi(image_1, image_2)
     mi_original = mutual_information(res_1, res_2, bins=bins)
 
-    # "Zeit-Shift" durch globales Shufflen von Kanal B
+    # "Time-shift" by globally shuffling channel B
     rng = np.random.default_rng(seed)
     image_2_shuffled = image_2.ravel().copy()
     rng.shuffle(image_2_shuffled)
     image_2_shuffled = image_2_shuffled.reshape(image_2.shape)
 
-    # Residual-MI nach Shift
+    # Residual MI after shift
     res_1_new, res_2_shifted, _ = prepare_pair_for_residual_mi(
         image_1, image_2_shuffled
     )
     mi_shifted = mutual_information(res_1_new, res_2_shifted, bins=bins)
 
-    # Analyse
+    # Analysis
     mi_reduction = mi_original - mi_shifted
     mi_reduction_percent = (mi_reduction / mi_original * 100) if mi_original > 0 else 0
 
-    # Test bestanden wenn MI um mindestens 50% fällt
+    # Test passed if MI drops by at least 50%
     passed = mi_reduction_percent > 50
 
     return TimeShiftResult(
@@ -100,31 +100,31 @@ def time_shift_null(
 
 @dataclass
 class RingShuffleResult:
-    """Ergebnis des Ring-Shuffle Tests."""
+    """Result of the ring-shuffle test."""
     mi_original: float
     mi_ring_shuffled: float
     mi_global_shuffled: float
     ring_reduction_percent: float
     global_reduction_percent: float
-    ring_stronger: bool  # True wenn Ring-Shuffle stärker reduziert
+    ring_stronger: bool  # True if ring-shuffle reduces more
 
 
 @dataclass
 class SectorRingShuffleResult:
-    """Ergebnis des erweiterten Sector-Ring-Shuffle Tests."""
+    """Result of the extended sector-ring-shuffle test."""
     mi_original: float
-    mi_ring_shuffled: float  # Nur radial
-    mi_sector_shuffled: float  # Radial + Sektor
-    mi_global_shuffled: float  # Komplett global
+    mi_ring_shuffled: float  # Radial only
+    mi_sector_shuffled: float  # Radial + sector
+    mi_global_shuffled: float  # Completely global
 
     ring_reduction_percent: float
     sector_reduction_percent: float
     global_reduction_percent: float
 
-    # Was erklärt was?
+    # What explains what?
     radial_contribution: float  # MI_global - MI_ring
     azimuthal_contribution: float  # MI_ring - MI_sector
-    local_structure: float  # MI_sector (was nach allem übrig bleibt)
+    local_structure: float  # MI_sector (what remains after everything)
 
 
 def create_radial_bins(
@@ -133,15 +133,15 @@ def create_radial_bins(
     n_rings: int = 20
 ) -> NDArray[np.int64]:
     """
-    Erstellt eine Karte von Ring-Indizes.
+    Creates a map of ring indices.
 
     Args:
-        shape: Bildgröße
-        center: (y, x) Zentrum
-        n_rings: Anzahl konzentrischer Ringe
+        shape: Image size
+        center: (y, x) center
+        n_rings: Number of concentric rings
 
     Returns:
-        Array mit Ring-Index pro Pixel
+        Array with ring index per pixel
     """
     y, x = np.ogrid[:shape[0], :shape[1]]
     r = np.sqrt((x - center[1])**2 + (y - center[0])**2)
@@ -219,7 +219,7 @@ def ring_wise_shuffle_test(
     # Ring-Indizes
     ring_indices = create_radial_bins(image_1.shape, center, n_rings)
 
-    # Original Residual-MI
+    # Original residual MI
     res_1, res_2, _ = prepare_pair_for_residual_mi(image_1, image_2)
     mi_original = mutual_information(res_1, res_2, bins=bins)
 
@@ -367,7 +367,7 @@ def sector_ring_shuffle_test(
         image_1.shape, center, n_rings, n_sectors
     )
 
-    # Original Residual-MI
+    # Original residual MI
     res_1, res_2, _ = prepare_pair_for_residual_mi(image_1, image_2)
     mi_original = mutual_information(res_1, res_2, bins=bins)
 
@@ -399,11 +399,11 @@ def sector_ring_shuffle_test(
     sector_reduction = safe_reduction(mi_original, mi_sector_shuffled)
     global_reduction = safe_reduction(mi_original, mi_global_shuffled)
 
-    # Beiträge analysieren
-    # MI_global ist Baseline (fast 0)
-    # MI_ring - MI_global = radialer Beitrag
-    # MI_sector - MI_ring = azimutaler Beitrag (negativ, da ring > sector)
-    # MI_original - MI_sector = lokale Struktur
+    # Analyze contributions
+    # MI_global is baseline (nearly 0)
+    # MI_ring - MI_global = radial contribution
+    # MI_sector - MI_ring = azimuthal contribution (negative, since ring > sector)
+    # MI_original - MI_sector = local structure
     radial_contribution = mi_ring_shuffled - mi_global_shuffled
     azimuthal_contribution = mi_sector_shuffled - mi_ring_shuffled
     local_structure = mi_original - mi_sector_shuffled
@@ -428,13 +428,13 @@ def sector_ring_shuffle_test(
 
 @dataclass
 class BlurMatchResult:
-    """Ergebnis des Blur-Matching Tests."""
+    """Result of the blur-matching test."""
     mi_original: float
     mi_blurred: float
     mi_change: float
     mi_change_percent: float
     blur_sigma: float
-    stable: bool  # True wenn MI sich wenig ändert (<20%)
+    stable: bool  # True if MI changes little (<20%)
 
 
 def apply_gaussian_blur(
@@ -478,25 +478,25 @@ def psf_blur_matching(
     Returns:
         BlurMatchResult mit Vergleich vor/nach Blur
     """
-    # Original Residual-MI
+    # Original residual MI
     res_1, res_2, _ = prepare_pair_for_residual_mi(image_1, image_2)
     mi_original = mutual_information(res_1, res_2, bins=bins)
 
-    # Blur beide Kanäle
+    # Blur both channels
     image_1_blur = apply_gaussian_blur(image_1, sigma)
     image_2_blur = apply_gaussian_blur(image_2, sigma)
 
-    # Residual-MI nach Blur
+    # Residual MI after blur
     res_1_blur, res_2_blur, _ = prepare_pair_for_residual_mi(
         image_1_blur, image_2_blur
     )
     mi_blurred = mutual_information(res_1_blur, res_2_blur, bins=bins)
 
-    # Analyse
+    # Analysis
     mi_change = mi_blurred - mi_original
     mi_change_percent = (mi_change / mi_original * 100) if mi_original > 0 else 0
 
-    # Stabil wenn Änderung < 20%
+    # Stable if change < 20%
     stable = abs(mi_change_percent) < 20
 
     return BlurMatchResult(
@@ -515,13 +515,13 @@ def psf_blur_matching(
 
 @dataclass
 class CoAlignmentResult:
-    """Ergebnis des Co-Alignment Tests."""
-    mi_map: NDArray[np.float64]  # MI für jeden Shift
+    """Result of the co-alignment test."""
+    mi_map: NDArray[np.float64]  # MI for each shift
     shifts: List[Tuple[int, int]]  # (dy, dx) Shifts
-    max_shift: Tuple[int, int]  # Shift mit maximaler MI
-    mi_at_zero: float  # MI bei (0, 0)
-    mi_at_max: float  # Maximale MI
-    centered: bool  # True wenn Maximum bei (0, 0)
+    max_shift: Tuple[int, int]  # Shift with maximum MI
+    mi_at_zero: float  # MI at (0, 0)
+    mi_at_max: float  # Maximum MI
+    centered: bool  # True if maximum at (0, 0)
 
 
 def shift_image(
@@ -570,7 +570,7 @@ def co_alignment_check(
     Berechnet Residual-MI als Funktion von kleinen Pixel-Shifts.
     Testet ob die Bilder korrekt ausgerichtet sind.
 
-    Erwartung: Maximum bei (0, 0) → korrekt ausgerichtet.
+    Expectation: Maximum at (0, 0) → correctly aligned.
     Maximum woanders → Co-Registration-Fehler treibt MI.
 
     Args:
@@ -612,11 +612,11 @@ def co_alignment_check(
     max_dy = max_idx[0] - max_offset
     max_dx = max_idx[1] - max_offset
 
-    # MI bei (0, 0) und Maximum
+    # MI at (0, 0) and maximum
     mi_at_zero = mi_map[max_offset, max_offset]
     mi_at_max = mi_map[max_idx]
 
-    # Zentriert wenn Maximum bei (0, 0)
+    # Centered if maximum at (0, 0)
     centered = (max_dy == 0 and max_dx == 0)
 
     return CoAlignmentResult(
@@ -635,7 +635,7 @@ def co_alignment_check(
 
 @dataclass
 class AllControlsResult:
-    """Ergebnisse aller Kontroll-Tests."""
+    """Results of all control tests."""
     c1_time_shift: TimeShiftResult
     c2_ring_shuffle: RingShuffleResult
     c3_blur_match: BlurMatchResult

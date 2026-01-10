@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Flare-Ereignis-Analyse für Solar Seed
-=====================================
+Flare Event Analysis for Solar Seed
+====================================
 
-Analysiert ΔMI_sector vor, während und nach Flare-Ereignissen.
+Analyzes ΔMI_sector before, during and after flare events.
 
-Hypothese:
-- VOR:     Baseline-Kopplung
-- WÄHREND: Starker Anstieg (besonders 94-131 Å)
-- NACH:    Abklingen zur Baseline
+Hypothesis:
+- BEFORE:  Baseline coupling
+- DURING:  Strong increase (especially 94-131 Å)
+- AFTER:   Decay back to baseline
 
-Bekannte Flares für Tests:
+Known flares for testing:
 - X5.0: 2024-01-01 00:55 UTC (AR 3536)
 - X2.8: 2023-12-14 17:02 UTC
 - X1.0: 2024-01-10 15:40 UTC
@@ -70,35 +70,35 @@ KNOWN_FLARES = {
 
 @dataclass
 class FlarePhase:
-    """Ergebnisse für eine Flare-Phase."""
+    """Results for a flare phase."""
     phase: str  # "before", "during", "after"
     n_samples: int
     timestamps: List[str]
 
-    # Mittlere Werte pro Paar
+    # Mean values per pair
     pair_values: Dict[Tuple[int, int], float]  # ΔMI_sector
     pair_stds: Dict[Tuple[int, int], float]
 
-    # 94Å Intensität als Aktivitäts-Indikator
+    # 94Å intensity as activity indicator
     mean_94A_intensity: float
 
 
 @dataclass
 class FlareAnalysisResult:
-    """Gesamtergebnis der Flare-Analyse."""
+    """Overall result of flare analysis."""
     flare_id: str
     flare_class: str
     peak_time: str
 
-    # Phasen
+    # Phases
     before: FlarePhase
     during: FlarePhase
     after: FlarePhase
 
-    # Änderungen
-    coupling_change: Dict[Tuple[int, int], Dict[str, float]]  # Paar -> {before_to_during, during_to_after}
+    # Changes
+    coupling_change: Dict[Tuple[int, int], Dict[str, float]]  # Pair -> {before_to_during, during_to_after}
 
-    # Top-Paare nach Änderung
+    # Top pairs by change
     most_affected: List[Tuple[Tuple[int, int], float]]
 
 
@@ -114,17 +114,17 @@ def generate_flare_timeseries(
     seed: int = 42
 ) -> Tuple[List[Tuple[Dict[int, NDArray], str]], List[str]]:
     """
-    Generiert synthetische Flare-Zeitreihe.
+    Generates synthetic flare timeseries.
 
     Args:
-        n_before: Zeitpunkte vor Flare
-        n_during: Zeitpunkte während Flare
-        n_after: Zeitpunkte nach Flare
-        flare_intensity: Verstärkungsfaktor für Flare-Kanäle
-        seed: Random Seed
+        n_before: Timepoints before flare
+        n_during: Timepoints during flare
+        n_after: Timepoints after flare
+        flare_intensity: Amplification factor for flare channels
+        seed: Random seed
 
     Returns:
-        (timeseries, phases) - Zeitreihe und Phase pro Zeitpunkt
+        (timeseries, phases) - Timeseries and phase per timepoint
     """
     rng = np.random.default_rng(seed)
     results = []
@@ -133,7 +133,7 @@ def generate_flare_timeseries(
     base_time = datetime.now()
     t_idx = 0
 
-    # BEFORE: normale Sonne
+    # BEFORE: normal sun
     for i in range(n_before):
         timestamp = (base_time + timedelta(minutes=2 * t_idx)).isoformat()
         channels = generate_multichannel_sun(
@@ -144,7 +144,7 @@ def generate_flare_timeseries(
         phases.append("before")
         t_idx += 1
 
-    # DURING: verstärkte Flare-Kanäle
+    # DURING: amplified flare channels
     for i in range(n_during):
         timestamp = (base_time + timedelta(minutes=2 * t_idx)).isoformat()
         channels = generate_multichannel_sun(
@@ -152,26 +152,26 @@ def generate_flare_timeseries(
             seed=seed + t_idx
         )
 
-        # Verstärke 94 und 131 Å (Flare-Kanäle)
-        # Die Verstärkung nimmt zur Mitte zu (Gauss-Profil)
+        # Amplify 94 and 131 Å (flare channels)
+        # Amplification increases towards the middle (Gaussian profile)
         peak_factor = np.exp(-((i - n_during/2)**2) / (n_during/2))
         intensity = 1.0 + (flare_intensity - 1.0) * peak_factor
 
         for wl in [94, 131]:
             mask = channels[wl] > 0
             channels[wl][mask] *= intensity
-            # Zusätzliche Flare-Struktur
+            # Additional flare structure
             channels[wl][mask] += rng.normal(0, 500 * intensity, mask.sum())
 
         results.append((channels, timestamp))
         phases.append("during")
         t_idx += 1
 
-    # AFTER: abklingende Aktivität
+    # AFTER: decaying activity
     for i in range(n_after):
         timestamp = (base_time + timedelta(minutes=2 * t_idx)).isoformat()
 
-        # Exponentielles Abklingen
+        # Exponential decay
         decay = np.exp(-i / 5)
         n_regions = int(5 - 2 * (1 - decay))
 
@@ -180,7 +180,7 @@ def generate_flare_timeseries(
             seed=seed + t_idx
         )
 
-        # Leicht erhöhte Restaktivität
+        # Slightly elevated residual activity
         for wl in [94, 131]:
             mask = channels[wl] > 0
             channels[wl][mask] *= (1.0 + 0.5 * decay)
@@ -223,11 +223,11 @@ def load_flare_timeseries(
     results = []
     phases = []
 
-    # Zeitpunkte berechnen
+    # Calculate timepoints
     n_before = minutes_before // cadence_minutes
     n_after = minutes_after // cadence_minutes
 
-    # Fenster für "during" = Peak ± 5 Minuten
+    # Window for "during" = Peak ± 5 minutes
     during_window = 5
 
     total = n_before + n_after + 1
@@ -297,10 +297,10 @@ def analyze_flare_phase(
     for t_idx, (channels, timestamp) in enumerate(timeseries):
         timestamps.append(timestamp)
 
-        # 94Å Intensität
+        # 94Å intensity
         intensities_94.append(float(np.mean(channels[94][channels[94] > 0])))
 
-        # Analysiere alle Paare
+        # Analyze all pairs
         for wl1, wl2 in combinations(WAVELENGTHS, 2):
             result = analyze_pair(
                 channels[wl1], channels[wl2],
@@ -407,19 +407,19 @@ def run_flare_analysis(
     if verbose:
         print(f"     Before: {len(before_data)}, During: {len(during_data)}, After: {len(after_data)}")
 
-    # Analysiere jede Phase
+    # Analyze each phase
     before_result = analyze_flare_phase(before_data, "before")
     during_result = analyze_flare_phase(during_data, "during")
     after_result = analyze_flare_phase(after_data, "after")
 
-    # Berechne Änderungen
+    # Calculate changes
     coupling_change = {}
     for pair in combinations(WAVELENGTHS, 2):
         before_val = before_result.pair_values.get(pair, 0)
         during_val = during_result.pair_values.get(pair, 0)
         after_val = after_result.pair_values.get(pair, 0)
 
-        # Prozentuale Änderung
+        # Percentage change
         before_to_during = ((during_val - before_val) / before_val * 100) if before_val > 0 else 0
         during_to_after = ((after_val - during_val) / during_val * 100) if during_val > 0 else 0
 
@@ -431,7 +431,7 @@ def run_flare_analysis(
             "after": after_val
         }
 
-    # Top-5 nach Anstieg während Flare
+    # Top-5 by increase during flare
     sorted_by_change = sorted(
         coupling_change.items(),
         key=lambda x: x[1]["before_to_during"],

@@ -28,7 +28,7 @@ import math
 
 SDO_LATEST_URL = "https://sdo.gsfc.nasa.gov/assets/img/latest"
 
-# Repräsentative Wellenlängen für den Test
+# Representative wavelengths for the test
 DEFAULT_WAVELENGTHS = ["0171", "0193", "0211", "0304"]
 
 WAVELENGTH_INFO = {
