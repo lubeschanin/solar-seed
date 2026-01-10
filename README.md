@@ -373,7 +373,8 @@ src/solar_seed/
 
 ## Data Sources
 
-- **NASA SDO**: https://sdo.gsfc.nasa.gov/
+- **NASA SDO/AIA**: https://sdo.gsfc.nasa.gov/
+- **STEREO-A/EUVI**: https://stereo.gsfc.nasa.gov/
 - **AIA Level 1.5**: Via SunPy/aiapy
 - **ML Dataset**: https://registry.opendata.aws/sdoml-fdl/
 
