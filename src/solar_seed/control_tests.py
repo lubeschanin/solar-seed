@@ -147,7 +147,7 @@ def create_radial_bins(
     r = np.sqrt((x - center[1])**2 + (y - center[0])**2)
     max_r = np.max(r)
 
-    # Bin-Grenzen
+    # Bin boundaries
     ring_indices = np.clip(
         (r / max_r * n_rings).astype(np.int64),
         0, n_rings - 1
@@ -162,17 +162,17 @@ def ring_shuffle(
     seed: int = 42
 ) -> NDArray[np.float64]:
     """
-    Shuffelt Pixel nur innerhalb gleicher Ringe.
+    Shuffles pixels only within the same rings.
 
-    Erhält die radiale Statistik, zerstört azimutale Korrelationen.
+    Preserves radial statistics, destroys azimuthal correlations.
 
     Args:
-        image: Eingabebild
-        ring_indices: Ring-Index pro Pixel
+        image: Input image
+        ring_indices: Ring index per pixel
         seed: Random seed
 
     Returns:
-        Bild mit ring-weise geshuffelten Pixeln
+        Image with ring-wise shuffled pixels
     """
     rng = np.random.default_rng(seed)
     result = image.copy()
@@ -197,38 +197,38 @@ def ring_wise_shuffle_test(
     """
     C2: Ring-wise Shuffle Test.
 
-    Vergleicht Ring-Shuffle mit globalem Shuffle.
-    Ring-Shuffle erhält radiale Statistik aber zerstört azimutale Struktur.
+    Compares ring-shuffle with global shuffle.
+    Ring-shuffle preserves radial statistics but destroys azimuthal structure.
 
-    Erwartung: Ring-Shuffle reduziert MI stärker als globaler Shuffle,
-    weil er gezielt die strukturelle Korrelation zerstört.
+    Expectation: Ring-shuffle reduces MI more than global shuffle,
+    because it specifically destroys structural correlation.
 
     Args:
-        image_1: Erstes Bild
-        image_2: Zweites Bild
-        n_rings: Anzahl der Ringe
+        image_1: First image
+        image_2: Second image
+        n_rings: Number of rings
         seed: Random seed
-        bins: Bins für MI
+        bins: Bins for MI
 
     Returns:
-        RingShuffleResult mit Vergleich
+        RingShuffleResult with comparison
     """
-    # Finde Zentrum
+    # Find center
     center = find_disk_center(image_1)
 
-    # Ring-Indizes
+    # Ring indices
     ring_indices = create_radial_bins(image_1.shape, center, n_rings)
 
     # Original residual MI
     res_1, res_2, _ = prepare_pair_for_residual_mi(image_1, image_2)
     mi_original = mutual_information(res_1, res_2, bins=bins)
 
-    # Ring-Shuffle auf Kanal B
+    # Ring-shuffle on channel B
     image_2_ring = ring_shuffle(image_2, ring_indices, seed=seed)
     res_1_r, res_2_ring, _ = prepare_pair_for_residual_mi(image_1, image_2_ring)
     mi_ring_shuffled = mutual_information(res_1_r, res_2_ring, bins=bins)
 
-    # Globaler Shuffle auf Kanal B
+    # Global shuffle on channel B
     rng = np.random.default_rng(seed + 1000)
     image_2_global = image_2.ravel().copy()
     rng.shuffle(image_2_global)
@@ -236,7 +236,7 @@ def ring_wise_shuffle_test(
     res_1_g, res_2_global, _ = prepare_pair_for_residual_mi(image_1, image_2_global)
     mi_global_shuffled = mutual_information(res_1_g, res_2_global, bins=bins)
 
-    # Reduktionen
+    # Reductions
     ring_reduction = (mi_original - mi_ring_shuffled) / mi_original * 100 if mi_original > 0 else 0
     global_reduction = (mi_original - mi_global_shuffled) / mi_original * 100 if mi_original > 0 else 0
 
@@ -257,20 +257,20 @@ def create_sector_ring_bins(
     n_sectors: int = 16
 ) -> Tuple[NDArray[np.int64], NDArray[np.int64]]:
     """
-    Erstellt Ring- und Sektor-Indizes für combined shuffling.
+    Creates ring and sector indices for combined shuffling.
 
     Args:
-        shape: Bildgröße
-        center: (y, x) Zentrum
-        n_rings: Anzahl konzentrischer Ringe
-        n_sectors: Anzahl azimutaler Sektoren
+        shape: Image size
+        center: (y, x) center
+        n_rings: Number of concentric rings
+        n_sectors: Number of azimuthal sectors
 
     Returns:
-        (ring_indices, sector_indices) - jeweils Array mit Index pro Pixel
+        (ring_indices, sector_indices) - each array with index per pixel
     """
     y, x = np.ogrid[:shape[0], :shape[1]]
 
-    # Radiale Indizes
+    # Radial indices
     r = np.sqrt((x - center[1])**2 + (y - center[0])**2)
     max_r = np.max(r)
     ring_indices = np.clip(
@@ -278,7 +278,7 @@ def create_sector_ring_bins(
         0, n_rings - 1
     )
 
-    # Azimutale Indizes (Winkel von 0 bis 2π)
+    # Azimuthal indices (angle from 0 to 2pi)
     theta = np.arctan2(y - center[0], x - center[1])  # -π to π
     theta_normalized = (theta + np.pi) / (2 * np.pi)  # 0 to 1
     sector_indices = np.clip(
@@ -296,19 +296,19 @@ def sector_ring_shuffle(
     seed: int = 42
 ) -> NDArray[np.float64]:
     """
-    Shuffelt Pixel innerhalb von Ring+Sektor-Kombinationen.
+    Shuffles pixels within ring+sector combinations.
 
-    Erhält sowohl radiale als auch grobe azimutale Statistik,
-    zerstört nur lokale (feine) Korrelationen.
+    Preserves both radial and coarse azimuthal statistics,
+    only destroys local (fine) correlations.
 
     Args:
-        image: Eingabebild
-        ring_indices: Ring-Index pro Pixel
-        sector_indices: Sektor-Index pro Pixel
+        image: Input image
+        ring_indices: Ring index per pixel
+        sector_indices: Sector index per pixel
         seed: Random seed
 
     Returns:
-        Bild mit sector-ring-weise geshuffelten Pixeln
+        Image with sector-ring-wise shuffled pixels
     """
     rng = np.random.default_rng(seed)
     result = image.copy()
@@ -336,33 +336,33 @@ def sector_ring_shuffle_test(
     bins: int = 64
 ) -> SectorRingShuffleResult:
     """
-    Erweiterter C2: Sector-Ring Shuffle Test.
+    Extended C2: Sector-Ring Shuffle Test.
 
-    Vergleicht drei Shuffle-Level:
-    1. Ring-only: Erhält radiale Statistik
-    2. Sector-Ring: Erhält radiale + grobe azimutale Statistik
-    3. Global: Zerstört alles
+    Compares three shuffle levels:
+    1. Ring-only: Preserves radial statistics
+    2. Sector-Ring: Preserves radial + coarse azimuthal statistics
+    3. Global: Destroys everything
 
-    Damit kann man sauber trennen:
-    - Radialer Beitrag zur MI
-    - Azimutaler Beitrag
-    - Echte lokale Struktur
+    This allows clean separation of:
+    - Radial contribution to MI
+    - Azimuthal contribution
+    - True local structure
 
     Args:
-        image_1: Erstes Bild
-        image_2: Zweites Bild
-        n_rings: Anzahl Ringe
-        n_sectors: Anzahl Sektoren (z.B. 16 = 22.5° pro Sektor)
+        image_1: First image
+        image_2: Second image
+        n_rings: Number of rings
+        n_sectors: Number of sectors (e.g. 16 = 22.5 deg per sector)
         seed: Random seed
-        bins: Bins für MI
+        bins: Bins for MI
 
     Returns:
-        SectorRingShuffleResult mit detaillierter Aufschlüsselung
+        SectorRingShuffleResult with detailed breakdown
     """
-    # Finde Zentrum
+    # Find center
     center = find_disk_center(image_1)
 
-    # Indizes erstellen
+    # Create indices
     ring_indices, sector_indices = create_sector_ring_bins(
         image_1.shape, center, n_rings, n_sectors
     )
@@ -391,7 +391,7 @@ def sector_ring_shuffle_test(
     res_1_g, res_2_global, _ = prepare_pair_for_residual_mi(image_1, image_2_global)
     mi_global_shuffled = mutual_information(res_1_g, res_2_global, bins=bins)
 
-    # Reduktionen berechnen
+    # Calculate reductions
     def safe_reduction(original, shuffled):
         return (original - shuffled) / original * 100 if original > 0 else 0
 
@@ -442,14 +442,14 @@ def apply_gaussian_blur(
     sigma: float
 ) -> NDArray[np.float64]:
     """
-    Wendet Gaussian Blur auf ein Bild an.
+    Applies Gaussian blur to an image.
 
     Args:
-        image: Eingabebild
-        sigma: Standardabweichung des Gauss-Kernels
+        image: Input image
+        sigma: Standard deviation of the Gaussian kernel
 
     Returns:
-        Geblurrtes Bild
+        Blurred image
     """
     return ndimage.gaussian_filter(image, sigma=sigma)
 
@@ -463,20 +463,20 @@ def psf_blur_matching(
     """
     C3: PSF/Blur Matching Test.
 
-    Bringt beide Kanäle auf gleiche effektive Auflösung durch Blur.
-    Testet ob hochfrequente Details die MI treiben.
+    Brings both channels to the same effective resolution through blur.
+    Tests whether high-frequency details drive the MI.
 
-    Erwartung: Wenn MI stabil bleibt → großskalige Korrelationen dominant.
-    Wenn MI stark fällt → hochfrequente Details waren wichtig.
+    Expectation: If MI remains stable -> large-scale correlations dominant.
+    If MI drops significantly -> high-frequency details were important.
 
     Args:
-        image_1: Erstes Bild
-        image_2: Zweites Bild
-        sigma: Blur-Stärke (in Pixeln)
-        bins: Bins für MI
+        image_1: First image
+        image_2: Second image
+        sigma: Blur strength (in pixels)
+        bins: Bins for MI
 
     Returns:
-        BlurMatchResult mit Vergleich vor/nach Blur
+        BlurMatchResult with comparison before/after blur
     """
     # Original residual MI
     res_1, res_2, _ = prepare_pair_for_residual_mi(image_1, image_2)
@@ -529,19 +529,19 @@ def shift_image(
     shift: Tuple[int, int]
 ) -> NDArray[np.float64]:
     """
-    Verschiebt ein Bild um (dy, dx) Pixel.
+    Shifts an image by (dy, dx) pixels.
 
     Args:
-        image: Eingabebild
-        shift: (dy, dx) Verschiebung
+        image: Input image
+        shift: (dy, dx) displacement
 
     Returns:
-        Verschobenes Bild (mit Nullen aufgefüllt)
+        Shifted image (padded with zeros)
     """
     dy, dx = shift
     result = np.zeros_like(image)
 
-    # Quell- und Ziel-Bereiche berechnen
+    # Calculate source and destination regions
     src_y_start = max(0, -dy)
     src_y_end = min(image.shape[0], image.shape[0] - dy)
     src_x_start = max(0, -dx)
@@ -567,22 +567,22 @@ def co_alignment_check(
     """
     C4: Co-Alignment Check.
 
-    Berechnet Residual-MI als Funktion von kleinen Pixel-Shifts.
-    Testet ob die Bilder korrekt ausgerichtet sind.
+    Calculates Residual-MI as a function of small pixel shifts.
+    Tests whether the images are correctly aligned.
 
-    Expectation: Maximum at (0, 0) → correctly aligned.
-    Maximum woanders → Co-Registration-Fehler treibt MI.
+    Expectation: Maximum at (0, 0) -> correctly aligned.
+    Maximum elsewhere -> Co-registration error drives MI.
 
     Args:
-        image_1: Erstes Bild (bleibt fix)
-        image_2: Zweites Bild (wird verschoben)
-        max_offset: Maximaler Shift in Pixeln (±max_offset)
-        bins: Bins für MI
+        image_1: First image (remains fixed)
+        image_2: Second image (is shifted)
+        max_offset: Maximum shift in pixels (+/-max_offset)
+        bins: Bins for MI
 
     Returns:
-        CoAlignmentResult mit MI-Karte über Shifts
+        CoAlignmentResult with MI map over shifts
     """
-    # Alle Shift-Kombinationen
+    # All shift combinations
     shifts = []
     for dy in range(-max_offset, max_offset + 1):
         for dx in range(-max_offset, max_offset + 1):
@@ -593,21 +593,21 @@ def co_alignment_check(
 
     for dy in range(-max_offset, max_offset + 1):
         for dx in range(-max_offset, max_offset + 1):
-            # Verschiebe Bild 2
+            # Shift image 2
             image_2_shifted = shift_image(image_2, (dy, dx))
 
-            # Berechne Residual-MI
+            # Calculate Residual-MI
             res_1, res_2, _ = prepare_pair_for_residual_mi(
                 image_1, image_2_shifted
             )
             mi = mutual_information(res_1, res_2, bins=bins)
 
-            # Speichere in Karte
+            # Store in map
             map_y = dy + max_offset
             map_x = dx + max_offset
             mi_map[map_y, map_x] = mi
 
-    # Finde Maximum
+    # Find maximum
     max_idx = np.unravel_index(np.argmax(mi_map), mi_map.shape)
     max_dy = max_idx[0] - max_offset
     max_dx = max_idx[1] - max_offset
@@ -630,7 +630,7 @@ def co_alignment_check(
 
 
 # ============================================================================
-# ALLE KONTROLLEN ZUSAMMEN
+# ALL CONTROLS TOGETHER
 # ============================================================================
 
 @dataclass
@@ -643,7 +643,7 @@ class AllControlsResult:
 
     @property
     def all_passed(self) -> bool:
-        """Alle Kontrollen bestanden?"""
+        """All controls passed?"""
         return (
             self.c1_time_shift.passed and
             self.c3_blur_match.stable and
@@ -659,17 +659,17 @@ def run_all_controls(
     verbose: bool = True
 ) -> AllControlsResult:
     """
-    Führt alle vier Kontroll-Tests durch.
+    Runs all four control tests.
 
     Args:
-        image_1: Erstes Bild
-        image_2: Zweites Bild
+        image_1: First image
+        image_2: Second image
         seed: Random seed
-        bins: Bins für MI
-        verbose: Ausgabe während der Berechnung
+        bins: Bins for MI
+        verbose: Output during computation
 
     Returns:
-        AllControlsResult mit allen Ergebnissen
+        AllControlsResult with all results
     """
     if verbose:
         print("\n  C1: Time-Shift Null...")
@@ -697,104 +697,104 @@ def run_all_controls(
 
 def print_control_results(result: AllControlsResult) -> None:
     """
-    Gibt formatierte Ergebnisse der Kontroll-Tests aus.
+    Prints formatted results of the control tests.
 
     Args:
         result: AllControlsResult
     """
     print("\n" + "="*72)
-    print("  KONTROLL-TESTS FÜR RESIDUAL-MI")
+    print("  CONTROL TESTS FOR RESIDUAL-MI")
     print("="*72)
 
     # C1: Time-Shift
     c1 = result.c1_time_shift
-    status = "✓ BESTANDEN" if c1.passed else "✗ NICHT BESTANDEN"
+    status = "PASSED" if c1.passed else "NOT PASSED"
     print(f"""
   C1: TIME-SHIFT NULL
   ─────────────────────────────────────────────────────────────────────
-  Frage: Fällt MI wenn zeitliche Korrelation zerstört wird?
+  Question: Does MI drop when temporal correlation is destroyed?
 
     MI (original):  {c1.mi_original:.4f} bits
     MI (shifted):   {c1.mi_shifted:.4f} bits
-    Reduktion:      {c1.mi_reduction_percent:.1f}%
+    Reduction:      {c1.mi_reduction_percent:.1f}%
 
     Status: {status}
-    (Bestanden wenn Reduktion > 50%)
+    (Passed if reduction > 50%)
 """)
 
     # C2: Ring-Shuffle
     c2 = result.c2_ring_shuffle
-    ring_vs_global = "stärker" if c2.ring_stronger else "schwächer"
+    ring_vs_global = "more" if c2.ring_stronger else "less"
     print(f"""  C2: RING-WISE SHUFFLE
   ─────────────────────────────────────────────────────────────────────
-  Frage: Ist azimutale Struktur wichtiger als radiale Statistik?
+  Question: Is azimuthal structure more important than radial statistics?
 
     MI (original):      {c2.mi_original:.4f} bits
-    MI (ring-shuffle):  {c2.mi_ring_shuffled:.4f} bits  (Reduktion: {c2.ring_reduction_percent:.1f}%)
-    MI (global-shuffle): {c2.mi_global_shuffled:.4f} bits  (Reduktion: {c2.global_reduction_percent:.1f}%)
+    MI (ring-shuffle):  {c2.mi_ring_shuffled:.4f} bits  (Reduction: {c2.ring_reduction_percent:.1f}%)
+    MI (global-shuffle): {c2.mi_global_shuffled:.4f} bits  (Reduction: {c2.global_reduction_percent:.1f}%)
 
-    Ring-Shuffle reduziert {ring_vs_global} als globaler Shuffle.
+    Ring-shuffle reduces {ring_vs_global} than global shuffle.
 """)
 
     # C3: Blur Matching
     c3 = result.c3_blur_match
-    status = "✓ STABIL" if c3.stable else "⚠ SENSITIV"
-    direction = "erhöht" if c3.mi_change > 0 else "reduziert"
-    print(f"""  C3: PSF/BLUR MATCHING (σ = {c3.blur_sigma} px)
+    status = "STABLE" if c3.stable else "SENSITIVE"
+    direction = "increased" if c3.mi_change > 0 else "reduced"
+    print(f"""  C3: PSF/BLUR MATCHING (sigma = {c3.blur_sigma} px)
   ─────────────────────────────────────────────────────────────────────
-  Frage: Sind hochfrequente Details wichtig für MI?
+  Question: Are high-frequency details important for MI?
 
     MI (original):  {c3.mi_original:.4f} bits
     MI (blurred):   {c3.mi_blurred:.4f} bits
-    Änderung:       {c3.mi_change_percent:+.1f}% ({direction})
+    Change:         {c3.mi_change_percent:+.1f}% ({direction})
 
     Status: {status}
-    (Stabil wenn Änderung < 20%)
+    (Stable if change < 20%)
 """)
 
     # C4: Co-alignment
     c4 = result.c4_co_alignment
-    status = "✓ ZENTRIERT" if c4.centered else f"⚠ OFFSET bei {c4.max_shift}"
-    print(f"""  C4: CO-ALIGNMENT CHECK (±3 px)
+    status = "CENTERED" if c4.centered else f"OFFSET at {c4.max_shift}"
+    print(f"""  C4: CO-ALIGNMENT CHECK (+/-3 px)
   ─────────────────────────────────────────────────────────────────────
-  Frage: Ist die räumliche Registrierung korrekt?
+  Question: Is the spatial registration correct?
 
-    MI bei (0, 0):      {c4.mi_at_zero:.4f} bits
-    Maximale MI:        {c4.mi_at_max:.4f} bits  bei Shift {c4.max_shift}
+    MI at (0, 0):       {c4.mi_at_zero:.4f} bits
+    Maximum MI:         {c4.mi_at_max:.4f} bits  at shift {c4.max_shift}
 
     Status: {status}
-    (Bestanden wenn Maximum bei (0, 0))
+    (Passed if maximum at (0, 0))
 
-    MI-Karte über Shifts:
+    MI map over shifts:
 """)
 
-    # ASCII-Darstellung der Co-Alignment Karte
+    # ASCII representation of the Co-Alignment map
     mi_map = c4.mi_map
     mi_min, mi_max = mi_map.min(), mi_map.max()
-    chars = " ·:░▒▓█"
+    chars = " .:+=*#"
 
     print("         dx")
     print("       -3-2-1 0+1+2+3")
     for i, dy in enumerate(range(-3, 4)):
-        row = "    " + (f"{dy:+d} " if dy != 0 else " 0 ") + "│"
+        row = "    " + (f"{dy:+d} " if dy != 0 else " 0 ") + "|"
         for j in range(mi_map.shape[1]):
             val = (mi_map[i, j] - mi_min) / (mi_max - mi_min) if mi_max > mi_min else 0
             char_idx = int(val * (len(chars) - 1))
             row += chars[char_idx]
-        # Markiere Maximum
+        # Mark maximum
         if i == c4.max_shift[0] + 3:
-            row += f"│ ← max"
+            row += f"| <- max"
         else:
-            row += "│"
+            row += "|"
         print(row)
     print("    dy")
 
-    # Gesamtergebnis
+    # Overall result
     print("\n" + "="*72)
     if result.all_passed:
-        print("  ✓ ALLE KRITISCHEN KONTROLLEN BESTANDEN")
-        print("    → Die Residual-MI ist wahrscheinlich echtes Signal")
+        print("  + ALL CRITICAL CONTROLS PASSED")
+        print("    -> The Residual-MI is probably real signal")
     else:
-        print("  ⚠ NICHT ALLE KONTROLLEN BESTANDEN")
-        print("    → Ergebnisse mit Vorsicht interpretieren")
+        print("  ! NOT ALL CONTROLS PASSED")
+        print("    -> Interpret results with caution")
     print("="*72)

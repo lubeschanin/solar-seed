@@ -126,14 +126,14 @@ class PairResult:
     delta_mi_ring: float
     delta_mi_sector: float
     z_score: float
-    temperature_diff: float  # Temperatur-Differenz in MK
+    temperature_diff: float  # Temperature difference in MK
 
 
 @dataclass
 class CouplingMatrix:
     """Coupling matrix between all channels."""
     wavelengths: List[int]
-    matrix: NDArray[np.float64]  # 7x7 symmetrische Matrix
+    matrix: NDArray[np.float64]  # 7x7 symmetric matrix
     metric: str  # "delta_mi_sector", "mi_ratio", etc.
 
     def get_value(self, wl1: int, wl2: int) -> float:
@@ -143,7 +143,7 @@ class CouplingMatrix:
         return self.matrix[i, j]
 
     def to_ascii(self, precision: int = 3) -> str:
-        """ASCII-Darstellung der Matrix."""
+        """ASCII representation of the matrix."""
         n = len(self.wavelengths)
 
         # Header
@@ -151,7 +151,7 @@ class CouplingMatrix:
         lines = [header]
         lines.append("      " + "-" * (7 * n + n - 1))
 
-        # Zeilen
+        # Rows
         for i, wl in enumerate(self.wavelengths):
             row_vals = []
             for j in range(n):
@@ -167,20 +167,20 @@ class CouplingMatrix:
 
 @dataclass
 class MultiChannelResult:
-    """Gesamtergebnis der Multi-Channel-Analyse."""
+    """Overall result of the multi-channel analysis."""
     timestamp: str
     n_timepoints: int
     hours: float
 
-    # Alle Paar-Ergebnisse
+    # All pair results
     pair_results: List[PairResult]
 
-    # Verschiedene Kopplungs-Matrizen
+    # Various coupling matrices
     coupling_delta_sector: CouplingMatrix
     coupling_mi_ratio: CouplingMatrix
     coupling_delta_ring: CouplingMatrix
 
-    # Statistiken
+    # Statistics
     mean_values: Dict[str, float] = field(default_factory=dict)
     std_values: Dict[str, float] = field(default_factory=dict)
 
@@ -195,24 +195,24 @@ def generate_multichannel_sun(
     seed: int = 42
 ) -> Dict[int, NDArray[np.float64]]:
     """
-    Generiert synthetische Sonnendaten für alle 7 AIA-Kanäle.
+    Generates synthetic sun data for all 7 AIA channels.
 
-    Die Kopplung zwischen Kanälen basiert auf:
-    1. Gemeinsame Geometrie (Limb Darkening)
-    2. Gemeinsame aktive Regionen (mit temperaturabhängiger Response)
-    3. Physikalisch motivierte Kopplungen zwischen benachbarten Temperaturen
+    The coupling between channels is based on:
+    1. Common geometry (limb darkening)
+    2. Common active regions (with temperature-dependent response)
+    3. Physically motivated couplings between adjacent temperatures
 
     Args:
-        shape: Bildgröße
-        n_active_regions: Anzahl aktiver Regionen
-        seed: Random Seed
+        shape: Image size
+        n_active_regions: Number of active regions
+        seed: Random seed
 
     Returns:
         Dict[wavelength] -> image array
     """
     rng = np.random.default_rng(seed)
 
-    # Koordinaten-Grid
+    # Coordinate grid
     y, x = np.ogrid[:shape[0], :shape[1]]
     center = (shape[0] // 2, shape[1] // 2)
     r = np.sqrt((x - center[1])**2 + (y - center[0])**2)
@@ -299,16 +299,16 @@ def generate_multichannel_timeseries(
     cadence_minutes: int = 12
 ) -> List[Tuple[Dict[int, NDArray], str]]:
     """
-    Generiert Zeitreihe für alle Kanäle.
+    Generates time series for all channels.
 
     Args:
-        n_points: Anzahl Zeitpunkte
-        shape: Bildgröße
-        seed: Basis-Seed
-        cadence_minutes: Zeitabstand zwischen Bildern
+        n_points: Number of timepoints
+        shape: Image size
+        seed: Base seed
+        cadence_minutes: Time interval between images
 
     Returns:
-        Liste von (channels_dict, timestamp) Tupeln
+        List of (channels_dict, timestamp) tuples
     """
     results = []
     base_time = datetime.now()
@@ -342,17 +342,17 @@ def load_aia_multichannel(
     max_retries: int = 4  # Try JSOC + 3 mirrors (ROB, SDAC, CfA)
 ) -> Tuple[Optional[Dict[int, NDArray]], dict]:
     """
-    Lädt echte AIA-Daten für alle Kanäle zu einem Zeitpunkt.
+    Loads real AIA data for all channels at a timepoint.
 
     Args:
-        time_str: Zeitpunkt (ISO format)
-        wavelengths: Liste der Wellenlängen (default: alle 7)
-        data_dir: Verzeichnis für Downloads
-        cleanup: FITS-Dateien nach Laden löschen (default: True)
-        max_retries: Maximale Anzahl Versuche bei Download-Fehlern
+        time_str: Timepoint (ISO format)
+        wavelengths: List of wavelengths (default: all 7)
+        data_dir: Directory for downloads
+        cleanup: Delete FITS files after loading (default: True)
+        max_retries: Maximum number of retry attempts on download errors
 
     Returns:
-        (channels_dict, metadata) oder (None, {}) bei Fehler
+        (channels_dict, metadata) or (None, {}) on error
     """
     if wavelengths is None:
         wavelengths = WAVELENGTHS
@@ -384,8 +384,8 @@ def load_aia_multichannel(
             )
 
             if len(result) == 0 or len(result[0]) == 0:
-                print(f"    ⚠️  Keine Daten für {wl} Å gefunden")
-                # Cleanup bei Fehler
+                print(f"    ⚠️  No data found for {wl} A")
+                # Cleanup on error
                 for f in files_to_delete:
                     try:
                         Path(f).unlink()
@@ -393,7 +393,7 @@ def load_aia_multichannel(
                         pass
                 return None, {}
 
-            # Download mit Retry-Logik und Mirror-Fallback
+            # Download with retry logic and mirror fallback
             aia_map = None
             # Sites to try: default (JSOC), then mirrors
             sites_to_try = [None, 'rob', 'sdac', 'cfa']  # ROB=Belgium, SDAC=NASA, CfA=Harvard
@@ -401,7 +401,7 @@ def load_aia_multichannel(
             for attempt in range(max_retries):
                 site = sites_to_try[min(attempt, len(sites_to_try) - 1)]
                 try:
-                    # Lade erstes Ergebnis (mit optionalem Mirror)
+                    # Load first result (with optional mirror)
                     if site:
                         files = Fido.fetch(result[0, 0], path=data_dir + "/{file}", site=site)
                     else:
@@ -437,7 +437,7 @@ def load_aia_multichannel(
                             continue
 
                     files_to_delete.append(file_path)
-                    break  # Erfolg!
+                    break  # Success!
 
                 except Exception as e:
                     if attempt < max_retries - 1:
@@ -511,16 +511,16 @@ def load_aia_multichannel(
                 except Exception:
                     pass
 
-        # Garbage Collection erzwingen
+        # Force garbage collection
         gc.collect()
 
         return channels, metadata
 
     except ImportError:
-        print("  ⚠️  SunPy nicht installiert")
+        print("  ⚠️  SunPy not installed")
         return None, {}
     except Exception as e:
-        print(f"  ✗ Fehler beim Laden: {e}")
+        print(f"  ✗ Error loading: {e}")
         return None, {}
 
 
@@ -534,19 +534,19 @@ def load_aia_multichannel_timeseries(
     cleanup: bool = True
 ) -> List[Tuple[Optional[Dict[int, NDArray]], str]]:
     """
-    Lädt Zeitreihe echter AIA-Daten für alle Kanäle.
+    Loads time series of real AIA data for all channels.
 
     Args:
-        start_time: Startzeit (ISO format)
-        n_points: Anzahl Zeitpunkte
-        cadence_minutes: Zeitabstand
-        wavelengths: Wellenlängen (default: alle 7)
-        data_dir: Download-Verzeichnis
-        verbose: Ausgabe
-        cleanup: FITS-Dateien nach Laden löschen
+        start_time: Start time (ISO format)
+        n_points: Number of timepoints
+        cadence_minutes: Time interval
+        wavelengths: Wavelengths (default: all 7)
+        data_dir: Download directory
+        verbose: Output
+        cleanup: Delete FITS files after loading
 
     Returns:
-        Liste von (channels_dict, timestamp) Tupeln
+        List of (channels_dict, timestamp) tuples
     """
     import gc
 
@@ -562,7 +562,7 @@ def load_aia_multichannel_timeseries(
         timestamp = t.isoformat()
 
         if verbose:
-            print(f"    📥 Lade Zeitpunkt {i+1}/{n_points}: {timestamp[:19]}...")
+            print(f"    📥 Loading timepoint {i+1}/{n_points}: {timestamp[:19]}...")
 
         channels, metadata = load_aia_multichannel(
             timestamp,
@@ -573,16 +573,16 @@ def load_aia_multichannel_timeseries(
 
         if channels is not None:
             results.append((channels, timestamp))
-            failed_count = 0  # Reset bei Erfolg
+            failed_count = 0  # Reset on success
         else:
             failed_count += 1
             if verbose:
-                print(f"    ⚠️  Überspringe Zeitpunkt {timestamp}")
+                print(f"    ⚠️  Skipping timepoint {timestamp}")
 
-            # Abbruch bei zu vielen aufeinanderfolgenden Fehlern
+            # Abort on too many consecutive failures
             if failed_count >= max_consecutive_failures:
                 if verbose:
-                    print(f"    ✗ Abbruch: {max_consecutive_failures} aufeinanderfolgende Fehler")
+                    print(f"    ✗ Abort: {max_consecutive_failures} consecutive failures")
                 break
 
         t += timedelta(minutes=cadence_minutes)
@@ -609,9 +609,9 @@ def analyze_pair(
     seed: int = 42
 ) -> PairResult:
     """
-    Analysiert ein Wellenlängen-Paar.
+    Analyzes a wavelength pair.
 
-    Berechnet alle Metriken: MI, Residual MI, ΔMI_ring, ΔMI_sector.
+    Calculates all metrics: MI, Residual MI, delta_MI_ring, delta_MI_sector.
     """
     from solar_seed.null_model import compute_null_distribution, compute_z_score
 
@@ -646,7 +646,7 @@ def analyze_pair(
     )
     z_score = compute_z_score(mi_residual, mi_null_mean, mi_null_std)
 
-    # Temperatur-Differenz
+    # Temperature difference
     temp_1 = WAVELENGTH_TO_TEMP.get(wavelength_1, 1.0)
     temp_2 = WAVELENGTH_TO_TEMP.get(wavelength_2, 1.0)
     temp_diff = abs(temp_1 - temp_2)
@@ -669,14 +669,14 @@ def build_coupling_matrix(
     metric: str = "delta_mi_sector"
 ) -> CouplingMatrix:
     """
-    Baut Kopplungs-Matrix aus Paar-Ergebnissen.
+    Builds coupling matrix from pair results.
 
     Args:
-        pair_results: Liste von PairResult
-        metric: Welche Metrik ("delta_mi_sector", "mi_ratio", "delta_mi_ring")
+        pair_results: List of PairResult
+        metric: Which metric ("delta_mi_sector", "mi_ratio", "delta_mi_ring")
 
     Returns:
-        Symmetrische Kopplungs-Matrix
+        Symmetric coupling matrix
     """
     n = len(WAVELENGTHS)
     matrix = np.zeros((n, n))
@@ -695,7 +695,7 @@ def build_coupling_matrix(
             value = pr.delta_mi_sector
 
         matrix[i, j] = value
-        matrix[j, i] = value  # Symmetrisch
+        matrix[j, i] = value  # Symmetric
 
     return CouplingMatrix(
         wavelengths=WAVELENGTHS.copy(),
@@ -715,56 +715,56 @@ def run_multichannel_analysis(
     verbose: bool = True
 ) -> MultiChannelResult:
     """
-    Führt komplette Multi-Channel-Analyse durch.
+    Runs complete multi-channel analysis.
 
     Args:
-        n_hours: Analysezeitraum in Stunden
-        cadence_minutes: Zeitabstand zwischen Bildern
-        shape: Bildgröße (nur für synthetische Daten)
-        seed: Random Seed
-        output_dir: Output-Verzeichnis
-        use_real_data: Echte AIA-Daten verwenden
-        start_time_str: Startzeit für echte Daten (ISO format)
-        verbose: Ausführliche Ausgabe
+        n_hours: Analysis period in hours
+        cadence_minutes: Time interval between images
+        shape: Image size (only for synthetic data)
+        seed: Random seed
+        output_dir: Output directory
+        use_real_data: Use real AIA data
+        start_time_str: Start time for real data (ISO format)
+        verbose: Verbose output
 
     Returns:
-        MultiChannelResult mit allen Ergebnissen
+        MultiChannelResult with all results
     """
     import time
     start_time = time.time()
 
-    # Output-Verzeichnis
+    # Output directory
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     n_points = int(n_hours * 60 / cadence_minutes)
     n_pairs = len(WAVELENGTHS) * (len(WAVELENGTHS) - 1) // 2
 
-    data_source = "echten AIA" if use_real_data else "synthetischen"
+    data_source = "real AIA" if use_real_data else "synthetic"
 
     if verbose:
         print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║                🌞 MULTI-CHANNEL ANALYSE 🌱                              ║
+║                🌞 MULTI-CHANNEL ANALYSIS 🌱                             ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Konfiguration:
-    Datenquelle: {data_source}-Daten
-    Kanäle:      {len(WAVELENGTHS)} ({', '.join(str(w) for w in WAVELENGTHS)} Å)
-    Paare:       {n_pairs}
-    Zeitraum:    {n_hours} Stunden
-    Zeitpunkte:  {n_points}
-    Kadenz:      {cadence_minutes} min
+  Configuration:
+    Data source: {data_source} data
+    Channels:    {len(WAVELENGTHS)} ({', '.join(str(w) for w in WAVELENGTHS)} A)
+    Pairs:       {n_pairs}
+    Period:      {n_hours} hours
+    Timepoints:  {n_points}
+    Cadence:     {cadence_minutes} min
 """)
 
-    # Lade oder generiere Zeitreihe
+    # Load or generate time series
     if use_real_data:
         if start_time_str is None:
-            # Default: vor 24 Stunden starten
+            # Default: start 24 hours ago
             start_time_str = (datetime.now() - timedelta(hours=n_hours + 24)).isoformat()
 
         if verbose:
-            print(f"  📡 Lade echte AIA-Daten ab {start_time_str[:19]}...")
+            print(f"  📡 Loading real AIA data from {start_time_str[:19]}...")
 
         timeseries = load_aia_multichannel_timeseries(
             start_time=start_time_str,
@@ -796,11 +796,11 @@ def run_multichannel_analysis(
     }
 
     if verbose:
-        print(f"\n  🔬 Analysiere {n_points} Zeitpunkte × {n_pairs} Paare...")
+        print(f"\n  🔬 Analyzing {n_points} timepoints x {n_pairs} pairs...")
 
     for t_idx, (channels, timestamp) in enumerate(timeseries):
         if verbose and (t_idx + 1) % 10 == 0:
-            print(f"     Zeitpunkt {t_idx + 1}/{n_points}...")
+            print(f"     Timepoint {t_idx + 1}/{n_points}...")
 
         # Analyze all pairs for this timepoint
         for wl1, wl2 in combinations(WAVELENGTHS, 2):
@@ -814,11 +814,11 @@ def run_multichannel_analysis(
 
     # Aggregate over time: means per pair
     if verbose:
-        print("\n  📈 Aggregiere Ergebnisse...")
+        print("\n  📈 Aggregating results...")
 
     aggregated_pairs = []
     for (wl1, wl2), results in all_pair_results.items():
-        # Mittelwerte
+        # Means
         avg_result = PairResult(
             wavelength_1=wl1,
             wavelength_2=wl2,
@@ -832,12 +832,12 @@ def run_multichannel_analysis(
         )
         aggregated_pairs.append(avg_result)
 
-    # Baue Kopplungs-Matrizen
+    # Build coupling matrices
     coupling_sector = build_coupling_matrix(aggregated_pairs, "delta_mi_sector")
     coupling_ratio = build_coupling_matrix(aggregated_pairs, "mi_ratio")
     coupling_ring = build_coupling_matrix(aggregated_pairs, "delta_mi_ring")
 
-    # Statistiken
+    # Statistics
     all_sector = [p.delta_mi_sector for p in aggregated_pairs]
     all_ratio = [p.mi_ratio for p in aggregated_pairs]
 
@@ -861,9 +861,9 @@ def run_multichannel_analysis(
         }
     )
 
-    # Speichere Ergebnisse
+    # Save results
     if verbose:
-        print("\n  💾 Speichere Ergebnisse...")
+        print("\n  💾 Saving results...")
 
     save_multichannel_results(result, out_path)
 
@@ -878,9 +878,9 @@ def run_multichannel_analysis(
 # ============================================================================
 
 def save_multichannel_results(result: MultiChannelResult, output_dir: Path) -> None:
-    """Speichert alle Ergebnisse."""
+    """Saves all results."""
 
-    # 1. Kopplungs-Matrizen als Text
+    # 1. Coupling matrices as text
     with open(output_dir / "coupling_matrices.txt", "w") as f:
         f.write("COUPLING MATRICES (Multi-Channel Analysis)\n")
         f.write("=" * 70 + "\n\n")
@@ -906,7 +906,7 @@ def save_multichannel_results(result: MultiChannelResult, output_dir: Path) -> N
         f.write("-" * 50 + "\n")
         f.write(result.coupling_delta_ring.to_ascii() + "\n\n")
 
-    # 2. Paar-Details als CSV
+    # 2. Pair details as CSV
     with open(output_dir / "pair_results.csv", "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -945,25 +945,25 @@ def save_multichannel_results(result: MultiChannelResult, output_dir: Path) -> N
     with open(output_dir / "coupling_matrices.json", "w") as f:
         json.dump(matrix_data, f, indent=2)
 
-    # 4. Temperatur-Kopplung Analyse
+    # 4. Temperature coupling analysis
     with open(output_dir / "temperature_coupling.txt", "w") as f:
-        f.write("TEMPERATUR-KOPPLUNGS-ANALYSE\n")
+        f.write("TEMPERATURE COUPLING ANALYSIS\n")
         f.write("=" * 70 + "\n\n")
 
-        f.write("Hypothese: Benachbarte Temperaturschichten sollten stärker gekoppelt sein.\n\n")
+        f.write("Hypothesis: Adjacent temperature layers should be more strongly coupled.\n\n")
 
-        f.write("Paare sortiert nach ΔMI_sector (höchste Kopplung zuerst):\n")
+        f.write("Pairs sorted by delta_MI_sector (highest coupling first):\n")
         f.write("-" * 70 + "\n")
-        f.write(f"{'Paar':<15} {'ΔT (MK)':<10} {'ΔMI_sector':<12} {'Interpretation'}\n")
+        f.write(f"{'Pair':<15} {'dT (MK)':<10} {'dMI_sector':<12} {'Interpretation'}\n")
         f.write("-" * 70 + "\n")
 
         for pr in sorted(result.pair_results, key=lambda x: -x.delta_mi_sector):
             if pr.temperature_diff < 1.0:
-                interp = "← benachbart"
+                interp = "<- adjacent"
             elif pr.temperature_diff < 5.0:
                 interp = ""
             else:
-                interp = "← weit entfernt"
+                interp = "<- far apart"
 
             f.write(f"{pr.wavelength_1}-{pr.wavelength_2:<7} "
                     f"{pr.temperature_diff:<10.2f} "
@@ -972,28 +972,28 @@ def save_multichannel_results(result: MultiChannelResult, output_dir: Path) -> N
 
 
 def print_multichannel_summary(result: MultiChannelResult, duration: float) -> None:
-    """Gibt Zusammenfassung aus."""
+    """Prints summary."""
 
-    # Top und Bottom Paare nach Kopplung
+    # Top and bottom pairs by coupling
     sorted_pairs = sorted(result.pair_results, key=lambda x: -x.delta_mi_sector)
 
     print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║              🌞 MULTI-CHANNEL ERGEBNIS 🌱                               ║
+║              🌞 MULTI-CHANNEL RESULT 🌱                                 ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Zeitraum:    {result.hours} Stunden ({result.n_timepoints} Zeitpunkte)
-  Dauer:       {duration:.1f} Sekunden
+  Period:      {result.hours} hours ({result.n_timepoints} timepoints)
+  Duration:    {duration:.1f} seconds
 
   ════════════════════════════════════════════════════════════════════════
 
-  KOPPLUNGS-MATRIX (ΔMI_sector in bits):
+  COUPLING MATRIX (delta_MI_sector in bits):
 
 {result.coupling_delta_sector.to_ascii()}
 
   ════════════════════════════════════════════════════════════════════════
 
-  TOP 5 STÄRKSTE KOPPLUNGEN:
+  TOP 5 STRONGEST COUPLINGS:
 """)
 
     for i, pr in enumerate(sorted_pairs[:5], 1):
@@ -1004,7 +1004,7 @@ def print_multichannel_summary(result: MultiChannelResult, duration: float) -> N
               f"(ΔT = {pr.temperature_diff:.1f} MK)")
 
     print(f"""
-  BOTTOM 3 SCHWÄCHSTE KOPPLUNGEN:
+  BOTTOM 3 WEAKEST COUPLINGS:
 """)
 
     for i, pr in enumerate(sorted_pairs[-3:], 1):
@@ -1015,11 +1015,11 @@ def print_multichannel_summary(result: MultiChannelResult, duration: float) -> N
     print(f"""
   ════════════════════════════════════════════════════════════════════════
 
-  STATISTIK:
-    Mittlere Kopplung (ΔMI_sector): {result.mean_values.get('delta_mi_sector', 0):.4f} ± {result.std_values.get('delta_mi_sector', 0):.4f} bits
-    Mittleres MI Ratio:             {result.mean_values.get('mi_ratio', 0):.4f} ± {result.std_values.get('mi_ratio', 0):.4f}
+  STATISTICS:
+    Mean coupling (delta_MI_sector): {result.mean_values.get('delta_mi_sector', 0):.4f} +/- {result.std_values.get('delta_mi_sector', 0):.4f} bits
+    Mean MI Ratio:                   {result.mean_values.get('mi_ratio', 0):.4f} +/- {result.std_values.get('mi_ratio', 0):.4f}
 
-  OUTPUT-DATEIEN:
+  OUTPUT FILES:
     results/multichannel/coupling_matrices.txt
     results/multichannel/coupling_matrices.json
     results/multichannel/pair_results.csv
@@ -1034,31 +1034,31 @@ def print_multichannel_summary(result: MultiChannelResult, duration: float) -> N
 # ============================================================================
 
 def main():
-    """Hauptfunktion."""
+    """Main function."""
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Multi-Channel Analyse für Solar Seed",
+        description="Multi-channel analysis for Solar Seed",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Beispiele:
+Examples:
   python -m solar_seed.multichannel --hours 24
   python -m solar_seed.multichannel --hours 6 --cadence 6
   python -m solar_seed.multichannel --real --hours 2 --start "2024-01-15T12:00:00"
         """
     )
     parser.add_argument("--hours", type=float, default=24.0,
-                        help="Analysezeitraum in Stunden (default: 24)")
+                        help="Analysis period in hours (default: 24)")
     parser.add_argument("--cadence", type=int, default=12,
-                        help="Kadenz in Minuten (default: 12)")
+                        help="Cadence in minutes (default: 12)")
     parser.add_argument("--output", type=str, default="results/multichannel",
-                        help="Output-Verzeichnis")
+                        help="Output directory")
     parser.add_argument("--seed", type=int, default=42,
-                        help="Random Seed")
+                        help="Random seed")
     parser.add_argument("--real", action="store_true",
-                        help="Echte AIA-Daten verwenden")
+                        help="Use real AIA data")
     parser.add_argument("--start", type=str, default=None,
-                        help="Startzeit für echte Daten (ISO format)")
+                        help="Start time for real data (ISO format)")
 
     args = parser.parse_args()
 

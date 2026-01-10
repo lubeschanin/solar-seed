@@ -102,16 +102,16 @@ def run_single_test(
         data_2 = data_2[::ds, ::ds]
     
     print(f"\n  📐 Shape: {data_1.shape}")
-    
-    # MI berechnen
-    print(f"  🔬 Berechne MI...")
+
+    # Calculate MI
+    print(f"  🔬 Computing MI...")
     mi_real = mutual_information(data_1, data_2, config.n_bins)
     nmi_real = normalized_mutual_information(data_1, data_2, config.n_bins)
     print(f"     MI_real  = {mi_real:.6f} bits")
     print(f"     NMI_real = {nmi_real:.6f}")
     
-    # Nullmodell
-    print(f"  🎲 Nullmodell ({config.n_shuffles} Shuffles)...")
+    # Null model
+    print(f"  🎲 Null model ({config.n_shuffles} shuffles)...")
     mi_null_mean, mi_null_std, _ = compute_null_distribution(
         data_1, data_2, 
         n_shuffles=config.n_shuffles, 
@@ -121,16 +121,16 @@ def run_single_test(
     )
     print(f"     MI_null  = {mi_null_mean:.6f} ± {mi_null_std:.6f}")
     
-    # Statistik
+    # Statistics
     z_score = compute_z_score(mi_real, mi_null_mean, mi_null_std)
-    p_value = compute_p_value(mi_real, [])  # Vereinfacht
+    p_value = compute_p_value(mi_real, [])  # Simplified
     
-    # Empirischer p-Wert aus Z-Score (Normalapproximation)
+    # Empirical p-value from Z-score (normal approximation)
     from math import erfc, sqrt
     p_value = 0.5 * erfc(z_score / sqrt(2)) if z_score > 0 else 1.0
-    
+
     print(f"  📈 Z-Score  = {z_score:.2f}")
-    print(f"     p-Wert   = {p_value:.4f}")
+    print(f"     p-value  = {p_value:.4f}")
     
     status, interpretation = interpret_result(z_score, p_value)
     print(f"     Status   = {status}")
@@ -163,56 +163,56 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
 
     # TEST 1: Pure noise (null hypothesis true)
     print("\n" + "="*72)
-    print("TEST 1: VALIDIERUNG - Reines Rauschen (unabhängig)")
+    print("TEST 1: VALIDATION - Pure Noise (independent)")
     print("="*72)
-    print("  Erwartung: MI_real ≈ MI_null, Z ≈ 0")
-    
+    print("  Expectation: MI_real ≈ MI_null, Z ≈ 0")
+
     data_1, data_2 = generate_pure_noise(shape=(512, 512), seed=config.seed)
-    results.append(run_single_test(data_1, data_2, "Reines Rauschen", config))
+    results.append(run_single_test(data_1, data_2, "Pure Noise", config))
     
     # TEST 2: Correlated noise (alternative true)
     print("\n" + "="*72)
-    print("TEST 2: VALIDIERUNG - Korreliertes Rauschen (r=0.5)")
+    print("TEST 2: VALIDATION - Correlated Noise (r=0.5)")
     print("="*72)
-    print("  Erwartung: MI_real >> MI_null, Z >> 3")
-    
+    print("  Expectation: MI_real >> MI_null, Z >> 3")
+
     data_1, data_2 = generate_correlated_noise(shape=(512, 512), correlation=0.5, seed=config.seed)
-    results.append(run_single_test(data_1, data_2, "Korreliert (r=0.5)", config))
+    results.append(run_single_test(data_1, data_2, "Correlated (r=0.5)", config))
     
     # TEST 3: Synthetic sun - Geometry only
     print("\n" + "="*72)
-    print("TEST 3: SYNTHETISCHE SONNE - Nur gemeinsame Geometrie")
+    print("TEST 3: SYNTHETIC SUN - Geometry Only")
     print("="*72)
-    print("  Erwartung: MI_real > MI_null (wegen Geometrie)")
-    
+    print("  Expectation: MI_real > MI_null (due to geometry)")
+
     data_1, data_2 = generate_synthetic_sun(shape=(512, 512), extra_correlation=0.0, seed=config.seed)
-    results.append(run_single_test(data_1, data_2, "Sonne (Geometrie)", config))
+    results.append(run_single_test(data_1, data_2, "Sun (Geometry)", config))
     
     # TEST 4: Synthetic sun - With extra correlation
     print("\n" + "="*72)
-    print("TEST 4: SYNTHETISCHE SONNE - Mit extra Korrelation")
+    print("TEST 4: SYNTHETIC SUN - With Extra Correlation")
     print("="*72)
-    print("  Erwartung: MI_real > Test 3")
-    
+    print("  Expectation: MI_real > Test 3")
+
     data_1, data_2 = generate_synthetic_sun(shape=(512, 512), extra_correlation=0.5, seed=config.seed)
-    results.append(run_single_test(data_1, data_2, "Sonne (extra r=0.5)", config))
+    results.append(run_single_test(data_1, data_2, "Sun (extra r=0.5)", config))
     
     # TEST 5: Synthetic sun - Residuals (geometry only)
     print("\n" + "="*72)
-    print("TEST 5: RESIDUAL-ANALYSE - Sonne ohne Geometrie")
+    print("TEST 5: RESIDUAL ANALYSIS - Sun Without Geometry")
     print("="*72)
-    print("  Radiale Geometrie wird subtrahiert.")
-    print("  Erwartung: MI_residual << MI_original (Geometrie erklärt viel)")
+    print("  Radial geometry is subtracted.")
+    print("  Expectation: MI_residual << MI_original (geometry explains most)")
 
     data_1, data_2 = generate_synthetic_sun(shape=(512, 512), extra_correlation=0.0, seed=config.seed)
     residual_1, residual_2, _ = prepare_pair_for_residual_mi(data_1, data_2)
-    results.append(run_single_test(residual_1, residual_2, "Residual (Geometrie)", config))
+    results.append(run_single_test(residual_1, residual_2, "Residual (Geometry)", config))
 
     # TEST 6: Synthetic sun - Residuals with extra correlation
     print("\n" + "="*72)
-    print("TEST 6: RESIDUAL-ANALYSE - Mit extra Korrelation")
+    print("TEST 6: RESIDUAL ANALYSIS - With Extra Correlation")
     print("="*72)
-    print("  Erwartung: MI_residual > Test 5 (extra Korrelation überlebt)")
+    print("  Expectation: MI_residual > Test 5 (extra correlation survives)")
 
     data_1, data_2 = generate_synthetic_sun(shape=(512, 512), extra_correlation=0.5, seed=config.seed)
     residual_1, residual_2, _ = prepare_pair_for_residual_mi(data_1, data_2)
@@ -221,7 +221,7 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
     # TEST 7: Real data (optional)
     if use_real_data:
         print("\n" + "="*72)
-        print("TEST 7: ECHTE SONNENDATEN")
+        print("TEST 7: REAL SOLAR DATA")
         print("="*72)
         
         data_1, data_2 = load_sunpy_sample()
@@ -229,8 +229,8 @@ def run_all_tests(config: TestConfig, use_real_data: bool = False) -> list[TestR
         if data_1 is not None:
             results.append(run_single_test(data_1, data_2, "AIA Sample", config))
         else:
-            print("  ⚠️  Keine echten Daten verfügbar")
-            print("  → Installiere: pip install sunpy")
+            print("  ⚠️  No real data available")
+            print("  → Install with: pip install sunpy")
     
     return results
 
@@ -239,7 +239,7 @@ def print_summary(results: list[TestResult]) -> None:
     """Prints summary."""
     
     print("\n" + "="*72)
-    print("ZUSAMMENFASSUNG")
+    print("SUMMARY")
     print("="*72)
     
     print(f"\n  {'Test':<22} {'MI_real':>10} {'MI_null':>12} {'Z':>8} {'Status':<20}")
@@ -256,9 +256,9 @@ def run_spatial_analysis(config: TestConfig) -> None:
     Shows where on the (synthetic) Sun the highest residual MI is.
     """
     print("\n" + "="*72)
-    print("RÄUMLICHE MI-ANALYSE")
+    print("SPATIAL MI ANALYSIS")
     print("="*72)
-    print("  Wo auf der Sonne ist die Residual-MI am höchsten?")
+    print("  Where on the Sun is the residual MI highest?")
 
     # Generate synthetic sun with extra correlation
     data_1, data_2 = generate_synthetic_sun(
@@ -268,9 +268,9 @@ def run_spatial_analysis(config: TestConfig) -> None:
         seed=config.seed
     )
 
-    print(f"\n  📐 Bildgröße: {data_1.shape}")
+    print(f"\n  📐 Image size: {data_1.shape}")
     print(f"  🔲 Grid: 8x8")
-    print(f"  🔬 Berechne räumliche MI-Karten...")
+    print(f"  🔬 Computing spatial MI maps...")
 
     result = compute_spatial_residual_mi_map(
         data_1, data_2,
@@ -278,7 +278,7 @@ def run_spatial_analysis(config: TestConfig) -> None:
         bins=32
     )
 
-    print_spatial_comparison(result, "Synthetische Sonne mit Extra-Korrelation")
+    print_spatial_comparison(result, "Synthetic Sun with Extra Correlation")
 
 
 def run_control_tests(config: TestConfig) -> None:
@@ -288,9 +288,9 @@ def run_control_tests(config: TestConfig) -> None:
     Tests whether the measured residual MI is caused by artifacts.
     """
     print("\n" + "="*72)
-    print("KONTROLL-TESTS")
+    print("CONTROL TESTS")
     print("="*72)
-    print("  Validierung der Residual-MI Messung")
+    print("  Validation of residual MI measurement")
 
     # Generate synthetic sun with extra correlation
     data_1, data_2 = generate_synthetic_sun(
@@ -300,8 +300,8 @@ def run_control_tests(config: TestConfig) -> None:
         seed=config.seed
     )
 
-    print(f"\n  📐 Bildgröße: {data_1.shape}")
-    print(f"  🔬 Führe Kontroll-Tests durch...")
+    print(f"\n  📐 Image size: {data_1.shape}")
+    print(f"  🔬 Running control tests...")
 
     result = run_all_controls(
         data_1, data_2,
@@ -321,30 +321,30 @@ def print_interpretation() -> None:
 
   INTERPRETATION:
 
-  Test 1 (Rauschen):     Z ≈ 0 → Nullmodell funktioniert ✓
-  Test 2 (Korreliert):   Z >> 3 → MI-Berechnung funktioniert ✓
-  Test 3 (Geometrie):    Z > 0 → Gemeinsame Geometrie erzeugt MI
-  Test 4 (Extra Korr.):  Z >> Test 3 → Extra-Korrelation detektierbar
+  Test 1 (Noise):        Z ≈ 0 → Null model works ✓
+  Test 2 (Correlated):   Z >> 3 → MI calculation works ✓
+  Test 3 (Geometry):     Z > 0 → Shared geometry creates MI
+  Test 4 (Extra Corr.):  Z >> Test 3 → Extra correlation detectable
 
-  RESIDUAL-ANALYSE (NEU):
+  RESIDUAL ANALYSIS (NEW):
 
-  Test 5 (Residual):     MI << Test 3 → Geometrie-Subtraktion funktioniert
-  Test 6 (Res. + Korr.): MI > Test 5 → Extra-Korrelation überlebt Subtraktion
+  Test 5 (Residual):     MI << Test 3 → Geometry subtraction works
+  Test 6 (Res. + Corr.): MI > Test 5 → Extra correlation survives subtraction
 
-  SCHLÜSSEL-VERGLEICH:
+  KEY COMPARISON:
 
-  Vergleiche Test 3 vs Test 5:
-  - MI_residual << MI_original → Geometrie erklärt (fast) alles
-  - MI_residual ≈ MI_original → Geometrie erklärt wenig (unwahrscheinlich)
+  Compare Test 3 vs Test 5:
+  - MI_residual << MI_original → Geometry explains (almost) everything
+  - MI_residual ≈ MI_original → Geometry explains little (unlikely)
 
-  Vergleiche Test 5 vs Test 6:
-  - Wenn MI_6 >> MI_5 → Extra-Korrelation ist NICHT geometrisch
-  - Das ist die "versteckte Information"
+  Compare Test 5 vs Test 6:
+  - If MI_6 >> MI_5 → Extra correlation is NOT geometric
+  - This is the "hidden information"
 
 ═══════════════════════════════════════════════════════════════════════
 
-  "Die Frage ist nicht, ob Struktur existiert.
-   Die Frage ist, ob sie erklärbar ist."
+  "The question is not whether structure exists.
+   The question is whether it is explainable."
 
   ☀️ → 🔬 → ?
 
@@ -353,7 +353,7 @@ def print_interpretation() -> None:
 
 
 def save_results(results: list[TestResult], output_dir: str) -> None:
-    """Speichert Ergebnisse als JSON."""
+    """Saves results as JSON."""
     
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     output_file = Path(output_dir) / "hypothesis_test_results.json"
@@ -361,7 +361,7 @@ def save_results(results: list[TestResult], output_dir: str) -> None:
     with open(output_file, 'w') as f:
         json.dump([asdict(r) for r in results], f, indent=2)
     
-    print(f"\n  💾 Gespeichert: {output_file}")
+    print(f"\n  💾 Saved: {output_file}")
 
 
 # ============================================================================
@@ -369,13 +369,13 @@ def save_results(results: list[TestResult], output_dir: str) -> None:
 # ============================================================================
 
 def main():
-    """Hauptfunktion."""
-    
+    """Main function."""
+
     parser = argparse.ArgumentParser(
         description="Solar Seed Hypothesis Test",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Beispiele:
+Examples:
   python -m solar_seed.hypothesis_test
   python -m solar_seed.hypothesis_test --real-data
   python -m solar_seed.hypothesis_test --spatial
@@ -384,19 +384,19 @@ Beispiele:
         """
     )
     parser.add_argument("--real-data", action="store_true",
-                        help="Versuche echte Sonnendaten zu laden")
+                        help="Try to load real solar data")
     parser.add_argument("--spatial", action="store_true",
-                        help="Führe räumliche MI-Analyse durch (8x8 Grid)")
+                        help="Run spatial MI analysis (8x8 grid)")
     parser.add_argument("--controls", action="store_true",
-                        help="Führe Kontroll-Tests durch (C1-C4)")
+                        help="Run control tests (C1-C4)")
     parser.add_argument("--shuffles", type=int, default=100,
-                        help="Anzahl Shuffles für Nullmodell (default: 100)")
+                        help="Number of shuffles for null model (default: 100)")
     parser.add_argument("--bins", type=int, default=64,
-                        help="Anzahl Bins für MI-Berechnung (default: 64)")
+                        help="Number of bins for MI calculation (default: 64)")
     parser.add_argument("--downsample", type=int, default=8,
-                        help="Downsampling-Faktor (default: 8)")
+                        help="Downsampling factor (default: 8)")
     parser.add_argument("--output", type=str, default="results",
-                        help="Output-Verzeichnis (default: results)")
+                        help="Output directory (default: results)")
     
     args = parser.parse_args()
     
@@ -411,9 +411,9 @@ Beispiele:
 ╔═══════════════════════════════════════════════════════════════════════╗
 ║                    🌞 SOLAR SEED HYPOTHESIS TEST 🌱                    ║
 ║                                                                        ║
-║  EINE Hypothese. EIN Test. EINE Antwort.                              ║
+║  ONE hypothesis. ONE test. ONE answer.                                ║
 ║                                                                        ║
-║  H1: MI zwischen AIA-Kanälen > als durch Zufall erklärbar            ║
+║  H1: MI between AIA channels > than explainable by chance            ║
 ╚═══════════════════════════════════════════════════════════════════════╝
     """)
     

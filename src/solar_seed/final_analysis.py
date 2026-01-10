@@ -185,18 +185,18 @@ def analyze_timescale(
     verbose: bool = True
 ) -> TimescaleResult:
     """
-    Analysiert eine Zeitskala und gibt Ranking der Paare zurück.
+    Analyzes a timescale and returns pair rankings.
 
     Args:
-        n_hours: Zeitraum
-        cadence_minutes: Kadenz
+        n_hours: Time period
+        cadence_minutes: Cadence
         seed: Random Seed
-        use_real_data: Echte Daten verwenden
-        start_time_str: Startzeit
-        verbose: Ausführliche Ausgabe
+        use_real_data: Use real data
+        start_time_str: Start time
+        verbose: Verbose output
 
     Returns:
-        TimescaleResult mit Rankings
+        TimescaleResult with rankings
     """
     n_points = max(1, int(n_hours * 60 / cadence_minutes))
 
@@ -254,7 +254,7 @@ def compare_timescales(
     long_result: TimescaleResult
 ) -> TimescaleComparison:
     """
-    Vergleicht zwei Zeitskalen und berechnet Korrelationen.
+    Compares two timescales and calculates correlations.
     """
     pairs = list(short_result.pair_rankings.keys())
 
@@ -272,7 +272,7 @@ def compare_timescales(
     long_top5 = set(p for p, r in long_result.pair_rankings.items() if r <= 5)
     top5_overlap = len(short_top5 & long_top5)
 
-    # Rang-Differenzen
+    # Rank differences
     rank_changes = {
         pair: abs(short_result.pair_rankings[pair] - long_result.pair_rankings[pair])
         for pair in pairs
@@ -292,7 +292,7 @@ def compare_timescales(
 
 def run_timescale_comparison(
     short_hours: float = 24.0,
-    long_hours: float = 648.0,  # 27 Tage
+    long_hours: float = 648.0,  # 27 days
     cadence_minutes: int = 12,
     seed: int = 42,
     output_dir: str = "results/final",
@@ -303,13 +303,13 @@ def run_timescale_comparison(
     Runs the timescale comparison.
 
     Args:
-        short_hours: Kurze Zeitskala (default: 24h)
-        long_hours: Lange Zeitskala (default: 27 Tage = 648h)
-        cadence_minutes: Kadenz
+        short_hours: Short timescale (default: 24h)
+        long_hours: Long timescale (default: 27 days = 648h)
+        cadence_minutes: Cadence
         seed: Random Seed
-        output_dir: Output-Verzeichnis
-        use_real_data: Echte Daten
-        verbose: Ausführliche Ausgabe
+        output_dir: Output directory
+        use_real_data: Real data
+        verbose: Verbose output
 
     Returns:
         TimescaleComparison
@@ -320,14 +320,14 @@ def run_timescale_comparison(
     if verbose:
         print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║            📊 ZEITSKALEN-VERGLEICH (FINALE ANALYSE 1)                  ║
+║            📊 TIMESCALE COMPARISON (FINAL ANALYSIS 1)                  ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Frage: Bleibt die Temperatur-Ordnung über verschiedene Zeitskalen stabil?
+  Question: Does the temperature ordering remain stable across different timescales?
 
-  Zeitskalen:
-    Kurz:  {short_hours}h
-    Lang:  {long_hours}h ({long_hours/24:.0f} Tage)
+  Timescales:
+    Short: {short_hours}h
+    Long:  {long_hours}h ({long_hours/24:.0f} days)
 """)
 
     # Analyze both timescales
@@ -363,24 +363,24 @@ def save_timescale_results(result: TimescaleComparison, output_dir: Path) -> Non
     """Saves timescale results."""
 
     with open(output_dir / "timescale_comparison.txt", "w") as f:
-        f.write("ZEITSKALEN-VERGLEICH\n")
+        f.write("TIMESCALE COMPARISON\n")
         f.write("=" * 70 + "\n\n")
 
-        f.write(f"Kurze Zeitskala: {result.short_scale.timescale_hours}h "
+        f.write(f"Short timescale: {result.short_scale.timescale_hours}h "
                 f"({result.short_scale.n_points} timepoints)\n")
         f.write(f"Long timescale: {result.long_scale.timescale_hours}h "
                 f"({result.long_scale.n_points} timepoints)\n\n")
 
-        f.write("KORRELATIONEN:\n")
+        f.write("CORRELATIONS:\n")
         f.write("-" * 40 + "\n")
-        f.write(f"Spearman ρ: {result.spearman_rho:.4f} (p = {result.spearman_p:.2e})\n")
-        f.write(f"Kendall τ:  {result.kendall_tau:.4f} (p = {result.kendall_p:.2e})\n\n")
+        f.write(f"Spearman rho: {result.spearman_rho:.4f} (p = {result.spearman_p:.2e})\n")
+        f.write(f"Kendall tau:  {result.kendall_tau:.4f} (p = {result.kendall_p:.2e})\n\n")
 
         f.write(f"Top-5 Overlap: {result.top5_overlap}/5\n\n")
 
-        f.write("RANKING-VERGLEICH:\n")
+        f.write("RANKING COMPARISON:\n")
         f.write("-" * 70 + "\n")
-        f.write(f"{'Paar':<12} {'Rang (kurz)':<12} {'Rang (lang)':<12} {'Differenz'}\n")
+        f.write(f"{'Pair':<12} {'Rank (short)':<12} {'Rank (long)':<12} {'Difference'}\n")
         f.write("-" * 70 + "\n")
 
         pairs = sorted(result.short_scale.pair_rankings.keys(),
@@ -425,25 +425,25 @@ def save_timescale_results(result: TimescaleComparison, output_dir: Path) -> Non
 def print_timescale_summary(result: TimescaleComparison) -> None:
     """Prints summary."""
 
-    stability = "STABIL" if result.spearman_rho > 0.8 else "VARIABEL" if result.spearman_rho > 0.5 else "INSTABIL"
+    stability = "STABLE" if result.spearman_rho > 0.8 else "VARIABLE" if result.spearman_rho > 0.5 else "UNSTABLE"
 
     print(f"""
   ════════════════════════════════════════════════════════════════════════
 
-  ERGEBNIS:
+  RESULT:
 
-    Spearman ρ = {result.spearman_rho:.4f}  (p = {result.spearman_p:.2e})
-    Kendall τ  = {result.kendall_tau:.4f}  (p = {result.kendall_p:.2e})
+    Spearman rho = {result.spearman_rho:.4f}  (p = {result.spearman_p:.2e})
+    Kendall tau  = {result.kendall_tau:.4f}  (p = {result.kendall_p:.2e})
 
-    Top-5 Overlap: {result.top5_overlap}/5 Paare stimmen überein
+    Top-5 Overlap: {result.top5_overlap}/5 pairs match
 
-    → Ordnung ist {stability}
+    -> Ordering is {stability}
 
   INTERPRETATION:
-    {'✓ Die Temperatur-Kopplung bleibt über Zeitskalen erhalten.' if result.spearman_rho > 0.7 else
-     '⚠ Die Kopplung variiert mit Zeitskala - dynamische Effekte.' if result.spearman_rho > 0.4 else
-     '✗ Keine stabile Ordnung - Kopplung ist zeitabhängig.'}
-    {'  Dies unterstützt die physikalische Interpretation.' if result.spearman_rho > 0.7 else ''}
+    {'+ Temperature coupling remains preserved across timescales.' if result.spearman_rho > 0.7 else
+     '! Coupling varies with timescale - dynamic effects.' if result.spearman_rho > 0.4 else
+     '- No stable ordering - coupling is time-dependent.'}
+    {'  This supports the physical interpretation.' if result.spearman_rho > 0.7 else ''}
 
 ═══════════════════════════════════════════════════════════════════════
 """)
@@ -465,17 +465,17 @@ def run_activity_conditioning(
     """
     Runs activity conditioning.
 
-    Uses 94Å as proxy for solar activity and calculates
-    ΔMI_sector for different activity levels.
+    Uses 94A as proxy for solar activity and calculates
+    delta_MI_sector for different activity levels.
 
     Args:
-        n_hours: Zeitraum
-        cadence_minutes: Kadenz
-        n_bins: Anzahl Aktivitäts-Bins
+        n_hours: Time period
+        cadence_minutes: Cadence
+        n_bins: Number of activity bins
         seed: Random Seed
-        output_dir: Output-Verzeichnis
-        use_real_data: Echte Daten
-        verbose: Ausführliche Ausgabe
+        output_dir: Output directory
+        use_real_data: Real data
+        verbose: Verbose output
 
     Returns:
         ActivityConditioningResult
@@ -488,18 +488,18 @@ def run_activity_conditioning(
     if verbose:
         print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║          🔥 AKTIVITÄTS-KONDITIONIERUNG (FINALE ANALYSE 2)              ║
+║          🔥 ACTIVITY CONDITIONING (FINAL ANALYSIS 2)                   ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Frage: Korreliert ΔMI_sector mit Sonnenaktivität (94Å-Proxy)?
+  Question: Does delta_MI_sector correlate with solar activity (94A proxy)?
 
-  Methode:
-    1. Berechne mittlere 94Å-Intensität pro Zeitpunkt
-    2. Teile Zeitpunkte in {n_bins} Aktivitäts-Bins
-    3. Berechne ΔMI_sector pro Bin für alle Paare
-    4. Korreliere Aktivität mit Kopplung
+  Method:
+    1. Calculate mean 94A intensity per timepoint
+    2. Divide timepoints into {n_bins} activity bins
+    3. Calculate delta_MI_sector per bin for all pairs
+    4. Correlate activity with coupling
 
-  Zeitraum: {n_hours}h ({n_points} Zeitpunkte)
+  Time period: {n_hours}h ({n_points} timepoints)
 """)
 
     # Generate or load data
@@ -563,7 +563,7 @@ def run_activity_conditioning(
         if len(bin_data) == 0:
             continue
 
-        # Mittlere Werte pro Paar
+        # Mean values per pair
         pair_values: Dict[Tuple[int, int], float] = {}
         pair_stds: Dict[Tuple[int, int], float] = {}
 
@@ -581,7 +581,7 @@ def run_activity_conditioning(
         ))
 
     if verbose:
-        print(f"  📈 Berechne Korrelationen...")
+        print(f"  📈 Computing correlations...")
 
     # Correlation between activity and coupling per pair
     activity_vs_coupling: Dict[Tuple[int, int], Tuple[float, float]] = {}
@@ -620,12 +620,12 @@ def save_activity_results(result: ActivityConditioningResult, output_dir: Path) 
     """Saves activity results."""
 
     with open(output_dir / "activity_conditioning.txt", "w") as f:
-        f.write("AKTIVITÄTS-KONDITIONIERUNG\n")
+        f.write("ACTIVITY CONDITIONING\n")
         f.write("=" * 70 + "\n\n")
 
-        f.write("94Å als Proxy für Sonnenaktivität\n\n")
+        f.write("94A as proxy for solar activity\n\n")
 
-        f.write("AKTIVITÄTS-BINS:\n")
+        f.write("ACTIVITY BINS:\n")
         f.write("-" * 70 + "\n")
 
         for bin in result.bins:
@@ -637,19 +637,19 @@ def save_activity_results(result: ActivityConditioningResult, output_dir: Path) 
                 f.write(f"  {pair[0]}-{pair[1]}: ΔMI_sector = {value:.4f}\n")
 
         f.write("\n" + "=" * 70 + "\n")
-        f.write("\nKORRELATION AKTIVITÄT ↔ KOPPLUNG:\n")
+        f.write("\nCORRELATION ACTIVITY <-> COUPLING:\n")
         f.write("-" * 50 + "\n")
-        f.write(f"{'Paar':<12} {'Pearson r':<12} {'p-Wert':<15} {'Interpretation'}\n")
+        f.write(f"{'Pair':<12} {'Pearson r':<12} {'p-value':<15} {'Interpretation'}\n")
         f.write("-" * 50 + "\n")
 
         for pair, (r, p) in sorted(result.activity_vs_coupling.items(),
                                     key=lambda x: -abs(x[1][0])):
             if abs(r) > 0.5:
-                interp = "stark" + (" positiv" if r > 0 else " negativ")
+                interp = "strong" + (" positive" if r > 0 else " negative")
             elif abs(r) > 0.3:
-                interp = "moderat"
+                interp = "moderate"
             else:
-                interp = "schwach"
+                interp = "weak"
 
             f.write(f"{pair[0]}-{pair[1]:<7} {r:<12.4f} {p:<15.2e} {interp}\n")
 
@@ -685,7 +685,7 @@ def print_activity_summary(result: ActivityConditioningResult) -> None:
     print(f"""
   ════════════════════════════════════════════════════════════════════════
 
-  AKTIVITÄTS-BINS:
+  ACTIVITY BINS:
 """)
 
     for bin in result.bins:
@@ -694,7 +694,7 @@ def print_activity_summary(result: ActivityConditioningResult) -> None:
     print(f"""
   ────────────────────────────────────────────────────────────────────────
 
-  TOP 5 AKTIVITÄTSABHÄNGIGE PAARE:
+  TOP 5 ACTIVITY-DEPENDENT PAIRS:
 """)
 
     for i, (pair, r) in enumerate(result.most_activity_dependent, 1):
@@ -711,16 +711,16 @@ def print_activity_summary(result: ActivityConditioningResult) -> None:
         print(f"""
   ────────────────────────────────────────────────────────────────────────
 
-  BEISPIEL: {top_pair[0]}-{top_pair[1]} Å
+  EXAMPLE: {top_pair[0]}-{top_pair[1]} A
 
-    Ruhig:  ΔMI_sector = {quiet_val:.4f} bits
-    Aktiv:  ΔMI_sector = {active_val:.4f} bits
-    Änderung: {change:+.1f}%
+    Quiet:  delta_MI_sector = {quiet_val:.4f} bits
+    Active: delta_MI_sector = {active_val:.4f} bits
+    Change: {change:+.1f}%
 
   INTERPRETATION:
-    {'✓ Starke Aktivitätsabhängigkeit: Kopplung variiert mit Sonnenaktivität.' if abs(change) > 20 else
-     '~ Moderate Aktivitätsabhängigkeit.' if abs(change) > 10 else
-     '○ Schwache Aktivitätsabhängigkeit: Kopplung ist relativ stabil.'}
+    {'+ Strong activity dependence: Coupling varies with solar activity.' if abs(change) > 20 else
+     '~ Moderate activity dependence.' if abs(change) > 10 else
+     'o Weak activity dependence: Coupling is relatively stable.'}
 
 ═══════════════════════════════════════════════════════════════════════
 """)
@@ -906,7 +906,7 @@ def git_push_checkpoint(checkpoint_path: Path, current: int, total: int) -> None
 
 
 def run_rotation_analysis(
-    hours: float = 648.0,  # 27 Tage
+    hours: float = 648.0,  # 27 days
     cadence_minutes: int = 60,  # Hourly cadence
     seed: int = 42,
     output_dir: str = "results/rotation",
@@ -922,13 +922,13 @@ def run_rotation_analysis(
     Analyzes coupling stability over a complete solar rotation.
 
     Args:
-        hours: Zeitraum (default: 648h = 27 Tage)
-        cadence_minutes: Kadenz (default: 60 min für Effizienz)
+        hours: Time period (default: 648h = 27 days)
+        cadence_minutes: Cadence (default: 60 min for efficiency)
         seed: Random Seed
-        output_dir: Output-Verzeichnis
-        use_real_data: Echte AIA-Daten verwenden
-        start_time_str: Startzeit (ISO format)
-        verbose: Ausführliche Ausgabe
+        output_dir: Output directory
+        use_real_data: Use real AIA data
+        start_time_str: Start time (ISO format)
+        verbose: Verbose output
 
     Returns:
         RotationAnalysisResult
@@ -960,9 +960,9 @@ def run_rotation_analysis(
     Processing:   {parallel_info}
 """)
 
-    # Bestimme Start- und Endzeit
+    # Determine start and end time
     if start_time_str is None:
-        # Default: 27 Tage vor jetzt
+        # Default: 27 days before now
         start_time = datetime.now() - timedelta(hours=hours)
         start_time_str = start_time.isoformat()
     else:
@@ -1188,7 +1188,7 @@ def save_rotation_results(
         for pair, corr in sorted_by_autocorr[-5:]:
             f.write(f"  {pair[0]}-{pair[1]} Å: r = {corr:.3f}\n")
 
-    # 2. Zeitreihen als CSV
+    # 2. Timeseries as CSV
     import csv
     with open(output_dir / "coupling_evolution.csv", "w", newline="") as f:
         writer = csv.writer(f)
@@ -1238,15 +1238,15 @@ def print_rotation_summary(result: RotationAnalysisResult) -> None:
 
     print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║              🌞 ROTATIONSANALYSE ERGEBNIS 🌱                            ║
+║              🌞 ROTATION ANALYSIS RESULT 🌱                             ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Zeitraum: {result.start_time[:10]} → {result.end_time[:10]}
-  Dauer:    {result.hours/24:.1f} Tage ({result.n_points} Datenpunkte)
+  Period:   {result.start_time[:10]} -> {result.end_time[:10]}
+  Duration: {result.hours/24:.1f} days ({result.n_points} data points)
 
   ════════════════════════════════════════════════════════════════════════
 
-  TOP 5 STÄRKSTE KOPPLUNGEN (27-Tage-Mittel):
+  TOP 5 STRONGEST COUPLINGS (27-day mean):
 """)
 
     for i, (pair, mean) in enumerate(sorted_pairs[:5], 1):
@@ -1257,14 +1257,14 @@ def print_rotation_summary(result: RotationAnalysisResult) -> None:
     print(f"""
   ────────────────────────────────────────────────────────────────────────
 
-  ZEITLICHE STABILITÄT:
+  TEMPORAL STABILITY:
 
-    Mittlere Autokorrelation: {mean_autocorr:.3f}
-    → {'Hohe zeitliche Stabilität' if mean_autocorr > 0.7 else 'Moderate Stabilität' if mean_autocorr > 0.4 else 'Variable Kopplung'}
+    Mean autocorrelation: {mean_autocorr:.3f}
+    -> {'High temporal stability' if mean_autocorr > 0.7 else 'Moderate stability' if mean_autocorr > 0.4 else 'Variable coupling'}
 
   ────────────────────────────────────────────────────────────────────────
 
-  OUTPUT-DATEIEN:
+  OUTPUT FILES:
     results/rotation/rotation_analysis.txt
     results/rotation/rotation_analysis.json
     results/rotation/coupling_evolution.csv
@@ -1303,17 +1303,17 @@ def run_segment_analysis(
     verbose: bool = True
 ) -> Optional[SegmentResult]:
     """
-    Analysiert ein einzelnes Segment (einen Tag).
+    Analyzes a single segment (one day).
 
     Args:
-        date: Datum im Format YYYY-MM-DD
-        cadence_minutes: Kadenz in Minuten
+        date: Date in format YYYY-MM-DD
+        cadence_minutes: Cadence in minutes
         seed: Random seed
-        output_dir: Output-Verzeichnis
-        verbose: Ausführliche Ausgabe
+        output_dir: Output directory
+        verbose: Verbose output
 
     Returns:
-        SegmentResult oder None bei Fehler
+        SegmentResult or None on error
     """
     import os
     import gc
@@ -1381,7 +1381,7 @@ def run_segment_analysis(
 
             if failed_count >= 10:
                 if verbose:
-                    print(f"    ✗ Abbruch: 10 aufeinanderfolgende Fehler")
+                    print(f"    ✗ Abort: 10 consecutive failures")
                 break
 
         t += timedelta(minutes=cadence_minutes)
@@ -1415,7 +1415,7 @@ def run_segment_analysis(
     save_segment(result, segment_file)
 
     if verbose:
-        print(f"    ✓ Segment {date}: {len(timestamps)} Punkte gespeichert")
+        print(f"    ✓ Segment {date}: {len(timestamps)} points saved")
 
     return result
 
@@ -1453,12 +1453,12 @@ def aggregate_segments(
     Aggregates all available segments into an overall result.
 
     Args:
-        segment_dir: Verzeichnis mit Segment-Dateien
-        output_dir: Output-Verzeichnis für aggregiertes Ergebnis
-        verbose: Ausführliche Ausgabe
+        segment_dir: Directory with segment files
+        output_dir: Output directory for aggregated result
+        verbose: Verbose output
 
     Returns:
-        RotationAnalysisResult oder None
+        RotationAnalysisResult or None
     """
     seg_path = Path(segment_dir)
     out_path = Path(output_dir)
@@ -1469,11 +1469,11 @@ def aggregate_segments(
 
     if not segment_files:
         if verbose:
-            print("  ✗ Keine Segmente gefunden")
+            print("  ✗ No segments found")
         return None
 
     if verbose:
-        print(f"\n  📊 Aggregiere {len(segment_files)} Segmente...")
+        print(f"\n  📊 Aggregating {len(segment_files)} segments...")
 
     # Load all segments
     segments: List[SegmentResult] = []
@@ -1481,7 +1481,7 @@ def aggregate_segments(
         seg = load_segment(sf)
         segments.append(seg)
         if verbose:
-            print(f"    ✓ {seg.date}: {seg.n_points} Punkte")
+            print(f"    ✓ {seg.date}: {seg.n_points} points")
 
     # Combine data
     all_timestamps: List[str] = []
@@ -1539,7 +1539,7 @@ def aggregate_segments(
     save_rotation_results(result, out_path, all_timestamps)
 
     if verbose:
-        print(f"\n  ✓ Aggregiert: {len(segments)} Tage, {len(all_timestamps)} Punkte")
+        print(f"\n  ✓ Aggregated: {len(segments)} days, {len(all_timestamps)} points")
         print(f"    → {out_path / 'rotation_analysis.json'}")
 
     return result
@@ -1551,15 +1551,15 @@ def convert_checkpoint_to_segments(
     verbose: bool = True
 ) -> int:
     """
-    Konvertiert bestehenden monolithischen Checkpoint in Segmente.
+    Converts existing monolithic checkpoint to segments.
 
     Args:
-        checkpoint_path: Pfad zum Checkpoint
-        output_dir: Output-Verzeichnis für Segmente
-        verbose: Ausführliche Ausgabe
+        checkpoint_path: Path to checkpoint
+        output_dir: Output directory for segments
+        verbose: Verbose output
 
     Returns:
-        Anzahl erstellter Segmente
+        Number of created segments
     """
     ckpt_path = Path(checkpoint_path)
     out_path = Path(output_dir)
@@ -1567,7 +1567,7 @@ def convert_checkpoint_to_segments(
 
     if not ckpt_path.exists():
         if verbose:
-            print(f"  ✗ Checkpoint nicht gefunden: {checkpoint_path}")
+            print(f"  ✗ Checkpoint not found: {checkpoint_path}")
         return 0
 
     # Load checkpoint
@@ -1579,11 +1579,11 @@ def convert_checkpoint_to_segments(
 
     if not timestamps:
         if verbose:
-            print("  ✗ Keine Daten im Checkpoint")
+            print("  ✗ No data in checkpoint")
         return 0
 
     if verbose:
-        print(f"\n  📦 Konvertiere {len(timestamps)} Zeitpunkte zu Segmenten...")
+        print(f"\n  📦 Converting {len(timestamps)} timepoints to segments...")
 
     # Group by date
     from collections import defaultdict
@@ -1602,7 +1602,7 @@ def convert_checkpoint_to_segments(
 
         if segment_file.exists():
             if verbose:
-                print(f"    ⏭️  {date}: bereits vorhanden")
+                print(f"    ⏭️  {date}: already exists")
             continue
 
         # Extract data for this day
@@ -1643,10 +1643,10 @@ def convert_checkpoint_to_segments(
         segments_created += 1
 
         if verbose:
-            print(f"    ✓ {date}: {len(day_timestamps)} Punkte")
+            print(f"    ✓ {date}: {len(day_timestamps)} points")
 
     if verbose:
-        print(f"\n  ✓ {segments_created} Segmente erstellt in {output_dir}")
+        print(f"\n  ✓ {segments_created} segments created in {output_dir}")
 
     return segments_created
 
@@ -1666,19 +1666,19 @@ def run_segmented_rotation(
     Already analyzed days are skipped.
 
     Args:
-        start_date: Startdatum (YYYY-MM-DD)
-        end_date: Enddatum (YYYY-MM-DD)
-        cadence_minutes: Kadenz
-        output_dir: Output-Verzeichnis
-        verbose: Ausführliche Ausgabe
-        auto_push: Git push nach jedem Segment
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+        cadence_minutes: Cadence
+        output_dir: Output directory
+        verbose: Verbose output
+        auto_push: Git push after each segment
 
     Returns:
-        Aggregiertes RotationAnalysisResult
+        Aggregated RotationAnalysisResult
     """
     segment_dir = f"{output_dir}/segments"
 
-    # Parse Daten
+    # Parse dates
     start = datetime.fromisoformat(start_date)
     end = datetime.fromisoformat(end_date)
     n_days = (end - start).days + 1
@@ -1686,12 +1686,12 @@ def run_segmented_rotation(
     if verbose:
         print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║          🌞 SEGMENT-BASIERTE ROTATIONSANALYSE 🌱                       ║
+║          🌞 SEGMENT-BASED ROTATION ANALYSIS 🌱                         ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Zeitraum:    {start_date} → {end_date} ({n_days} Tage)
-  Kadenz:      {cadence_minutes} min
-  Segmente:    {segment_dir}
+  Period:      {start_date} -> {end_date} ({n_days} days)
+  Cadence:     {cadence_minutes} min
+  Segments:    {segment_dir}
 """)
 
     # Analyze each day
@@ -1711,7 +1711,7 @@ def run_segmented_rotation(
         if result is not None:
             completed += 1
 
-            # Auto-push nach jedem Segment
+            # Auto-push after each segment
             if auto_push:
                 _git_push_segment(segment_dir, date_str, completed, n_days)
 
@@ -1719,14 +1719,14 @@ def run_segmented_rotation(
 
     if verbose:
         print(f"\n  ════════════════════════════════════════════════════════════")
-        print(f"  ✓ {completed}/{n_days} Segmente analysiert")
+        print(f"  ✓ {completed}/{n_days} segments analyzed")
 
-    # Aggregiere alle Segmente
+    # Aggregate all segments
     return aggregate_segments(segment_dir, output_dir, verbose)
 
 
 def _git_push_segment(segment_dir: str, date: str, current: int, total: int) -> None:
-    """Git push nach Segment-Analyse."""
+    """Git push after segment analysis."""
     import subprocess
 
     try:
@@ -1783,9 +1783,9 @@ def run_final_analysis(
     Runs both final analyses.
 
     Args:
-        output_dir: Output-Verzeichnis
-        use_real_data: Echte Daten verwenden
-        verbose: Ausführliche Ausgabe
+        output_dir: Output directory
+        use_real_data: Use real data
+        verbose: Verbose output
 
     Returns:
         (TimescaleComparison, ActivityConditioningResult)
@@ -1796,24 +1796,24 @@ def run_final_analysis(
     if verbose:
         print("""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║               🌞 FINALE SOLAR SEED ANALYSEN 🌱                          ║
+║               🌞 FINAL SOLAR SEED ANALYSES 🌱                           ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Zwei Abschluss-Analysen für Tiefe statt Breite:
+  Two concluding analyses for depth over breadth:
 
-    1. Zeitskalen-Vergleich (24h vs 27d)
-       → Ist die Temperatur-Ordnung stabil?
+    1. Timescale Comparison (24h vs 27d)
+       -> Is the temperature ordering stable?
 
-    2. Aktivitäts-Konditionierung (94Å-Proxy)
-       → Korreliert Kopplung mit Sonnenaktivität?
+    2. Activity Conditioning (94A proxy)
+       -> Does coupling correlate with solar activity?
 
 ═══════════════════════════════════════════════════════════════════════
 """)
 
-    # Analyse 1: Zeitskalen
+    # Analysis 1: Timescales
     timescale_result = run_timescale_comparison(
         short_hours=24.0,
-        long_hours=648.0,  # 27 Tage
+        long_hours=648.0,  # 27 days
         output_dir=output_dir,
         use_real_data=use_real_data,
         verbose=verbose
@@ -1843,29 +1843,29 @@ def print_final_summary(
 
     summary = f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║                  🌞 FINALE ERGEBNISSE 🌱                                ║
+║                  🌞 FINAL RESULTS 🌱                                    ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  1. ZEITSKALEN-STABILITÄT:
+  1. TIMESCALE STABILITY:
 
-     Spearman ρ = {timescale.spearman_rho:.3f}
-     → {'Die Kopplungs-Ordnung ist zeitlich STABIL' if timescale.spearman_rho > 0.7 else 'Dynamische Variation über Zeitskalen'}
+     Spearman rho = {timescale.spearman_rho:.3f}
+     -> {'The coupling ordering is temporally STABLE' if timescale.spearman_rho > 0.7 else 'Dynamic variation across timescales'}
 
-  2. AKTIVITÄTS-ABHÄNGIGKEIT:
+  2. ACTIVITY DEPENDENCE:
 
-     Stärkstes Signal: {activity.most_activity_dependent[0][0][0]}-{activity.most_activity_dependent[0][0][1]} Å
+     Strongest signal: {activity.most_activity_dependent[0][0][0]}-{activity.most_activity_dependent[0][0][1]} A
      r = {activity.most_activity_dependent[0][1]:.3f}
-     → {'Kopplung korreliert mit Aktivität' if abs(activity.most_activity_dependent[0][1]) > 0.3 else 'Kopplung ist aktivitätsunabhängig'}
+     -> {'Coupling correlates with activity' if abs(activity.most_activity_dependent[0][1]) > 0.3 else 'Coupling is activity-independent'}
 
   ════════════════════════════════════════════════════════════════════════
 
-  WISSENSCHAFTLICHE SCHLUSSFOLGERUNG:
+  SCIENTIFIC CONCLUSION:
 
-  {"✓ Die lokale Strukturkopplung (ΔMI_sector) ist ein robustes Signal." if timescale.spearman_rho > 0.6 else ""}
-  {"  Sie bleibt über Zeitskalen erhalten." if timescale.spearman_rho > 0.6 else ""}
-  {"  Sie zeigt physikalisch sinnvolle Aktivitätsabhängigkeit." if abs(activity.most_activity_dependent[0][1]) > 0.2 else ""}
+  {"+ The local structure coupling (delta_MI_sector) is a robust signal." if timescale.spearman_rho > 0.6 else ""}
+  {"  It remains preserved across timescales." if timescale.spearman_rho > 0.6 else ""}
+  {"  It shows physically meaningful activity dependence." if abs(activity.most_activity_dependent[0][1]) > 0.2 else ""}
 
-  OUTPUT-DATEIEN:
+  OUTPUT FILES:
     {output_dir}/timescale_comparison.txt
     {output_dir}/timescale_comparison.json
     {output_dir}/activity_conditioning.txt
@@ -1889,19 +1889,19 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Finale Analysen für Solar Seed",
+        description="Final analyses for Solar Seed",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Beispiele:
-  # Standard-Analysen
+Examples:
+  # Standard analyses
   python -m solar_seed.final_analysis
   python -m solar_seed.final_analysis --timescale-only
   python -m solar_seed.final_analysis --activity-only
 
-  # Legacy: Monolithische Rotation (alt)
+  # Legacy: Monolithic rotation (old)
   python -m solar_seed.final_analysis --rotation --start "2024-01-01"
 
-  # NEU: Segment-basierte Rotation (empfohlen)
+  # NEW: Segment-based rotation (recommended)
   python -m solar_seed.final_analysis --segments --start 2025-12-01 --end 2025-12-27
   python -m solar_seed.final_analysis --segment 2025-12-15
   python -m solar_seed.final_analysis --aggregate
@@ -1909,54 +1909,54 @@ Beispiele:
         """
     )
     parser.add_argument("--output", type=str, default="results/final",
-                        help="Output-Verzeichnis")
+                        help="Output directory")
     parser.add_argument("--real", action="store_true",
-                        help="Echte AIA-Daten verwenden")
+                        help="Use real AIA data")
     parser.add_argument("--timescale-only", action="store_true",
-                        help="Nur Zeitskalen-Vergleich")
+                        help="Only timescale comparison")
     parser.add_argument("--activity-only", action="store_true",
-                        help="Nur Aktivitäts-Konditionierung")
+                        help="Only activity conditioning")
 
     # Legacy rotation
     parser.add_argument("--rotation", action="store_true",
-                        help="27-Tage-Rotationsanalyse (legacy, monolithisch)")
+                        help="27-day rotation analysis (legacy, monolithic)")
     parser.add_argument("--short-hours", type=float, default=24.0,
-                        help="Kurze Zeitskala in Stunden")
+                        help="Short timescale in hours")
     parser.add_argument("--long-hours", type=float, default=648.0,
-                        help="Lange Zeitskala in Stunden (27d = 648)")
+                        help="Long timescale in hours (27d = 648)")
 
-    # Segment-based rotation (neu)
+    # Segment-based rotation (new)
     parser.add_argument("--segments", action="store_true",
-                        help="Segment-basierte Rotationsanalyse (empfohlen)")
+                        help="Segment-based rotation analysis (recommended)")
     parser.add_argument("--segment", type=str, default=None,
-                        help="Einzelnes Segment analysieren (YYYY-MM-DD)")
+                        help="Analyze single segment (YYYY-MM-DD)")
     parser.add_argument("--aggregate", action="store_true",
-                        help="Alle Segmente aggregieren")
+                        help="Aggregate all segments")
     parser.add_argument("--convert-checkpoint", action="store_true",
-                        help="Bestehenden Checkpoint in Segmente konvertieren")
+                        help="Convert existing checkpoint to segments")
 
-    # Gemeinsame Optionen
+    # Common options
     parser.add_argument("--start", type=str, default=None,
-                        help="Startdatum (YYYY-MM-DD oder ISO format)")
+                        help="Start date (YYYY-MM-DD or ISO format)")
     parser.add_argument("--end", type=str, default=None,
-                        help="Enddatum für Segment-Analyse (YYYY-MM-DD)")
+                        help="End date for segment analysis (YYYY-MM-DD)")
     parser.add_argument("--cadence", type=int, default=12,
-                        help="Kadenz in Minuten (default: 12)")
+                        help="Cadence in minutes (default: 12)")
     parser.add_argument("--no-resume", action="store_true",
-                        help="Nicht von Checkpoint fortsetzen, neu starten")
+                        help="Do not resume from checkpoint, start fresh")
     parser.add_argument("--auto-push", action="store_true",
-                        help="Git push nach jedem Segment/Checkpoint")
+                        help="Git push after each segment/checkpoint")
 
     args = parser.parse_args()
 
-    # Segment-basierte Analyse (neu, empfohlen)
+    # Segment-based analysis (new, recommended)
     if args.segments:
         if not args.start or not args.end:
-            print("Fehler: --segments benötigt --start und --end")
-            print("Beispiel: --segments --start 2025-12-01 --end 2025-12-27")
+            print("Error: --segments requires --start and --end")
+            print("Example: --segments --start 2025-12-01 --end 2025-12-27")
             return
         run_segmented_rotation(
-            start_date=args.start[:10],  # Nur Datum
+            start_date=args.start[:10],  # Date only
             end_date=args.end[:10],
             cadence_minutes=args.cadence,
             output_dir="results/rotation",

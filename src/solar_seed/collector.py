@@ -3,9 +3,9 @@
 Solar Data Collector
 ====================
 
-Sammelt Sonnendaten über Zeit für Zeitreihen-Analyse.
+Collects solar data over time for timeseries analysis.
 
-Ausführung:
+Execution:
     python -m solar_seed.collector --hours 24
     python -m solar_seed.collector --hours 1 --interval 60
 """
@@ -46,11 +46,11 @@ WAVELENGTH_INFO = {
 
 @dataclass
 class CollectorConfig:
-    """Konfiguration für den Collector."""
+    """Configuration for the collector."""
     output_dir: str = "data/timeseries"
     wavelengths: list[str] = None
     resolution: int = 512
-    interval_seconds: int = 900  # 15 Minuten (SDO Update-Rate)
+    interval_seconds: int = 900  # 15 minutes (SDO update rate)
     
     def __post_init__(self):
         if self.wavelengths is None:
@@ -59,7 +59,7 @@ class CollectorConfig:
 
 @dataclass
 class CollectionResult:
-    """Ergebnis einer einzelnen Sammlung."""
+    """Result of a single collection."""
     wavelength: str
     success: bool
     timestamp: str
@@ -75,12 +75,12 @@ class CollectionResult:
 # ============================================================================
 
 def compute_hash(data: bytes) -> str:
-    """SHA256 Hash für Deduplizierung."""
+    """SHA256 hash for deduplication."""
     return hashlib.sha256(data).hexdigest()[:16]
 
 
 def compute_entropy(data: bytes) -> float:
-    """Shannon-Entropie in Bits."""
+    """Shannon entropy in bits."""
     if not data:
         return 0.0
     
@@ -103,23 +103,23 @@ def compute_entropy(data: bytes) -> float:
 # ============================================================================
 
 class SolarCollector:
-    """Sammelt Sonnendaten systematisch über Zeit."""
-    
+    """Systematically collects solar data over time."""
+
     def __init__(self, config: CollectorConfig):
         self.config = config
         self.output_dir = Path(config.output_dir)
         self.metadata_file = self.output_dir / "metadata.json"
-        
-        # Erstelle Verzeichnisse
+
+        # Create directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
         for wl in config.wavelengths:
             (self.output_dir / wl).mkdir(exist_ok=True)
-        
-        # Lade oder erstelle Metadaten
+
+        # Load or create metadata
         self.metadata = self._load_metadata()
     
     def _load_metadata(self) -> dict:
-        """Lädt existierende Metadaten."""
+        """Loads existing metadata."""
         if self.metadata_file.exists():
             with open(self.metadata_file) as f:
                 return json.load(f)
@@ -131,16 +131,16 @@ class SolarCollector:
         }
     
     def _save_metadata(self):
-        """Speichert Metadaten."""
+        """Saves metadata."""
         with open(self.metadata_file, 'w') as f:
             json.dump(self.metadata, f, indent=2)
     
     def collect_once(self) -> list[CollectionResult]:
         """
-        Sammelt einmalig Daten für alle Wellenlängen.
-        
+        Collects data once for all wavelengths.
+
         Returns:
-            Liste von CollectionResults
+            List of CollectionResults
         """
         timestamp = datetime.now()
         timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
@@ -197,16 +197,16 @@ class SolarCollector:
         return results
     
     def collect_continuous(
-        self, 
+        self,
         duration_hours: float = 24,
         interval_seconds: Optional[int] = None
     ):
         """
-        Sammelt kontinuierlich über einen Zeitraum.
-        
+        Collects continuously over a time period.
+
         Args:
-            duration_hours: Sammlungsdauer in Stunden
-            interval_seconds: Intervall zwischen Sammlungen
+            duration_hours: Collection duration in hours
+            interval_seconds: Interval between collections
         """
         if interval_seconds is None:
             interval_seconds = self.config.interval_seconds
@@ -220,42 +220,42 @@ class SolarCollector:
 ║               🌞 SOLAR TIME SERIES COLLECTOR 🌱                    ║
 ╠═══════════════════════════════════════════════════════════════════╣
 ║  Start:     {start_time.strftime("%Y-%m-%d %H:%M:%S")}                            ║
-║  Ende:      {end_time.strftime("%Y-%m-%d %H:%M:%S")}                            ║
-║  Intervall: {interval_seconds} Sekunden                                  ║
-║  Kanäle:    {', '.join(self.config.wavelengths)} Å                   ║
+║  End:       {end_time.strftime("%Y-%m-%d %H:%M:%S")}                            ║
+║  Interval:  {interval_seconds} seconds                                  ║
+║  Channels:  {', '.join(self.config.wavelengths)} Å                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
         """)
         
         try:
             while datetime.now() < end_time:
                 collection_count += 1
-                print(f"\n📡 Sammlung #{collection_count} - {datetime.now().strftime('%H:%M:%S')}")
-                
+                print(f"\n📡 Collection #{collection_count} - {datetime.now().strftime('%H:%M:%S')}")
+
                 self.collect_once()
-                
+
                 if datetime.now() < end_time:
                     remaining = (end_time - datetime.now()).total_seconds()
                     wait_time = min(interval_seconds, remaining)
                     if wait_time > 0:
-                        print(f"   ⏳ Nächste Sammlung in {wait_time:.0f}s...")
+                        print(f"   ⏳ Next collection in {wait_time:.0f}s...")
                         time.sleep(wait_time)
-                        
+
         except KeyboardInterrupt:
-            print("\n\n⚠️  Sammlung unterbrochen durch Benutzer.")
-        
+            print("\n\n⚠️  Collection interrupted by user.")
+
         print(f"""
 ═══════════════════════════════════════════════════════════════════
-  
-  ✓ Sammlung abgeschlossen
-  
-  Total: {collection_count} Sammlungen
-  Daten: {self.output_dir}
-  
+
+  ✓ Collection completed
+
+  Total: {collection_count} collections
+  Data:  {self.output_dir}
+
 ═══════════════════════════════════════════════════════════════════
         """)
     
     def get_statistics(self) -> dict:
-        """Gibt Statistiken über gesammelte Daten zurück."""
+        """Returns statistics about collected data."""
         
         stats = {
             "n_collections": len(self.metadata["collections"]),
@@ -266,14 +266,14 @@ class SolarCollector:
         if not self.metadata["collections"]:
             return stats
         
-        # Zeitbereich
+        # Time range
         times = [c["timestamp"] for c in self.metadata["collections"]]
         stats["time_range"] = {
             "start": min(times),
             "end": max(times)
         }
         
-        # Pro Wellenlänge
+        # Per wavelength
         for wl in self.config.wavelengths:
             entropies = []
             sizes = []
@@ -303,25 +303,25 @@ class SolarCollector:
 # ============================================================================
 
 def main():
-    """Hauptfunktion."""
-    
+    """Main function."""
+
     parser = argparse.ArgumentParser(
         description="Solar Data Collector",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--hours", type=float, default=1,
-                        help="Sammlungsdauer in Stunden (default: 1)")
+                        help="Collection duration in hours (default: 1)")
     parser.add_argument("--interval", type=int, default=900,
-                        help="Intervall in Sekunden (default: 900)")
+                        help="Interval in seconds (default: 900)")
     parser.add_argument("--resolution", type=int, default=512,
                         choices=[512, 1024, 2048, 4096],
-                        help="Bildauflösung (default: 512)")
+                        help="Image resolution (default: 512)")
     parser.add_argument("--output", type=str, default="data/timeseries",
-                        help="Output-Verzeichnis")
+                        help="Output directory")
     parser.add_argument("--once", action="store_true",
-                        help="Nur einmal sammeln")
+                        help="Collect only once")
     parser.add_argument("--stats", action="store_true",
-                        help="Zeige Statistiken")
+                        help="Show statistics")
     
     args = parser.parse_args()
     
@@ -339,7 +339,7 @@ def main():
         return
     
     if args.once:
-        print("\n📡 Einzelne Sammlung...")
+        print("\n📡 Single collection...")
         collector.collect_once()
     else:
         collector.collect_continuous(

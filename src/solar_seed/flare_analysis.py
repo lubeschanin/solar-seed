@@ -205,15 +205,15 @@ def load_flare_timeseries(
     verbose: bool = True
 ) -> Tuple[List[Tuple[Dict[int, NDArray], str]], List[str]]:
     """
-    Lädt echte AIA-Daten um ein Flare-Ereignis.
+    Loads real AIA data around a flare event.
 
     Args:
-        peak_time: Peak-Zeit des Flares (ISO format)
-        minutes_before: Minuten vor Peak
-        minutes_after: Minuten nach Peak
-        cadence_minutes: Zeitabstand
-        data_dir: Download-Verzeichnis
-        verbose: Ausführliche Ausgabe
+        peak_time: Peak time of the flare (ISO format)
+        minutes_before: Minutes before peak
+        minutes_after: Minutes after peak
+        cadence_minutes: Time interval
+        data_dir: Download directory
+        verbose: Verbose output
 
     Returns:
         (timeseries, phases)
@@ -233,13 +233,13 @@ def load_flare_timeseries(
     total = n_before + n_after + 1
 
     if verbose:
-        print(f"  📥 Lade {total} Zeitpunkte um {peak_time[:19]}...")
+        print(f"  📥 Loading {total} timepoints around {peak_time[:19]}...")
 
     for i in range(-n_before, n_after + 1):
         t = peak + timedelta(minutes=cadence_minutes * i)
         timestamp = t.isoformat()
 
-        # Phase bestimmen
+        # Determine phase
         minutes_from_peak = abs(i * cadence_minutes)
         if minutes_from_peak <= during_window:
             phase = "during"
@@ -260,7 +260,7 @@ def load_flare_timeseries(
             results.append((channels, timestamp))
             phases.append(phase)
         elif verbose:
-            print(f"    ⚠️  Übersprungen")
+            print(f"    ⚠️  Skipped")
 
     return results, phases
 
@@ -275,7 +275,7 @@ def analyze_flare_phase(
     seed: int = 42
 ) -> FlarePhase:
     """
-    Analysiert eine einzelne Flare-Phase.
+    Analyzes a single flare phase.
     """
     if len(timeseries) == 0:
         return FlarePhase(
@@ -287,7 +287,7 @@ def analyze_flare_phase(
             mean_94A_intensity=0.0
         )
 
-    # Sammle Werte pro Paar
+    # Collect values per pair
     pair_values: Dict[Tuple[int, int], List[float]] = {
         pair: [] for pair in combinations(WAVELENGTHS, 2)
     }
@@ -331,16 +331,16 @@ def run_flare_analysis(
     verbose: bool = True
 ) -> FlareAnalysisResult:
     """
-    Führt komplette Flare-Analyse durch.
+    Runs complete flare analysis.
 
     Args:
-        flare_id: ID aus KNOWN_FLARES (z.B. "X5.0_2024-01-01")
-        peak_time: Alternativ: direkte Peak-Zeit
-        minutes_before/after: Analyse-Fenster
-        cadence_minutes: Zeitabstand
-        use_real_data: Echte AIA-Daten
-        output_dir: Output-Verzeichnis
-        verbose: Ausführliche Ausgabe
+        flare_id: ID from KNOWN_FLARES (e.g. "X5.0_2024-01-01")
+        peak_time: Alternatively: direct peak time
+        minutes_before/after: Analysis window
+        cadence_minutes: Time interval
+        use_real_data: Use real AIA data
+        output_dir: Output directory
+        verbose: Verbose output
 
     Returns:
         FlareAnalysisResult
@@ -348,7 +348,7 @@ def run_flare_analysis(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # Flare-Info bestimmen
+    # Determine flare info
     if flare_id and flare_id in KNOWN_FLARES:
         flare_info = KNOWN_FLARES[flare_id]
         peak_time = flare_info["peak_time"]
@@ -362,17 +362,17 @@ def run_flare_analysis(
     if verbose:
         print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║              🔥 FLARE-EREIGNIS-ANALYSE 🌞                              ║
+║              🔥 FLARE EVENT ANALYSIS 🌞                                ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
   Flare:    {flare_id} ({flare_class})
   Peak:     {peak_time[:19]}
-  Fenster:  -{minutes_before}min ... +{minutes_after}min
-  Kadenz:   {cadence_minutes}min
-  Daten:    {'Echt (AIA)' if use_real_data else 'Synthetisch'}
+  Window:   -{minutes_before}min ... +{minutes_after}min
+  Cadence:  {cadence_minutes}min
+  Data:     {'Real (AIA)' if use_real_data else 'Synthetic'}
 """)
 
-    # Daten laden
+    # Load data
     if use_real_data:
         timeseries, phases = load_flare_timeseries(
             peak_time=peak_time,
@@ -394,12 +394,12 @@ def run_flare_analysis(
         )
 
     if len(timeseries) == 0:
-        raise RuntimeError("Keine Daten geladen")
+        raise RuntimeError("No data loaded")
 
     if verbose:
-        print(f"\n  📊 Analysiere {len(timeseries)} Zeitpunkte...")
+        print(f"\n  📊 Analyzing {len(timeseries)} timepoints...")
 
-    # Nach Phase gruppieren
+    # Group by phase
     before_data = [(ch, ts) for (ch, ts), p in zip(timeseries, phases) if p == "before"]
     during_data = [(ch, ts) for (ch, ts), p in zip(timeseries, phases) if p == "during"]
     after_data = [(ch, ts) for (ch, ts), p in zip(timeseries, phases) if p == "after"]
@@ -450,7 +450,7 @@ def run_flare_analysis(
         most_affected=most_affected
     )
 
-    # Speichere und drucke
+    # Save and print
     save_flare_results(result, out_path)
 
     if verbose:
@@ -460,7 +460,7 @@ def run_flare_analysis(
 
 
 def save_flare_results(result: FlareAnalysisResult, output_dir: Path) -> None:
-    """Speichert Flare-Ergebnisse."""
+    """Saves flare results."""
 
     with open(output_dir / "flare_analysis.txt", "w") as f:
         f.write("FLARE EVENT ANALYSIS\n")
@@ -537,7 +537,7 @@ def save_flare_results(result: FlareAnalysisResult, output_dir: Path) -> None:
 
 
 def print_flare_summary(result: FlareAnalysisResult) -> None:
-    """Druckt Zusammenfassung."""
+    """Prints summary."""
 
     # 94-131 Werte
     before_94_131 = result.before.pair_values.get((94, 131), 0)
@@ -549,9 +549,9 @@ def print_flare_summary(result: FlareAnalysisResult) -> None:
     print(f"""
   ════════════════════════════════════════════════════════════════════════
 
-  PHASEN-VERGLEICH:
+  PHASE COMPARISON:
 
-    Phase      n    94Å Intensität    ΔMI_sector (94-131)
+    Phase      n    94Å Intensity     ΔMI_sector (94-131)
     ─────────────────────────────────────────────────────
     BEFORE    {result.before.n_samples:>2}    {result.before.mean_94A_intensity:>10.1f}         {before_94_131:.4f} bits
     DURING    {result.during.n_samples:>2}    {result.during.mean_94A_intensity:>10.1f}         {during_94_131:.4f} bits
@@ -559,7 +559,7 @@ def print_flare_summary(result: FlareAnalysisResult) -> None:
 
   ────────────────────────────────────────────────────────────────────────
 
-  TOP 5 BETROFFENE PAARE (Before → During):
+  TOP 5 AFFECTED PAIRS (Before → During):
 """)
 
     for i, (pair, change) in enumerate(result.most_affected, 1):
@@ -568,16 +568,16 @@ def print_flare_summary(result: FlareAnalysisResult) -> None:
     print(f"""
   ────────────────────────────────────────────────────────────────────────
 
-  FLARE-KANAL-KOPPLUNG (94-131 Å):
+  FLARE CHANNEL COUPLING (94-131 Å):
 
     Before:  {before_94_131:.4f} bits
     During:  {during_94_131:.4f} bits  ({change_94_131:+.1f}%)
     After:   {after_94_131:.4f} bits
 
   INTERPRETATION:
-    {'✓ Starker Flare-Effekt: Kopplung steigt während des Flares.' if change_94_131 > 50 else
-     '~ Moderater Flare-Effekt.' if change_94_131 > 20 else
-     '○ Schwacher Flare-Effekt.'}
+    {'✓ Strong flare effect: coupling increases during flare.' if change_94_131 > 50 else
+     '~ Moderate flare effect.' if change_94_131 > 20 else
+     '○ Weak flare effect.'}
 
 ═══════════════════════════════════════════════════════════════════════
 """)
@@ -588,46 +588,46 @@ def print_flare_summary(result: FlareAnalysisResult) -> None:
 # ============================================================================
 
 def main():
-    """Hauptfunktion."""
+    """Main function."""
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Flare-Ereignis-Analyse für Solar Seed",
+        description="Flare Event Analysis for Solar Seed",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Bekannte Flares:
-  X5.0_2024-01-01  - Starker X-Flare
-  X2.8_2023-12-14  - X-Flare
-  X1.0_2024-01-10  - Moderater X-Flare
-  M5.0_2024-01-22  - M-Flare
+Known flares:
+  X5.0_2024-01-01  - Strong X-flare
+  X2.8_2023-12-14  - X-flare
+  X1.0_2024-01-10  - Moderate X-flare
+  M5.0_2024-01-22  - M-flare
 
-Beispiele:
+Examples:
   python -m solar_seed.flare_analysis
   python -m solar_seed.flare_analysis --flare X5.0_2024-01-01 --real
   python -m solar_seed.flare_analysis --peak "2024-01-01T00:55:00" --real
         """
     )
     parser.add_argument("--flare", type=str, default=None,
-                        help="Flare-ID aus bekannten Flares")
+                        help="Flare ID from known flares")
     parser.add_argument("--peak", type=str, default=None,
-                        help="Peak-Zeit (ISO format)")
+                        help="Peak time (ISO format)")
     parser.add_argument("--before", type=int, default=30,
-                        help="Minuten vor Peak (default: 30)")
+                        help="Minutes before peak (default: 30)")
     parser.add_argument("--after", type=int, default=30,
-                        help="Minuten nach Peak (default: 30)")
+                        help="Minutes after peak (default: 30)")
     parser.add_argument("--cadence", type=int, default=2,
-                        help="Kadenz in Minuten (default: 2)")
+                        help="Cadence in minutes (default: 2)")
     parser.add_argument("--real", action="store_true",
-                        help="Echte AIA-Daten verwenden")
+                        help="Use real AIA data")
     parser.add_argument("--output", type=str, default="results/flare",
-                        help="Output-Verzeichnis")
+                        help="Output directory")
     parser.add_argument("--list", action="store_true",
-                        help="Bekannte Flares auflisten")
+                        help="List known flares")
 
     args = parser.parse_args()
 
     if args.list:
-        print("\nBekannte Flares:")
+        print("\nKnown flares:")
         print("-" * 60)
         for fid, info in KNOWN_FLARES.items():
             print(f"  {fid:<20} {info['class']:<6} {info['peak_time'][:19]}")

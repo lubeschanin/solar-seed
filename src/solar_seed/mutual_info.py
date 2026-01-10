@@ -1,12 +1,12 @@
 """
-Mutual Information Berechnung
-=============================
+Mutual Information Calculation
+==============================
 
-Pure NumPy Implementation der Mutual Information.
+Pure NumPy implementation of Mutual Information.
 
 MI(X,Y) = H(X) + H(Y) - H(X,Y)
 
-wobei H die Shannon-Entropie ist.
+where H is the Shannon entropy.
 """
 
 import numpy as np
@@ -14,22 +14,22 @@ from numpy.typing import NDArray
 
 
 def compute_histogram_2d(
-    x: NDArray[np.float64], 
-    y: NDArray[np.float64], 
+    x: NDArray[np.float64],
+    y: NDArray[np.float64],
     bins: int
 ) -> NDArray[np.float64]:
     """
-    Berechnet 2D-Histogramm für zwei Arrays.
-    
+    Computes 2D histogram for two arrays.
+
     Args:
-        x: Erstes Array (wird geflattened)
-        y: Zweites Array (wird geflattened)
-        bins: Anzahl der Bins pro Dimension
-        
+        x: First array (will be flattened)
+        y: Second array (will be flattened)
+        bins: Number of bins per dimension
+
     Returns:
-        2D-Histogramm der Größe (bins, bins)
+        2D histogram of size (bins, bins)
     """
-    # Normalisiere auf [0, bins-1]
+    # Normalize to [0, bins-1]
     x_min, x_max = x.min(), x.max()
     y_min, y_max = y.min(), y.max()
     
@@ -39,7 +39,7 @@ def compute_histogram_2d(
     x_bins = np.clip((x_norm * bins).astype(int), 0, bins - 1)
     y_bins = np.clip((y_norm * bins).astype(int), 0, bins - 1)
     
-    # 2D Histogramm (schnellere Variante mit bincount)
+    # 2D histogram (faster variant with bincount)
     hist = np.zeros((bins, bins), dtype=np.float64)
     indices = x_bins.ravel() * bins + y_bins.ravel()
     counts = np.bincount(indices, minlength=bins * bins)
@@ -50,13 +50,13 @@ def compute_histogram_2d(
 
 def entropy(p: NDArray[np.float64]) -> float:
     """
-    Berechnet Shannon-Entropie.
-    
+    Computes Shannon entropy.
+
     Args:
-        p: Wahrscheinlichkeitsverteilung (muss sich zu 1 summieren)
-        
+        p: Probability distribution (must sum to 1)
+
     Returns:
-        Entropie in Bits
+        Entropy in bits
     """
     p = p[p > 0]
     if len(p) == 0:
@@ -65,34 +65,34 @@ def entropy(p: NDArray[np.float64]) -> float:
 
 
 def mutual_information(
-    x: NDArray[np.float64], 
-    y: NDArray[np.float64], 
+    x: NDArray[np.float64],
+    y: NDArray[np.float64],
     bins: int = 64
 ) -> float:
     """
-    Berechnet Mutual Information zwischen zwei Arrays.
-    
+    Computes Mutual Information between two arrays.
+
     MI(X,Y) = H(X) + H(Y) - H(X,Y)
-    
+
     Args:
-        x: Erstes Array (beliebige Shape, wird geflattened)
-        y: Zweites Array (beliebige Shape, wird geflattened)
-        bins: Anzahl der Bins für Histogramm
-        
+        x: First array (any shape, will be flattened)
+        y: Second array (any shape, will be flattened)
+        bins: Number of bins for histogram
+
     Returns:
-        Mutual Information in Bits
-        
+        Mutual Information in bits
+
     Example:
         >>> x = np.random.randn(100, 100)
-        >>> y = x + np.random.randn(100, 100) * 0.1  # Stark korreliert
+        >>> y = x + np.random.randn(100, 100) * 0.1  # Strongly correlated
         >>> mi = mutual_information(x, y)
-        >>> mi > 1.0  # Sollte hohe MI zeigen
+        >>> mi > 1.0  # Should show high MI
         True
     """
     x_flat = x.ravel().astype(np.float64)
     y_flat = y.ravel().astype(np.float64)
     
-    # Entferne NaN/Inf
+    # Remove NaN/Inf
     valid = np.isfinite(x_flat) & np.isfinite(y_flat)
     x_flat = x_flat[valid]
     y_flat = y_flat[valid]
@@ -103,11 +103,11 @@ def mutual_information(
     # 2D Histogramm
     hist_2d = compute_histogram_2d(x_flat, y_flat, bins)
     
-    # Marginale Histogramme
+    # Marginal histograms
     hist_x = hist_2d.sum(axis=1)
     hist_y = hist_2d.sum(axis=0)
     
-    # Normalisiere zu Wahrscheinlichkeiten
+    # Normalize to probabilities
     n = hist_2d.sum()
     if n == 0:
         return 0.0
@@ -116,7 +116,7 @@ def mutual_information(
     p_x = hist_x / n
     p_y = hist_y / n
     
-    # Entropien
+    # Entropies
     h_x = entropy(p_x)
     h_y = entropy(p_y)
     h_xy = entropy(p_xy.ravel())
@@ -128,22 +128,22 @@ def mutual_information(
 
 
 def normalized_mutual_information(
-    x: NDArray[np.float64], 
-    y: NDArray[np.float64], 
+    x: NDArray[np.float64],
+    y: NDArray[np.float64],
     bins: int = 64
 ) -> float:
     """
-    Normalisierte Mutual Information.
-    
+    Normalized Mutual Information.
+
     NMI = 2 * MI(X,Y) / (H(X) + H(Y))
-    
+
     Args:
-        x: Erstes Array
-        y: Zweites Array
-        bins: Anzahl der Bins
-        
+        x: First array
+        y: Second array
+        bins: Number of bins
+
     Returns:
-        NMI im Bereich [0, 1], wobei 1 = perfekte Korrelation
+        NMI in range [0, 1], where 1 = perfect correlation
     """
     x_flat = x.ravel().astype(np.float64)
     y_flat = y.ravel().astype(np.float64)
@@ -181,17 +181,17 @@ def normalized_mutual_information(
 
 
 def conditional_entropy(
-    x: NDArray[np.float64], 
-    y: NDArray[np.float64], 
+    x: NDArray[np.float64],
+    y: NDArray[np.float64],
     bins: int = 64
 ) -> float:
     """
-    Bedingte Entropie H(X|Y).
-    
+    Conditional entropy H(X|Y).
+
     H(X|Y) = H(X,Y) - H(Y) = H(X) - MI(X,Y)
-    
+
     Returns:
-        H(X|Y) in Bits
+        H(X|Y) in bits
     """
     x_flat = x.ravel().astype(np.float64)
     y_flat = y.ravel().astype(np.float64)

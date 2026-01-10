@@ -115,15 +115,15 @@ def load_aia_pair_sunpy(
     time_str: str
 ) -> Tuple[Optional[NDArray], Optional[NDArray], dict]:
     """
-    Lädt ein AIA-Bildpaar via SunPy/Fido.
+    Loads an AIA image pair via SunPy/Fido.
 
     Args:
-        wavelength_1: Erste Wellenlänge (z.B. 193)
-        wavelength_2: Zweite Wellenlänge (z.B. 211)
-        time_str: Zeitpunkt (ISO format)
+        wavelength_1: First wavelength (e.g. 193)
+        wavelength_2: Second wavelength (e.g. 211)
+        time_str: Timestamp (ISO format)
 
     Returns:
-        (image_1, image_2, metadata) oder (None, None, {}) bei Fehler
+        (image_1, image_2, metadata) or (None, None, {}) on error
     """
     try:
         from sunpy.net import Fido, attrs as a
@@ -131,7 +131,7 @@ def load_aia_pair_sunpy(
         import astropy.units as u
         from datetime import datetime, timedelta
 
-        # Parse time und erstelle Suchfenster (±5 min)
+        # Parse time and create search window (±5 min)
         t = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
         t_start = t - timedelta(minutes=5)
         t_end = t + timedelta(minutes=5)
@@ -149,7 +149,7 @@ def load_aia_pair_sunpy(
             if len(result) == 0 or len(result[0]) == 0:
                 return None, None, {}
 
-            # Lade erstes Ergebnis
+            # Load first result
             files = Fido.fetch(result[0, 0], path="data/aia/{file}")
             if not files:
                 return None, None, {}
@@ -163,10 +163,10 @@ def load_aia_pair_sunpy(
         return images[0], images[1], metadata
 
     except ImportError:
-        print("  ⚠️  SunPy nicht installiert")
+        print("  ⚠️  SunPy not installed")
         return None, None, {}
     except Exception as e:
-        print(f"  ✗ Fehler: {e}")
+        print(f"  ✗ Error: {e}")
         return None, None, {}
 
 
@@ -177,9 +177,9 @@ def generate_synthetic_timeseries(
     seed: int = 42
 ) -> List[Tuple[NDArray, NDArray, str]]:
     """
-    Generiert synthetische Zeitreihe für Tests.
+    Generates synthetic timeseries for testing.
 
-    Simuliert zeitliche Variation durch leicht unterschiedliche Seeds.
+    Simulates temporal variation through slightly different seeds.
     """
     from solar_seed.data_loader import generate_synthetic_sun
 
@@ -215,20 +215,20 @@ def analyze_timepoint(
     config: RunConfig
 ) -> TimePointResult:
     """
-    Analysiert einen einzelnen Zeitpunkt.
+    Analyzes a single timepoint.
 
-    Berechnet:
+    Calculates:
     - Original MI
-    - Residual MI (nach Geometrie-Subtraktion)
+    - Residual MI (after geometry subtraction)
     - MI Ratio (residual / original)
-    - ΔMI_ring (Struktur jenseits radialer Statistik)
-    - ΔMI_sector (Struktur jenseits radial+azimutaler Ordnung)
+    - ΔMI_ring (structure beyond radial statistics)
+    - ΔMI_sector (structure beyond radial+azimuthal order)
     """
     from solar_seed.null_model import compute_null_distribution, compute_z_score
 
     # Original MI
     mi_original = mutual_information(image_1, image_2, bins=config.bins)
-    nmi_original = mi_original / 6.0  # Grobe Normalisierung
+    nmi_original = mi_original / 6.0  # Rough normalization
 
     # Residual MI
     res_1, res_2, _ = prepare_pair_for_residual_mi(image_1, image_2)
@@ -281,7 +281,7 @@ def run_spatial_analysis(
     grid_size: Tuple[int, int] = (8, 8)
 ) -> dict:
     """
-    Führt räumliche Analyse durch.
+    Runs spatial analysis.
     """
     result = compute_spatial_residual_mi_map(
         image_1, image_2,
@@ -314,7 +314,7 @@ def save_timeseries_csv(
     timeseries: List[TimePointResult],
     filepath: Path
 ) -> None:
-    """Speichert Zeitreihe als CSV."""
+    """Saves timeseries as CSV."""
 
     with open(filepath, 'w', newline='') as f:
         writer = csv.writer(f)
@@ -351,7 +351,7 @@ def save_controls_json(
     controls: AllControlsResult,
     filepath: Path
 ) -> None:
-    """Speichert Kontroll-Tests als JSON."""
+    """Saves control tests as JSON."""
 
     # Helper to convert numpy types to Python native
     def to_native(val):
@@ -404,33 +404,33 @@ def save_spatial_maps(
     spatial: dict,
     filepath: Path
 ) -> None:
-    """Speichert räumliche Analyse als Text."""
+    """Saves spatial analysis as text."""
 
     with open(filepath, 'w') as f:
-        f.write("RÄUMLICHE MI-ANALYSE\n")
+        f.write("SPATIAL MI ANALYSIS\n")
         f.write("=" * 60 + "\n\n")
 
         f.write(f"Grid: {spatial['grid_size'][0]}x{spatial['grid_size'][1]}\n\n")
 
         f.write("ORIGINAL MI:\n")
-        f.write(f"  Mittel: {spatial['original_mi_mean']:.4f} ± {spatial['original_mi_std']:.4f}\n\n")
+        f.write(f"  Mean: {spatial['original_mi_mean']:.4f} ± {spatial['original_mi_std']:.4f}\n\n")
         f.write(spatial['original_map_ascii'] + "\n\n")
 
         f.write("RESIDUAL MI:\n")
-        f.write(f"  Mittel: {spatial['residual_mi_mean']:.4f} ± {spatial['residual_mi_std']:.4f}\n")
-        f.write(f"  Reduktion: {spatial['mean_reduction_percent']:.1f}%\n\n")
+        f.write(f"  Mean: {spatial['residual_mi_mean']:.4f} ± {spatial['residual_mi_std']:.4f}\n")
+        f.write(f"  Reduction: {spatial['mean_reduction_percent']:.1f}%\n\n")
         f.write(spatial['residual_map_ascii'] + "\n\n")
 
-        f.write("TOP 5 RESIDUAL-HOTSPOTS:\n")
+        f.write("TOP 5 RESIDUAL HOTSPOTS:\n")
         for i, (idx, val) in enumerate(spatial['top_5_hotspots'], 1):
-            f.write(f"  {i}. Zelle {idx}: MI={val:.4f}\n")
+            f.write(f"  {i}. Cell {idx}: MI={val:.4f}\n")
 
 
 def save_run_metadata(
     result: RunResult,
     filepath: Path
 ) -> None:
-    """Speichert Run-Metadaten für Reproduzierbarkeit."""
+    """Saves run metadata for reproducibility."""
 
     metadata = {
         "run_timestamp": result.run_timestamp,
@@ -445,9 +445,9 @@ def save_run_metadata(
             "controls_passed": result.controls.get("all_passed", False) if result.controls else None
         },
         "interpretation": {
-            "mi_ratio_meaning": "MI_residual / MI_original - wie viel MI bleibt nach Geometrie-Subtraktion",
-            "delta_mi_ring_meaning": "MI_residual - MI_ring_shuffle - Struktur jenseits radialer Statistik",
-            "delta_mi_sector_meaning": "MI_residual - MI_sector_shuffle - echte lokale Struktur"
+            "mi_ratio_meaning": "MI_residual / MI_original - how much MI remains after geometry subtraction",
+            "delta_mi_ring_meaning": "MI_residual - MI_ring_shuffle - structure beyond radial statistics",
+            "delta_mi_sector_meaning": "MI_residual - MI_sector_shuffle - true local structure"
         }
     }
 
@@ -456,37 +456,37 @@ def save_run_metadata(
 
 
 def print_run_summary(result: RunResult) -> None:
-    """Gibt Zusammenfassung des Runs aus."""
+    """Prints summary of the run."""
 
     print(f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║                     🌞 REAL-RUN ZUSAMMENFASSUNG 🌱                     ║
+║                     🌞 REAL-RUN SUMMARY 🌱                             ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
-  Zeitraum:     {result.config.hours} Stunden
-  Wellenlängen: {result.config.wavelength_1} Å + {result.config.wavelength_2} Å
-  Zeitpunkte:   {len(result.timeseries)}
-  Dauer:        {result.duration_seconds:.1f} Sekunden
+  Time period:  {result.config.hours} hours
+  Wavelengths:  {result.config.wavelength_1} Å + {result.config.wavelength_2} Å
+  Timepoints:   {len(result.timeseries)}
+  Duration:     {result.duration_seconds:.1f} seconds
 
   ════════════════════════════════════════════════════════════════════════
 
-  NEUE KENNZAHLEN:
+  KEY METRICS:
 
   MI Ratio (residual/original):
-    Mittel: {result.mean_mi_ratio:.4f} ± {result.std_mi_ratio:.4f}
-    → {result.mean_mi_ratio*100:.1f}% der Original-MI bleibt nach Geometrie-Subtraktion
+    Mean: {result.mean_mi_ratio:.4f} ± {result.std_mi_ratio:.4f}
+    → {result.mean_mi_ratio*100:.1f}% of original MI remains after geometry subtraction
 
-  ΔMI_ring (Struktur jenseits radialer Statistik):
-    Mittel: {result.mean_delta_mi_ring:.4f} bits
-    → Positiv = echte azimutale/lokale Struktur vorhanden
+  ΔMI_ring (structure beyond radial statistics):
+    Mean: {result.mean_delta_mi_ring:.4f} bits
+    → Positive = true azimuthal/local structure present
 
-  ΔMI_sector (echte lokale Struktur):
-    Mittel: {result.mean_delta_mi_sector:.4f} bits
-    → Positiv = Struktur jenseits radial+azimutaler Ordnung
+  ΔMI_sector (true local structure):
+    Mean: {result.mean_delta_mi_sector:.4f} bits
+    → Positive = structure beyond radial+azimuthal order
 
   ════════════════════════════════════════════════════════════════════════
 
-  OUTPUT-DATEIEN:
+  OUTPUT FILES:
     {result.config.output_dir}/timeseries.csv
     {result.config.output_dir}/controls_summary.json
     {result.config.output_dir}/spatial_maps.txt
@@ -506,18 +506,18 @@ def run_real_analysis(
     verbose: bool = True
 ) -> RunResult:
     """
-    Führt den kompletten Real-Run durch.
+    Runs the complete real-run analysis.
 
     Args:
-        config: Run-Konfiguration
-        use_synthetic: Verwende synthetische Daten (für Tests)
-        verbose: Ausführliche Ausgabe
+        config: Run configuration
+        use_synthetic: Use synthetic data (for testing)
+        verbose: Verbose output
     """
     import time
     start_time = time.time()
     run_timestamp = datetime.now().isoformat()
 
-    # Output-Verzeichnis erstellen
+    # Create output directory
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -526,25 +526,25 @@ def run_real_analysis(
 ╔═══════════════════════════════════════════════════════════════════════╗
 ║                    🌞 SOLAR SEED REAL-RUN 🌱                           ║
 ║                                                                        ║
-║  Reproduzierbare Analyse auf {"echten" if not use_synthetic else "synthetischen"} AIA-Daten                    ║
+║  Reproducible analysis on {"real" if not use_synthetic else "synthetic"} AIA data                    ║
 ╚═══════════════════════════════════════════════════════════════════════╝
         """)
 
-    # Berechne Anzahl Zeitpunkte
+    # Calculate number of timepoints
     n_points = int(config.hours * 60 / config.cadence_minutes)
 
     if verbose:
-        print(f"  Konfiguration:")
-        print(f"    Wellenlängen: {config.wavelength_1} Å + {config.wavelength_2} Å")
-        print(f"    Zeitraum: {config.hours} Stunden")
-        print(f"    Kadenz: {config.cadence_minutes} Minuten")
-        print(f"    Zeitpunkte: {n_points}")
+        print(f"  Configuration:")
+        print(f"    Wavelengths: {config.wavelength_1} Å + {config.wavelength_2} Å")
+        print(f"    Time period: {config.hours} hours")
+        print(f"    Cadence: {config.cadence_minutes} minutes")
+        print(f"    Timepoints: {n_points}")
         print()
 
-    # Lade oder generiere Daten
+    # Load or generate data
     if use_synthetic:
         if verbose:
-            print("  📊 Generiere synthetische Zeitreihe...")
+            print("  📊 Generating synthetic timeseries...")
         data_pairs = generate_synthetic_timeseries(
             n_points=n_points,
             shape=(256, 256),
@@ -553,10 +553,10 @@ def run_real_analysis(
         )
     else:
         if verbose:
-            print("  📡 Lade echte AIA-Daten...")
-        # TODO: Implementiere echte Datenladung
+            print("  📡 Loading real AIA data...")
+        # TODO: Implement real data loading
         # For now: Fallback to synthetic
-        print("  ⚠️  Echte Daten noch nicht implementiert, verwende synthetische")
+        print("  ⚠️  Real data not yet implemented, using synthetic")
         data_pairs = generate_synthetic_timeseries(
             n_points=n_points,
             shape=(256, 256),
@@ -564,22 +564,22 @@ def run_real_analysis(
             seed=config.seed
         )
 
-    # Analysiere jeden Zeitpunkt
+    # Analyze each timepoint
     timeseries = []
 
     if verbose:
-        print(f"\n  🔬 Analysiere {n_points} Zeitpunkte...")
+        print(f"\n  🔬 Analyzing {n_points} timepoints...")
 
     for i, (img_1, img_2, timestamp) in enumerate(data_pairs):
         if verbose and (i + 1) % 5 == 0:
-            print(f"     Zeitpunkt {i+1}/{n_points}...")
+            print(f"     Timepoint {i+1}/{n_points}...")
 
         tp_result = analyze_timepoint(img_1, img_2, timestamp, config)
         timeseries.append(tp_result)
 
-    # Kontroll-Tests auf erstem Zeitpunkt
+    # Control tests on first timepoint
     if verbose:
-        print("\n  🧪 Führe Kontroll-Tests durch...")
+        print("\n  🧪 Running control tests...")
 
     first_img_1, first_img_2, _ = data_pairs[0]
     controls = run_all_controls(
@@ -591,11 +591,11 @@ def run_real_analysis(
 
     # Spatial analysis on first timepoint
     if verbose:
-        print("  🗺️  Erstelle räumliche Analyse...")
+        print("  🗺️  Creating spatial analysis...")
 
     spatial = run_spatial_analysis(first_img_1, first_img_2)
 
-    # Aggregiere Statistiken
+    # Aggregate statistics
     mi_ratios = [tp.mi_ratio for tp in timeseries]
     delta_rings = [tp.delta_mi_ring for tp in timeseries]
     delta_sectors = [tp.delta_mi_sector for tp in timeseries]
@@ -615,9 +615,9 @@ def run_real_analysis(
         duration_seconds=duration
     )
 
-    # Speichere Ergebnisse
+    # Save results
     if verbose:
-        print("\n  💾 Speichere Ergebnisse...")
+        print("\n  💾 Saving results...")
 
     save_timeseries_csv(timeseries, output_dir / "timeseries.csv")
     save_controls_json(controls, output_dir / "controls_summary.json")
@@ -635,30 +635,30 @@ def run_real_analysis(
 # ============================================================================
 
 def main():
-    """Hauptfunktion."""
+    """Main function."""
 
     parser = argparse.ArgumentParser(
         description="Solar Seed Real-Run",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Beispiele:
+Examples:
   python -m solar_seed.real_run --hours 6
   python -m solar_seed.real_run --hours 1 --synthetic
   python -m solar_seed.real_run --wavelengths 171 193
         """
     )
     parser.add_argument("--hours", type=float, default=6.0,
-                        help="Analysezeitraum in Stunden (default: 6)")
+                        help="Analysis time period in hours (default: 6)")
     parser.add_argument("--wavelengths", type=int, nargs=2, default=[193, 211],
-                        help="Wellenlängen-Paar (default: 193 211)")
+                        help="Wavelength pair (default: 193 211)")
     parser.add_argument("--cadence", type=int, default=12,
-                        help="Kadenz in Minuten (default: 12)")
+                        help="Cadence in minutes (default: 12)")
     parser.add_argument("--output", type=str, default="results/real_run",
-                        help="Output-Verzeichnis")
+                        help="Output directory")
     parser.add_argument("--synthetic", action="store_true",
-                        help="Verwende synthetische Daten")
+                        help="Use synthetic data")
     parser.add_argument("--seed", type=int, default=42,
-                        help="Random Seed")
+                        help="Random seed")
 
     args = parser.parse_args()
 

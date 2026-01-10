@@ -1,13 +1,13 @@
 """
-Solar Seed - Suche nach Informationsmustern in Sonnenlicht
-==========================================================
+Solar Seed - Searching for Information Patterns in Sunlight
+===========================================================
 
-Eine Hypothese. Ein Test. Eine Antwort.
+One hypothesis. One test. One answer.
 
-H1: Bestimmte AIA-Wellenlängenpaare zeigen höhere Mutual Information
-    als durch unabhängige thermische Prozesse erklärbar.
+H1: Certain AIA wavelength pairs show higher mutual information
+    than explainable by independent thermal processes.
 
-4free - Die Suche nach dem Seed.
+4free - The Search for the Seed.
 """
 
 __version__ = "0.1.0"
