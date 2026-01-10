@@ -493,7 +493,7 @@ class TestValidationChecks:
         # Test with very low value (break) - well below any history value
         result = detect_coupling_break('193-211', 0.30, temp_monitor)
         assert result['is_break'] == True
-        assert result['deviation_mad'] < -2  # Significant negative deviation
+        assert result['z_mad'] > 2  # Significant positive z_mad = MADs below median
         assert 'median' in result
         assert 'threshold' in result
 

@@ -1107,9 +1107,15 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
     # Threshold
     threshold = median - k * mad_scaled
 
-    # Detect break
-    is_break = current_mi < threshold
-    deviation_mad = (current_mi - median) / mad_scaled if mad_scaled > 0.001 else 0
+    # Compute z_mad = (median - current) / MAD (positive = below median)
+    # This is the number of MADs below median
+    if mad_scaled > 0.001:
+        z_mad = (median - current_mi) / mad_scaled
+    else:
+        z_mad = 0
+
+    # Detect break: z_mad >= k means we're k MADs below median
+    is_break = z_mad >= k
 
     return {
         'is_break': is_break,
@@ -1119,7 +1125,7 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
         'mad_scaled': mad_scaled,
         'threshold': threshold,
         'k': k,
-        'deviation_mad': deviation_mad,
+        'z_mad': z_mad,  # MADs below median (positive = below)
         'n_points': n,
         'window_minutes': window_minutes,
         'criterion': f'ΔMI < median - {k}×MAD = {threshold:.4f}',
@@ -1273,9 +1279,10 @@ def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
                 break_detections[pair_key] = break_check
 
                 if break_check['is_break']:
+                    z_mad = break_check.get('z_mad', 0)
                     print(f"  ⚠ COUPLING BREAK detected in {pair_key}:")
                     print(f"     {break_check['criterion']}")
-                    print(f"     Current: {delta_mi:.4f}, Deviation: {break_check['deviation_mad']:.1f} MAD")
+                    print(f"     Current: {delta_mi:.4f}, Deviation: {z_mad:.1f} MAD below median")
 
                     # Test C: Robustness check on detected breaks
                     if validate_breaks:
@@ -1285,7 +1292,12 @@ def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
                         if robust.get('is_robust'):
                             print(f"     ✓ Break is ROBUST under binning (Δ={robust['change_pct']:.1f}%)")
                         else:
-                            print(f"     ⚠ Break is SENSITIVE to resolution (Δ={robust.get('change_pct', '?')}%)")
+                            change = robust.get('change_pct', 0)
+                            print(f"     ⚠ Break is UNRELIABLE (binning Δ={change:.1f}% > 20%)")
+                            # Veto the break if not robust
+                            break_check['is_break'] = False
+                            break_check['vetoed'] = 'robustness'
+                            break_detections[pair_key] = break_check
 
                 residual_info = monitor.compute_residual(pair_key, delta_mi)
                 trend_info = monitor.analyze_trend(pair_key)
@@ -1298,7 +1310,8 @@ def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
                     'status': residual_info['status'],
                     'artifact_warning': artifact is not None,
                     'is_break': break_check.get('is_break', False),
-                    'break_deviation_mad': break_check.get('deviation_mad', 0),
+                    'break_vetoed': break_check.get('vetoed'),  # 'robustness' if vetoed
+                    'z_mad': break_check.get('z_mad', 0),  # MADs below median
                     'registration_shift': reg_check.get('shift_pixels', 0),
                     # Pass through all trend info
                     **trend_info
@@ -1364,18 +1377,30 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
     print(f"\n  SOLAR WIND (DSCOVR L1)")
     print(f"  {'-'*40}")
     if solar_wind:
+        partial_data = False
         if 'plasma' in solar_wind:
             p = solar_wind['plasma']
-            print(f"  Speed:       {p.get('speed', 'N/A')} km/s")
-            print(f"  Density:     {p.get('density', 'N/A')} p/cm³")
+            speed = p.get('speed')
+            density = p.get('density')
+            print(f"  Speed:       {speed:.1f} km/s" if speed else "  Speed:       unavailable")
+            print(f"  Density:     {density:.2f} p/cm³" if density else "  Density:     unavailable")
+            if speed is None or density is None:
+                partial_data = True
         if 'mag' in solar_wind:
             m = solar_wind['mag']
-            print(f"  Bz:          {m.get('bz', 'N/A')} nT")
-            print(f"  Bt:          {m.get('bt', 'N/A')} nT")
+            bz = m.get('bz')
+            bt = m.get('bt')
+            print(f"  Bz:          {bz:.2f} nT" if bz is not None else "  Bz:          unavailable")
+            print(f"  Bt:          {bt:.2f} nT" if bt is not None else "  Bt:          unavailable")
+            if bz is None or bt is None:
+                partial_data = True
 
         risk, risk_level = assess_geomagnetic_risk(solar_wind)
         risk_icons = ['', '', '', '']
-        print(f"\n  Geomag Risk: {risk_icons[risk_level]} {risk}")
+        if partial_data:
+            print(f"\n  Geomag Risk: {risk_icons[risk_level]} {risk} (partial data)")
+        else:
+            print(f"\n  Geomag Risk: {risk_icons[risk_level]} {risk}")
     else:
         print("  Data unavailable")
 
@@ -1464,7 +1489,11 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
 
             # Show break detection status
             if data.get('is_break'):
-                print(f"           *** COUPLING BREAK (>{data.get('break_deviation_mad', 0):.1f} MAD below median) ***")
+                z_mad = data.get('z_mad', 0)
+                print(f"           *** COUPLING BREAK ({z_mad:.1f} MAD below median) ***")
+            elif data.get('break_vetoed'):
+                z_mad = data.get('z_mad', 0)
+                print(f"           [break vetoed: {data['break_vetoed']}] ({z_mad:.1f} MAD below median)")
 
             # Show registration shift if notable
             reg_shift = data.get('registration_shift', 0)
@@ -1481,15 +1510,20 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
         breaks = validation.get('break_detections', {})
         robustness = validation.get('robustness_checks', {})
 
-        detected_breaks = [p for p, b in breaks.items() if b.get('is_break')]
-        if detected_breaks:
+        # Show validated breaks (not vetoed)
+        validated_breaks = [p for p, b in breaks.items() if b.get('is_break') and not b.get('vetoed')]
+        vetoed_breaks = [p for p, b in breaks.items() if b.get('vetoed')]
+
+        if validated_breaks or vetoed_breaks:
             print(f"\n  VALIDATION STATUS (Reviewer-Proof)")
             print(f"  {'-'*40}")
-            for pair in detected_breaks:
+
+            for pair in validated_breaks:
                 bd = breaks[pair]
-                print(f"  {pair}: BREAK at {bd.get('current_mi', 0):.4f}")
+                z_mad = bd.get('z_mad', 0)
+                print(f"  {pair}: ✓ VALIDATED BREAK at {bd.get('current_mi', 0):.4f}")
                 print(f"    Criterion: {bd.get('criterion', '?')}")
-                print(f"    Deviation: {bd.get('deviation_mad', 0):.1f} MAD below median")
+                print(f"    Deviation: {z_mad:.1f} MAD below median")
 
                 # Registration status
                 reg = validation.get('registration_checks', {}).get(pair, {})
@@ -1514,6 +1548,17 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
                     print(f"    ⚠ Robustness: SENSITIVE ({rob.get('change_pct', 0):.1f}% change)")
                 elif rob.get('error'):
                     print(f"    ? Robustness: Error - {rob.get('error')}")
+
+            # Show vetoed breaks
+            for pair in vetoed_breaks:
+                bd = breaks[pair]
+                z_mad = bd.get('z_mad', 0)
+                reason = bd.get('vetoed', 'unknown')
+                print(f"  {pair}: ✗ VETOED (reason: {reason})")
+                print(f"    Deviation: {z_mad:.1f} MAD below median")
+                rob = robustness.get(pair, {})
+                if rob:
+                    print(f"    Binning change: {rob.get('change_pct', 0):.1f}% (>20% = unreliable)")
 
         # Transfer state detection (debug label)
         transfer = coupling.get('_transfer_state')
