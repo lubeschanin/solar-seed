@@ -187,7 +187,9 @@ Per-frame radial mean profile removal:
 R(r,θ) = I(r,θ) / ⟨I(r)⟩
 ```
 
-## AIA Channels
+## Instruments & Channels
+
+### SDO/AIA (Primary)
 
 | Wavelength | Temperature | Region |
 |------------|-------------|--------|
@@ -198,6 +200,15 @@ R(r,θ) = I(r,θ) / ⟨I(r)⟩
 | 335 Å | 2.5 MK | Hot Active Regions |
 | 94 Å | 6.3 MK | Flares |
 | 131 Å | 10 MK | Flares |
+
+### STEREO-A/EUVI (Validation)
+
+| Wavelength | AIA Equivalent | Temperature |
+|------------|----------------|-------------|
+| 304 Å | 304 Å | 0.05 MK |
+| 171 Å | 171 Å | 0.6 MK |
+| 195 Å | 193 Å | 1.2 MK |
+| 284 Å | 211 Å | 2.0 MK |
 
 ## Installation
 
@@ -282,6 +293,9 @@ uv run python -m solar_seed.render_sun --date "08.03.2012" --time "14:00" --time
 
 # Generate figures
 uv run python -m solar_seed.visualize --output figures/
+
+# STEREO cross-instrument validation
+uv run python scripts/stereo_sync_native.py
 ```
 
 ## Control Tests
@@ -325,7 +339,12 @@ results/
 │   ├── timescale_comparison.json
 │   ├── activity_conditioning.txt
 │   └── activity_conditioning.json
-└── state_space_analysis.json   # Dimensionality metrics by regime
+├── stereo/
+│   ├── stereo_validation_2011-02-06.json      # STEREO-A/EUVI validation
+│   └── stereo_validation_2011-02-06_native.json  # Native resolution
+├── state_space_analysis.json   # Dimensionality metrics by regime
+├── redundancy_analysis.json    # Channel redundancy structure
+└── hypothesis_test_results.json
 
 figures/
 ├── figure1_geometric_normalization.png
@@ -340,7 +359,10 @@ figures/
 └── figure9_state_space.png
 
 scripts/
-└── figure9_state_space.py      # State-space visualization
+├── figure9_state_space.py      # State-space visualization
+├── stereo_prototype.py         # STEREO-A/EUVI cross-validation
+├── stereo_sync_native.py       # Native resolution STEREO analysis
+└── generate_pdf.py             # PDF generation from PAPER.md
 ```
 
 ## Project Structure
