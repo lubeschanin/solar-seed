@@ -153,27 +153,47 @@ class ReportGenerator:
         """
         Calculate precursor detection statistics (Precision/Recall).
 
+        Break Classification (reviewer-proof):
+        - Break Candidate: ΔMI < median − 2×MAD (any status ALERT/WARNING)
+        - Validated Break: Candidate + all validation tests PASS
+        - Actionable Alert: Validated Break AND trigger enabled (status=ALERT)
+
+        Note: This is a STRUCTURAL PRECURSOR detector, not a flare detector.
+        Low recall is expected because only a subset of flares have
+        magnetically-mediated precursor signatures.
+
         Definitions:
-        - True Positive (TP): Break detected AND flare followed within window
-        - False Positive (FP): Break detected BUT no flare followed
-        - False Negative (FN): No break detected BUT flare occurred
-        - True Negative (TN): No break AND no flare (normal operation)
+        - True Positive (TP): Actionable Alert AND flare followed within window
+        - False Positive (FP): Actionable Alert BUT no flare followed
+        - False Negative (FN): No Actionable Alert BUT flare occurred
         """
         stats = {}
 
-        # Get all coupling breaks (status = ALERT or WARNING with significant deviation)
-        breaks = self._query("""
-            SELECT
-                timestamp,
-                pair,
-                delta_mi,
-                status,
-                deviation_pct
+        # Get all coupling breaks by category
+        # ALERT = Actionable (validated + trigger enabled)
+        # WARNING = Diagnostic only (vetoed or below trigger threshold)
+        alerts = self._query("""
+            SELECT timestamp, pair, delta_mi, status, deviation_pct
             FROM coupling_measurements
-            WHERE status IN ('ALERT', 'WARNING')
+            WHERE status = 'ALERT'
             ORDER BY timestamp
         """)
-        stats['total_breaks'] = len(breaks)
+
+        warnings = self._query("""
+            SELECT timestamp, pair, delta_mi, status, deviation_pct
+            FROM coupling_measurements
+            WHERE status = 'WARNING'
+            ORDER BY timestamp
+        """)
+
+        # Break hierarchy (reviewer-proof)
+        stats['break_candidates'] = len(alerts) + len(warnings)
+        stats['validated_breaks'] = len(alerts)  # Only ALERTs are fully validated
+        stats['diagnostic_anomalies'] = len(warnings)  # Vetoed or sub-threshold
+        stats['actionable_alerts'] = len(alerts)
+
+        # Use only actionable alerts for precision/recall
+        breaks = alerts
 
         # Get all significant GOES events (C-class and above)
         flares = self._query("""
@@ -227,6 +247,20 @@ class ReportGenerator:
         stats['false_positives'] = fp
         stats['false_negatives'] = fn
 
+        # Flare scope classification (for display)
+        stats['flares_with_precursor'] = len(matched_flares)
+        stats['flares_without_precursor'] = fn
+        stats['flare_details'] = []
+        for f in flares:
+            has_precursor = f['timestamp'] in matched_flares
+            stats['flare_details'].append({
+                'timestamp': f['timestamp'],
+                'class': f['flare_class'],
+                'flux': f['flux'],
+                'in_scope': has_precursor,
+                'scope_label': 'WITH PRECURSOR' if has_precursor else 'NO PRECURSOR (out of scope)'
+            })
+
         # Precision = TP / (TP + FP)
         if tp + fp > 0:
             stats['precision'] = tp / (tp + fp)
@@ -266,14 +300,31 @@ class ReportGenerator:
                     lead_times.append(delta_hours)
                     break
 
-        if lead_times:
+        # Lead time statistics (only meaningful for N>=3)
+        stats['lead_time_n'] = len(lead_times)
+        if len(lead_times) >= 3:
             stats['avg_lead_time_hours'] = sum(lead_times) / len(lead_times)
             stats['min_lead_time_hours'] = min(lead_times)
             stats['max_lead_time_hours'] = max(lead_times)
+            stats['lead_time_note'] = None
+        elif len(lead_times) > 0:
+            # N<3: show values but with caveat
+            stats['avg_lead_time_hours'] = sum(lead_times) / len(lead_times)
+            stats['min_lead_time_hours'] = min(lead_times)
+            stats['max_lead_time_hours'] = max(lead_times)
+            stats['lead_time_note'] = f"N={len(lead_times)}, illustrative only"
         else:
             stats['avg_lead_time_hours'] = None
             stats['min_lead_time_hours'] = None
             stats['max_lead_time_hours'] = None
+            stats['lead_time_note'] = None
+
+        # Add context note about structural detection
+        stats['detector_note'] = (
+            "Note: Low recall is expected. This system detects structural "
+            "reconfiguration precursors, not all flares. Only magnetically-mediated "
+            "events with observable coupling signatures are in scope."
+        )
 
         return stats
 
@@ -395,9 +446,22 @@ class ReportGenerator:
         lines.append(f"")
         lines.append(f"Detection window: {precursor['window_min_hours']:.1f} - {precursor['window_max_hours']:.1f} hours after break")
         lines.append(f"")
+
+        # Break hierarchy (reviewer-proof)
+        lines.append(f"### Break Classification")
+        lines.append(f"")
+        lines.append(f"| Category | Count | Definition |")
+        lines.append(f"|----------|-------|------------|")
+        lines.append(f"| Break Candidates | {precursor['break_candidates']} | ΔMI < median − 2×MAD |")
+        lines.append(f"| Diagnostic Anomalies | {precursor['diagnostic_anomalies']} | Candidate, vetoed or sub-threshold |")
+        lines.append(f"| **Actionable Alerts** | **{precursor['actionable_alerts']}** | Validated + trigger enabled |")
+        lines.append(f"")
+
+        # Precision/Recall based on Actionable Alerts only
+        lines.append(f"### Performance Metrics (Actionable Alerts only)")
+        lines.append(f"")
         lines.append(f"| Metric | Value |")
         lines.append(f"|--------|-------|")
-        lines.append(f"| Total Breaks Detected | {precursor['total_breaks']} |")
         lines.append(f"| Total Flares (C+) | {precursor['total_flares']} |")
         lines.append(f"| True Positives (TP) | {precursor['true_positives']} |")
         lines.append(f"| False Positives (FP) | {precursor['false_positives']} |")
@@ -409,7 +473,8 @@ class ReportGenerator:
             lines.append(f"| Precision | N/A |")
 
         if precursor['recall'] is not None:
-            lines.append(f"| **Recall** | **{precursor['recall']:.1%}** |")
+            recall_note = " (structural)" if precursor['recall'] < 0.5 else ""
+            lines.append(f"| **Recall{recall_note}** | **{precursor['recall']:.1%}** |")
         else:
             lines.append(f"| Recall | N/A |")
 
@@ -418,11 +483,33 @@ class ReportGenerator:
         else:
             lines.append(f"| F1 Score | N/A |")
 
+        # Lead time with N caveat
         if precursor['avg_lead_time_hours'] is not None:
-            lines.append(f"| Avg Lead Time | {precursor['avg_lead_time_hours']:.1f} hours |")
-            lines.append(f"| Min Lead Time | {precursor['min_lead_time_hours']:.1f} hours |")
-            lines.append(f"| Max Lead Time | {precursor['max_lead_time_hours']:.1f} hours |")
+            lead_note = f" ({precursor['lead_time_note']})" if precursor.get('lead_time_note') else ""
+            lines.append(f"| Avg Lead Time | {precursor['avg_lead_time_hours']:.1f} hours{lead_note} |")
+            if not precursor.get('lead_time_note'):  # Only show min/max if N>=3
+                lines.append(f"| Min Lead Time | {precursor['min_lead_time_hours']:.1f} hours |")
+                lines.append(f"| Max Lead Time | {precursor['max_lead_time_hours']:.1f} hours |")
         lines.append(f"")
+
+        # Context note
+        if precursor.get('detector_note'):
+            lines.append(f"> {precursor['detector_note']}")
+            lines.append(f"")
+
+        # Flare Scope Classification (if flares exist)
+        if precursor.get('flare_details'):
+            lines.append(f"### Flare Scope Classification")
+            lines.append(f"")
+            lines.append(f"| Time | Class | Scope |")
+            lines.append(f"|------|-------|-------|")
+            for f in precursor['flare_details'][:10]:  # Limit to 10
+                lines.append(f"| {f['timestamp']} | {f['class']} | {f['scope_label']} |")
+            if len(precursor['flare_details']) > 10:
+                lines.append(f"| ... | ... | ({len(precursor['flare_details']) - 10} more) |")
+            lines.append(f"")
+            lines.append(f"Summary: {precursor['flares_with_precursor']} in-scope, {precursor['flares_without_precursor']} out-of-scope")
+            lines.append(f"")
 
         # Daily Breakdown
         lines.append(f"## Daily Breakdown")
@@ -442,7 +529,14 @@ class ReportGenerator:
             lines.append(f"|------|------|---------|")
             for e in events[:20]:  # Limit to 20
                 if e['type'] == 'COUPLING_BREAK':
-                    lines.append(f"| {e['time']} | {e['status']} | {e['pair']}: {e['details']} |")
+                    # Map status to reviewer-proof labels
+                    if e['status'] == 'WARNING':
+                        label = 'DIAGNOSTIC (VETOED)'
+                    elif e['status'] == 'ALERT':
+                        label = 'ACTIONABLE ALERT'
+                    else:
+                        label = e['status']
+                    lines.append(f"| {e['time']} | {label} | {e['pair']}: {e['details']} |")
                 else:
                     lines.append(f"| {e['time']} | FLARE {e.get('class', '')} | {e['details']} |")
         else:
@@ -452,10 +546,21 @@ class ReportGenerator:
         # Interpretation Guide
         lines.append(f"## Interpretation Guide")
         lines.append(f"")
-        lines.append(f"- **Precision**: Of all breaks detected, what fraction preceded a flare? (Higher = fewer false alarms)")
-        lines.append(f"- **Recall**: Of all flares that occurred, what fraction had a preceding break? (Higher = fewer missed events)")
-        lines.append(f"- **F1 Score**: Harmonic mean of Precision and Recall (0-1, higher is better)")
-        lines.append(f"- **Lead Time**: Time between break detection and flare onset")
+        lines.append(f"### Break Classification")
+        lines.append(f"- **Break Candidate**: ΔMI dropped below median − 2×MAD threshold")
+        lines.append(f"- **Diagnostic Anomaly**: Candidate that failed validation or below trigger threshold (vetoed ≠ blind)")
+        lines.append(f"- **Actionable Alert**: Fully validated break with trigger enabled")
+        lines.append(f"")
+        lines.append(f"### Performance Metrics")
+        lines.append(f"- **Precision**: Of actionable alerts, what fraction preceded a flare? (Higher = fewer false alarms)")
+        lines.append(f"- **Recall (structural)**: Of flares with structural precursors, what fraction were detected? (Low values expected)")
+        lines.append(f"- **F1 Score**: Harmonic mean of Precision and Recall")
+        lines.append(f"- **Lead Time**: Time between alert and flare onset (meaningful only for N≥3)")
+        lines.append(f"")
+        lines.append(f"### Important Notes")
+        lines.append(f"- This is a **structural precursor detector**, not a flare detector")
+        lines.append(f"- Low recall is expected: only flares with magnetically-mediated coupling signatures are in scope")
+        lines.append(f"- Diagnostic anomalies remain interpretable even when alerts are vetoed")
         lines.append(f"")
 
         return "\n".join(lines)
@@ -491,6 +596,8 @@ class ReportGenerator:
             # Headers
             if line.startswith('# '):
                 html_lines.append(f"<h1>{line[2:]}</h1>")
+            elif line.startswith('### '):
+                html_lines.append(f"<h3>{line[4:]}</h3>")
             elif line.startswith('## '):
                 html_lines.append(f"<h2>{line[3:]}</h2>")
             # Tables
@@ -518,9 +625,9 @@ class ReportGenerator:
                     html_lines.append("<tr>" + "".join(f"<th>{c}</th>" for c in cells) + "</tr>")
                 else:
                     row_class = ""
-                    if 'ALERT' in line:
+                    if 'ACTIONABLE ALERT' in line or ('ALERT' in line and 'DIAGNOSTIC' not in line):
                         row_class = " class='alert'"
-                    elif 'WARNING' in line:
+                    elif 'DIAGNOSTIC' in line or 'VETOED' in line:
                         row_class = " class='warning'"
                     html_lines.append(f"<tr{row_class}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
             else:
@@ -528,7 +635,12 @@ class ReportGenerator:
                     html_lines.append("</table>")
                     in_table = False
                 if line.startswith('- '):
-                    html_lines.append(f"<li>{line[2:]}</li>")
+                    # Convert **text** to <strong>text</strong>
+                    import re
+                    line_html = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', line[2:])
+                    html_lines.append(f"<li>{line_html}</li>")
+                elif line.startswith('> '):
+                    html_lines.append(f"<blockquote>{line[2:]}</blockquote>")
                 elif line:
                     html_lines.append(f"<p>{line}</p>")
 
@@ -578,21 +690,29 @@ class ReportGenerator:
         lines.append("  PRECURSOR DETECTION STATISTICS")
         lines.append("  " + "-" * 40)
         lines.append(f"  Window: {precursor['window_min_hours']:.1f} - {precursor['window_max_hours']:.1f} hours")
-        lines.append(f"  Total Breaks:     {precursor['total_breaks']}")
-        lines.append(f"  Total Flares:     {precursor['total_flares']}")
-        lines.append(f"  True Positives:   {precursor['true_positives']}")
-        lines.append(f"  False Positives:  {precursor['false_positives']}")
-        lines.append(f"  False Negatives:  {precursor['false_negatives']}")
+        lines.append("")
+        lines.append("  Break Classification:")
+        lines.append(f"    Candidates:     {precursor['break_candidates']}")
+        lines.append(f"    Diagnostic:     {precursor['diagnostic_anomalies']} (vetoed)")
+        lines.append(f"    Actionable:     {precursor['actionable_alerts']}")
+        lines.append("")
+        lines.append("  Performance (Actionable Alerts):")
+        lines.append(f"    Total Flares:   {precursor['total_flares']}")
+        lines.append(f"    True Positives: {precursor['true_positives']}")
+        lines.append(f"    False Positives:{precursor['false_positives']}")
+        lines.append(f"    False Negatives:{precursor['false_negatives']}")
         lines.append("")
 
         if precursor['precision'] is not None:
             lines.append(f"  Precision:  {precursor['precision']:.1%}")
         if precursor['recall'] is not None:
-            lines.append(f"  Recall:     {precursor['recall']:.1%}")
+            recall_note = " (structural)" if precursor['recall'] < 0.5 else ""
+            lines.append(f"  Recall{recall_note}:   {precursor['recall']:.1%}")
         if precursor['f1_score'] is not None:
             lines.append(f"  F1 Score:   {precursor['f1_score']:.3f}")
         if precursor['avg_lead_time_hours'] is not None:
-            lines.append(f"  Avg Lead:   {precursor['avg_lead_time_hours']:.1f} hours")
+            lead_note = f" ({precursor['lead_time_note']})" if precursor.get('lead_time_note') else ""
+            lines.append(f"  Avg Lead:   {precursor['avg_lead_time_hours']:.1f} hours{lead_note}")
         lines.append("")
 
         # Daily Breakdown
