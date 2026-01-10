@@ -532,3 +532,19 @@ Beyond solar physics, the methodology is directly applicable to other multichann
 10. Howard, R. A., Moses, J. D., Vourlidas, A., et al. (2008). Sun Earth Connection Coronal and Heliospheric Investigation (SECCHI). *Space Science Reviews*, 136, 67–115. https://doi.org/10.1007/s11214-008-9341-4
 
 11. Wuelser, J.-P., Lemen, J. R., Tarbell, T. D., et al. (2004). EUVI: the STEREO-SECCHI extreme ultraviolet imager. *Proc. SPIE*, 5171, 111–122. https://doi.org/10.1117/12.506877
+
+---
+
+## Appendix A — Resolution Robustness
+
+### Figure A1 — Antipodal Validation at Native Resolution
+
+| Pair | EUVI ΔMI (2048²) | AIA ΔMI (2048²) | Ratio |
+|------|------------------|-----------------|-------|
+| 171–195 / 171–193 | 0.126 | 0.256 | 0.49 |
+| 171–304 | 0.096 | 0.099 | 0.97 |
+| 195–304 / 193–304 | 0.076 | 0.064 | 1.18 |
+
+Spearman rank correlation: ρ = 1.00
+
+Higher spatial resolution sharpens but does not alter the hierarchy.
