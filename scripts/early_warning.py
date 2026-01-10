@@ -831,10 +831,13 @@ def load_aia_latest(wavelengths: list[int], max_age_minutes: int = 60) -> tuple[
                         quality_flags[wl] = header.get('QUALITY', 0)
                         exposure_times[wl] = header.get('EXPTIME', 0)
 
-                        # Check quality flag (0 = good)
-                        if quality_flags[wl] != 0:
-                            warnings.append(f"{wl}Å: QUALITY={quality_flags[wl]} (non-zero)")
-                            print(f"    ⚠ Quality flag: {quality_flags[wl]}")
+                        # Check quality flag (only warn on critical bits)
+                        # Bit 30 (2^30 = 1073741824) = AEC flag (normal operation)
+                        # Critical bits: 0-15 indicate actual data issues
+                        critical_bits = quality_flags[wl] & 0x0000FFFF  # Lower 16 bits
+                        if critical_bits != 0:
+                            warnings.append(f"{wl}Å: QUALITY={quality_flags[wl]} (critical bits set)")
+                            print(f"    ⚠ Quality flag: {quality_flags[wl]} (critical)")
 
                         # Check exposure time (typical: 1-2s for most channels)
                         expected_exp = {171: 2.0, 193: 2.0, 211: 2.0, 304: 2.0, 335: 2.9, 94: 2.9, 131: 2.9}
