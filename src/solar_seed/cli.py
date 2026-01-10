@@ -48,9 +48,11 @@ def print_menu():
   │                                                                     │
   │   [5]  Render Sun Images (download + visualize)                     │
   │                                                                     │
-  │   [6]  Status: Check running analysis                               │
+  │   [6]  Early Warning System (real-time monitoring)                  │
   │                                                                     │
-  │   [7]  View Results                                                 │
+  │   [7]  Status: Check running analysis                               │
+  │                                                                     │
+  │   [8]  View Results                                                 │
   │                                                                     │
   │   [q]  Quit                                                         │
   │                                                                     │
@@ -633,6 +635,95 @@ def run_render():
         print("\n  Cancelled.")
 
 
+def run_early_warning():
+    """Early Warning System."""
+    clear_screen()
+    print_header()
+    print("""
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │               SOLAR EARLY WARNING SYSTEM                            │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  Multi-layer early warning architecture:
+
+    STEREO-A (51° ahead)        → 2-4 days warning
+           ↓
+    ΔMI Coupling Monitor        → Hours before flare
+           ↓
+    GOES X-ray + DSCOVR         → Minutes to real-time
+
+  Data Sources:
+    • GOES X-ray flux (flare detection)
+    • DSCOVR solar wind (geomagnetic storms)
+    • SDO/AIA coupling analysis (pre-flare detection)
+    • NOAA Space Weather Alerts
+""")
+
+    print("\n  Select mode:")
+    print("    [1] Quick Status Check (no coupling)")
+    print("    [2] Full Status with Coupling Analysis (~3 min)")
+    print("    [3] Continuous Monitoring (60s interval)")
+    print("    [4] Continuous with Coupling (10 min interval)")
+    print("    [5] Cancel")
+
+    choice = get_choice("Choose [1-5]:", ["1", "2", "3", "4", "5"])
+
+    if choice == "5":
+        print("\n  Cancelled.")
+        return
+
+    # Import early warning module
+    scripts_path = Path(__file__).parent.parent.parent / "scripts"
+    sys.path.insert(0, str(scripts_path))
+
+    try:
+        from early_warning import (
+            get_goes_xray,
+            get_dscovr_solar_wind,
+            get_noaa_alerts,
+            run_coupling_analysis,
+            print_status_report,
+            monitor_loop
+        )
+    except ImportError as e:
+        print(f"\n  Error importing early warning module: {e}")
+        print("  Make sure scripts/early_warning.py exists.")
+        return
+
+    if choice == "1":
+        # Quick status
+        print("\n  Fetching real-time data...\n")
+        xray = get_goes_xray()
+        solar_wind = get_dscovr_solar_wind()
+        alerts = get_noaa_alerts()
+        print_status_report(xray, solar_wind, alerts)
+
+    elif choice == "2":
+        # Full status with coupling
+        print("\n  Fetching real-time data + coupling analysis...\n")
+        xray = get_goes_xray()
+        solar_wind = get_dscovr_solar_wind()
+        alerts = get_noaa_alerts()
+        coupling = run_coupling_analysis()
+        print_status_report(xray, solar_wind, alerts, coupling)
+
+    elif choice == "3":
+        # Continuous monitoring (no coupling)
+        print("\n  Starting continuous monitoring (Ctrl+C to stop)...\n")
+        try:
+            monitor_loop(interval=60, with_coupling=False)
+        except KeyboardInterrupt:
+            print("\n  Monitoring stopped.")
+
+    elif choice == "4":
+        # Continuous with coupling
+        print("\n  Starting full monitoring with coupling (Ctrl+C to stop)...\n")
+        try:
+            monitor_loop(interval=600, with_coupling=True)
+        except KeyboardInterrupt:
+            print("\n  Monitoring stopped.")
+
+
 def show_status():
     """Show status of running analyses."""
     clear_screen()
@@ -680,6 +771,8 @@ def show_status():
         ("results/multichannel_real", "Multi-Channel (real)"),
         ("results/flare", "Flare Analysis"),
         ("results/final", "Final Analyses"),
+        ("results/early_warning", "Early Warning History"),
+        ("results/prominence", "Prominence Analysis"),
     ]
 
     print("  📁 Available Results:")
@@ -799,7 +892,7 @@ def main():
         print_header()
         print_menu()
 
-        choice = get_choice("Your choice:", ["1", "2", "3", "4", "5", "6", "7", "q"])
+        choice = get_choice("Your choice:", ["1", "2", "3", "4", "5", "6", "7", "8", "q"])
 
         if choice == "1":
             run_quicktest()
@@ -817,8 +910,11 @@ def main():
             run_render()
             input("\n  [Enter] Back to menu")
         elif choice == "6":
-            show_status()
+            run_early_warning()
+            input("\n  [Enter] Back to menu")
         elif choice == "7":
+            show_status()
+        elif choice == "8":
             show_results()
         elif choice == "q":
             clear_screen()
