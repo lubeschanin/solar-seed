@@ -18,6 +18,8 @@ from early_warning import (
     CouplingMonitor,
     fetch_json,
     FLARE_THRESHOLDS,
+    compute_registration_shift,
+    detect_coupling_break,
 )
 
 
@@ -412,3 +414,113 @@ class TestIntegration:
         result = get_dscovr_solar_wind()
         if result:
             assert 'plasma' in result or 'mag' in result
+
+
+class TestValidationChecks:
+    """Test reviewer-proof validation functions."""
+
+    @pytest.fixture
+    def temp_monitor(self):
+        """Create a monitor with temp file for testing."""
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+            temp_path = Path(f.name)
+        monitor = CouplingMonitor(history_file=temp_path)
+        yield monitor
+        # Cleanup
+        if temp_path.exists():
+            temp_path.unlink()
+
+    def test_registration_shift_aligned(self):
+        """Test registration check with aligned images."""
+        import numpy as np
+
+        # Create identical images with random structure
+        np.random.seed(42)
+        img = np.random.randn(512, 512).astype(np.float32)
+
+        result = compute_registration_shift(img, img)
+        assert result['is_centered'] == True
+        assert result['shift_pixels'] < 2  # Should be near zero
+        assert result['dx'] == 0 or abs(result['dx']) <= 1
+        assert result['dy'] == 0 or abs(result['dy']) <= 1
+
+    def test_registration_shift_misaligned(self):
+        """Test registration check with shifted images."""
+        import numpy as np
+        from scipy.ndimage import shift as ndshift
+
+        # Create image with structure
+        np.random.seed(42)
+        img1 = np.random.randn(512, 512).astype(np.float32)
+
+        # Shift by 20 pixels
+        img2 = ndshift(img1, (20, 15), mode='constant', cval=0)
+
+        result = compute_registration_shift(img1, img2, max_shift=10)
+        # Should detect the large shift
+        assert result['shift_pixels'] > 10
+        assert result['is_centered'] == False
+
+    def test_coupling_break_detection_normal(self, temp_monitor):
+        """Test break detection with normal values."""
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime.now(timezone.utc)
+
+        # Add history with some variation (not perfectly stable)
+        values = [0.55, 0.58, 0.62, 0.57, 0.60, 0.59, 0.61, 0.56, 0.58, 0.60]
+        for i, val in enumerate(values):
+            ts = (now - timedelta(minutes=5*i)).isoformat()
+            temp_monitor.add_reading(ts, {'193-211': {'delta_mi': val}})
+
+        # Test with value within normal range (near median ~0.585)
+        result = detect_coupling_break('193-211', 0.57, temp_monitor)
+        assert result['is_break'] == False
+        assert result['n_points'] >= 3
+
+    def test_coupling_break_detection_break(self, temp_monitor):
+        """Test break detection with anomalous value."""
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime.now(timezone.utc)
+
+        # Add history with realistic variation
+        values = [0.55, 0.58, 0.62, 0.57, 0.60, 0.59, 0.61, 0.56, 0.58, 0.60]
+        for i, val in enumerate(values):
+            ts = (now - timedelta(minutes=5*i)).isoformat()
+            temp_monitor.add_reading(ts, {'193-211': {'delta_mi': val}})
+
+        # Test with very low value (break) - well below any history value
+        result = detect_coupling_break('193-211', 0.30, temp_monitor)
+        assert result['is_break'] == True
+        assert result['deviation_mad'] < -2  # Significant negative deviation
+        assert 'median' in result
+        assert 'threshold' in result
+
+    def test_coupling_break_criterion_format(self, temp_monitor):
+        """Test break detection returns proper criterion string."""
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime.now(timezone.utc)
+
+        for i in range(5):
+            ts = (now - timedelta(minutes=5*i)).isoformat()
+            temp_monitor.add_reading(ts, {'193-211': {'delta_mi': 0.59}})
+
+        result = detect_coupling_break('193-211', 0.55, temp_monitor)
+        assert 'criterion' in result
+        assert 'MAD' in result['criterion']
+        assert 'median' in result['criterion']
+
+    def test_coupling_break_insufficient_data(self, temp_monitor):
+        """Test break detection with insufficient data."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        # Only add 1 reading (recent)
+        temp_monitor.add_reading(now.isoformat(), {'193-211': {'delta_mi': 0.59}})
+
+        result = detect_coupling_break('193-211', 0.50, temp_monitor)
+        assert result['is_break'] == False
+        assert 'Insufficient' in result.get('reason', '')

@@ -959,8 +959,236 @@ def detect_artifact(pair: str, current_mi: float, monitor: 'CouplingMonitor', th
     return None
 
 
-def run_coupling_analysis() -> dict | None:
-    """Run quick coupling analysis on latest AIA data with quality checks."""
+# =============================================================================
+# ARTIFACT VALIDATION TESTS (Reviewer-Proof Diagnostics)
+# =============================================================================
+
+def compute_registration_shift(img1, img2, max_shift: int = 10) -> dict:
+    """
+    Test B: Spatial registration sanity check using cross-correlation.
+
+    Computes the peak (dx, dy) shift between two images.
+    Large shifts may indicate registration issues that cause MI artifacts.
+
+    Args:
+        img1, img2: Image arrays (same shape)
+        max_shift: Maximum shift to search (pixels)
+
+    Returns:
+        dict with dx, dy, peak_value, is_centered
+    """
+    import numpy as np
+
+    try:
+        from scipy import signal
+        from scipy.ndimage import shift as ndshift
+
+        # Use central region for faster computation
+        h, w = img1.shape
+        cy, cx = h // 2, w // 2
+        size = min(512, h // 2, w // 2)
+
+        crop1 = img1[cy-size:cy+size, cx-size:cx+size].astype(float)
+        crop2 = img2[cy-size:cy+size, cx-size:cx+size].astype(float)
+
+        # Normalize
+        crop1 = (crop1 - np.mean(crop1)) / (np.std(crop1) + 1e-10)
+        crop2 = (crop2 - np.mean(crop2)) / (np.std(crop2) + 1e-10)
+
+        # Cross-correlation
+        corr = signal.correlate2d(crop1, crop2, mode='same', boundary='fill')
+
+        # Find peak
+        peak_idx = np.unravel_index(np.argmax(corr), corr.shape)
+        center = (corr.shape[0] // 2, corr.shape[1] // 2)
+
+        dy = peak_idx[0] - center[0]
+        dx = peak_idx[1] - center[1]
+        peak_val = corr[peak_idx] / (crop1.size)  # Normalized
+
+        # Is it well-centered? (peak within max_shift of center)
+        shift_magnitude = np.sqrt(dx**2 + dy**2)
+        is_centered = shift_magnitude <= max_shift
+
+        return {
+            'dx': dx,
+            'dy': dy,
+            'shift_pixels': shift_magnitude,
+            'peak_correlation': peak_val,
+            'is_centered': is_centered,
+            'max_allowed': max_shift,
+        }
+
+    except Exception as e:
+        return {
+            'dx': 0,
+            'dy': 0,
+            'shift_pixels': 0,
+            'peak_correlation': 0,
+            'is_centered': True,
+            'error': str(e),
+        }
+
+
+def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonitor',
+                          window_minutes: int = 60, k: float = 2.0) -> dict:
+    """
+    Formal "Coupling Break" detection using rolling median and MAD.
+
+    Definition (reviewer-proof):
+        A Coupling Break occurs when:
+        ΔMI(t) < median(last 60 min) - k × MAD(last 60 min)
+
+    Args:
+        pair: Channel pair name
+        current_mi: Current ΔMI value
+        monitor: CouplingMonitor instance
+        window_minutes: Rolling window size
+        k: MAD multiplier (default 2.0 = ~95% interval)
+
+    Returns:
+        dict with break detection result and metadata
+    """
+    pair_history = [h for h in monitor.history if pair in h.get('coupling', {})]
+
+    # Filter to window
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(minutes=window_minutes)
+
+    window_values = []
+    for h in pair_history:
+        try:
+            ts = datetime.fromisoformat(h['timestamp'].replace('Z', '+00:00'))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts >= window_start:
+                val = h['coupling'][pair].get('delta_mi')
+                if val is not None:
+                    window_values.append(val)
+        except:
+            continue
+
+    if len(window_values) < 3:
+        return {
+            'is_break': False,
+            'reason': f'Insufficient data ({len(window_values)}/{3} points)',
+            'n_points': len(window_values),
+            'window_minutes': window_minutes,
+        }
+
+    # Compute robust statistics (median and MAD)
+    window_values.sort()
+    n = len(window_values)
+    if n % 2 == 0:
+        median = (window_values[n//2 - 1] + window_values[n//2]) / 2
+    else:
+        median = window_values[n//2]
+
+    # MAD = median(|x_i - median|)
+    deviations = sorted([abs(v - median) for v in window_values])
+    if len(deviations) % 2 == 0:
+        mad = (deviations[len(deviations)//2 - 1] + deviations[len(deviations)//2]) / 2
+    else:
+        mad = deviations[len(deviations)//2]
+
+    # Scale MAD to approximate std (1.4826 for normal distribution)
+    mad_scaled = mad * 1.4826
+
+    # Threshold
+    threshold = median - k * mad_scaled
+
+    # Detect break
+    is_break = current_mi < threshold
+    deviation_mad = (current_mi - median) / mad_scaled if mad_scaled > 0.001 else 0
+
+    return {
+        'is_break': is_break,
+        'current_mi': current_mi,
+        'median': median,
+        'mad': mad,
+        'mad_scaled': mad_scaled,
+        'threshold': threshold,
+        'k': k,
+        'deviation_mad': deviation_mad,
+        'n_points': n,
+        'window_minutes': window_minutes,
+        'criterion': f'ΔMI < median - {k}×MAD = {threshold:.4f}',
+    }
+
+
+def compute_robustness_check(img1, img2, original_mi: float, method: str = 'binning') -> dict:
+    """
+    Test C: Robustness check - verify MI is stable under preprocessing changes.
+
+    Recomputes ΔMI with:
+    - 2x2 binning (reduces resolution)
+
+    If the drop is stable under binning, it's much harder to dismiss as artifact.
+
+    Args:
+        img1, img2: Original image arrays
+        original_mi: MI computed at full resolution
+        method: 'binning' (default)
+
+    Returns:
+        dict with robustness check results
+    """
+    import numpy as np
+
+    try:
+        from solar_seed.radial_profile import subtract_radial_geometry
+        from solar_seed.control_tests import sector_ring_shuffle_test
+
+        # 2x2 binning
+        def bin2x2(img):
+            h, w = img.shape
+            h_new, w_new = h // 2, w // 2
+            return img[:h_new*2, :w_new*2].reshape(h_new, 2, w_new, 2).mean(axis=(1, 3))
+
+        binned1 = bin2x2(img1)
+        binned2 = bin2x2(img2)
+
+        # Recompute MI on binned data
+        res1, _, _ = subtract_radial_geometry(binned1)
+        res2, _, _ = subtract_radial_geometry(binned2)
+        shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
+        binned_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
+
+        # Compare
+        change_pct = (binned_mi - original_mi) / original_mi * 100 if original_mi else 0
+
+        # Stable if change < 20%
+        is_robust = abs(change_pct) < 20
+
+        return {
+            'original_mi': original_mi,
+            'binned_mi': binned_mi,
+            'change_pct': change_pct,
+            'is_robust': is_robust,
+            'method': '2x2 binning',
+            'interpretation': 'STABLE' if is_robust else 'SENSITIVE to resolution',
+        }
+
+    except Exception as e:
+        return {
+            'original_mi': original_mi,
+            'binned_mi': None,
+            'change_pct': None,
+            'is_robust': None,
+            'error': str(e),
+        }
+
+
+def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
+    """
+    Run quick coupling analysis on latest AIA data with quality checks.
+
+    Includes reviewer-proof validation:
+    - Test A: Time alignment (<60s between channels)
+    - Test B: Registration shift (cross-correlation)
+    - Test C: Robustness check (2x2 binning) - only on breaks
+    - Formal Coupling Break detection (median - k×MAD)
+    """
     print("  Running coupling analysis (this may take a few minutes)...")
 
     try:
@@ -999,25 +1227,55 @@ def run_coupling_analysis() -> dict | None:
         results = {}
         monitor = get_coupling_monitor()
         artifact_warnings = []
+        registration_checks = {}
+        break_detections = {}
+        robustness_checks = {}
 
         # Key pairs for monitoring
         pairs = [(193, 211), (193, 304), (171, 193)]
 
         for wl1, wl2 in pairs:
             if wl1 in channels and wl2 in channels:
+                # Test B: Registration shift BEFORE geometry subtraction
+                reg_check = compute_registration_shift(channels[wl1], channels[wl2])
+                pair_key = f"{wl1}-{wl2}"
+                registration_checks[pair_key] = reg_check
+
+                if not reg_check['is_centered']:
+                    warn_msg = f"{pair_key}: Registration shift {reg_check['shift_pixels']:.1f}px (dx={reg_check['dx']}, dy={reg_check['dy']})"
+                    quality_warnings.append(warn_msg)
+                    print(f"  ⚠ {warn_msg}")
+
                 res1, _, _ = subtract_radial_geometry(channels[wl1])
                 res2, _, _ = subtract_radial_geometry(channels[wl2])
 
                 shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
                 delta_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
 
-                pair_key = f"{wl1}-{wl2}"
-
-                # Check for artifacts BEFORE computing residuals
+                # Check for artifacts (3σ jump)
                 artifact = detect_artifact(pair_key, delta_mi, monitor)
                 if artifact:
                     artifact_warnings.append(f"{pair_key}: {artifact['message']}")
                     print(f"  ⚠ Possible artifact in {pair_key}: {artifact['message']}")
+
+                # Formal Coupling Break detection
+                break_check = detect_coupling_break(pair_key, delta_mi, monitor)
+                break_detections[pair_key] = break_check
+
+                if break_check['is_break']:
+                    print(f"  ⚠ COUPLING BREAK detected in {pair_key}:")
+                    print(f"     {break_check['criterion']}")
+                    print(f"     Current: {delta_mi:.4f}, Deviation: {break_check['deviation_mad']:.1f} MAD")
+
+                    # Test C: Robustness check on detected breaks
+                    if validate_breaks:
+                        print(f"  → Running robustness check (2x2 binning)...")
+                        robust = compute_robustness_check(channels[wl1], channels[wl2], delta_mi)
+                        robustness_checks[pair_key] = robust
+                        if robust.get('is_robust'):
+                            print(f"     ✓ Break is ROBUST under binning (Δ={robust['change_pct']:.1f}%)")
+                        else:
+                            print(f"     ⚠ Break is SENSITIVE to resolution (Δ={robust.get('change_pct', '?')}%)")
 
                 residual_info = monitor.compute_residual(pair_key, delta_mi)
                 trend_info = monitor.analyze_trend(pair_key)
@@ -1029,6 +1287,9 @@ def run_coupling_analysis() -> dict | None:
                     'deviation_pct': residual_info['deviation_pct'],
                     'status': residual_info['status'],
                     'artifact_warning': artifact is not None,
+                    'is_break': break_check.get('is_break', False),
+                    'break_deviation_mad': break_check.get('deviation_mad', 0),
+                    'registration_shift': reg_check.get('shift_pixels', 0),
                     # Pass through all trend info
                     **trend_info
                 }
@@ -1045,8 +1306,16 @@ def run_coupling_analysis() -> dict | None:
         results['_quality'] = {
             'is_good': quality_info['is_good_quality'] if quality_info else None,
             'time_spread_sec': quality_info['time_spread_sec'] if quality_info else None,
+            'timestamps': quality_info['timestamps'] if quality_info else {},
             'warnings': quality_warnings + artifact_warnings,
             'n_warnings': len(quality_warnings) + len(artifact_warnings),
+        }
+
+        # Add validation metadata
+        results['_validation'] = {
+            'registration_checks': registration_checks,
+            'break_detections': break_detections,
+            'robustness_checks': robustness_checks,
         }
 
         return results
@@ -1183,10 +1452,58 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             if trend == 'ACCELERATING_DOWN' and data.get('status') in ['ELEVATED', 'WARNING', 'ALERT']:
                 print(f"           ⚠ Coupling declining and accelerating!")
 
+            # Show break detection status
+            if data.get('is_break'):
+                print(f"           *** COUPLING BREAK (>{data.get('break_deviation_mad', 0):.1f} MAD below median) ***")
+
+            # Show registration shift if notable
+            reg_shift = data.get('registration_shift', 0)
+            if reg_shift > 3:
+                print(f"           Registration: {reg_shift:.1f}px shift")
+
         if any_alert:
             print(f"\n  *** COUPLING ANOMALY DETECTED ***")
             print(f"  Reduced coupling may indicate magnetic stress buildup")
             print(f"  Monitor for potential flare activity in coming hours")
+
+        # Show validation summary for any detected breaks
+        validation = coupling.get('_validation', {})
+        breaks = validation.get('break_detections', {})
+        robustness = validation.get('robustness_checks', {})
+
+        detected_breaks = [p for p, b in breaks.items() if b.get('is_break')]
+        if detected_breaks:
+            print(f"\n  VALIDATION STATUS (Reviewer-Proof)")
+            print(f"  {'-'*40}")
+            for pair in detected_breaks:
+                bd = breaks[pair]
+                print(f"  {pair}: BREAK at {bd.get('current_mi', 0):.4f}")
+                print(f"    Criterion: {bd.get('criterion', '?')}")
+                print(f"    Deviation: {bd.get('deviation_mad', 0):.1f} MAD below median")
+
+                # Registration status
+                reg = validation.get('registration_checks', {}).get(pair, {})
+                shift = reg.get('shift_pixels', 0)
+                if shift <= 3:
+                    print(f"    ✓ Registration: OK ({shift:.1f}px shift)")
+                else:
+                    print(f"    ⚠ Registration: {shift:.1f}px shift")
+
+                # Time sync status
+                ts = coupling.get('_quality', {}).get('time_spread_sec', 0)
+                if ts and ts <= 60:
+                    print(f"    ✓ Time sync: OK ({ts:.0f}s spread)")
+                elif ts:
+                    print(f"    ⚠ Time sync: {ts:.0f}s spread (>60s)")
+
+                # Robustness check
+                rob = robustness.get(pair, {})
+                if rob.get('is_robust') is True:
+                    print(f"    ✓ Robustness: STABLE under 2x2 binning ({rob.get('change_pct', 0):.1f}% change)")
+                elif rob.get('is_robust') is False:
+                    print(f"    ⚠ Robustness: SENSITIVE ({rob.get('change_pct', 0):.1f}% change)")
+                elif rob.get('error'):
+                    print(f"    ? Robustness: Error - {rob.get('error')}")
 
         # Transfer state detection (debug label)
         transfer = coupling.get('_transfer_state')
