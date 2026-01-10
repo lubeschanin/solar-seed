@@ -399,6 +399,57 @@ class CouplingMonitor:
         })
         self._save_history()
 
+    def detect_transfer_state(self) -> dict | None:
+        """
+        Detect potential energy transfer between layers.
+
+        TRANSFER_STATE: When chromospheric anchor (193-304) strengthens
+        while coronal coupling (193-211) weakens - may indicate
+        energy reorganization before flare.
+
+        Returns dict with state info or None if not detected.
+        """
+        # Need trends for both pairs
+        trend_304 = self.analyze_trend('193-304')
+        trend_211 = self.analyze_trend('193-211')
+
+        # Require at least medium confidence
+        if trend_304.get('confidence') in ['none', 'low']:
+            return None
+        if trend_211.get('confidence') in ['none', 'low']:
+            return None
+
+        slope_304 = trend_304.get('slope_pct_per_hour', 0)
+        slope_211 = trend_211.get('slope_pct_per_hour', 0)
+
+        # Thresholds for transfer detection
+        RISING_THRESHOLD = 3.0   # %/hour
+        FALLING_THRESHOLD = -3.0  # %/hour
+
+        # Transfer state: 304 rising while 211 falling
+        if slope_304 > RISING_THRESHOLD and slope_211 < FALLING_THRESHOLD:
+            return {
+                'state': 'TRANSFER_STATE',
+                'description': 'Chromospheric anchor strengthening, coronal coupling weakening',
+                'slope_193_304': slope_304,
+                'slope_193_211': slope_211,
+                'confidence': min(trend_304['confidence'], trend_211['confidence']),
+                'interpretation': 'Possible energy reorganization / magnetic stress buildup'
+            }
+
+        # Inverse: recovery after flare?
+        if slope_304 < FALLING_THRESHOLD and slope_211 > RISING_THRESHOLD:
+            return {
+                'state': 'RECOVERY_STATE',
+                'description': 'Coronal coupling recovering, chromospheric anchor releasing',
+                'slope_193_304': slope_304,
+                'slope_193_211': slope_211,
+                'confidence': min(trend_304['confidence'], trend_211['confidence']),
+                'interpretation': 'Possible post-flare recovery / relaxation'
+            }
+
+        return None
+
 
 # Global instances
 _coupling_monitor = None
@@ -592,6 +643,11 @@ def run_coupling_analysis() -> dict | None:
         # Save to history
         monitor.add_reading(timestamp, results)
 
+        # Check for transfer state (debug label)
+        transfer = monitor.detect_transfer_state()
+        if transfer:
+            results['_transfer_state'] = transfer
+
         return results
 
     except Exception as e:
@@ -703,6 +759,16 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             print(f"\n  *** COUPLING ANOMALY DETECTED ***")
             print(f"  Reduced coupling may indicate magnetic stress buildup")
             print(f"  Monitor for potential flare activity in coming hours")
+
+        # Transfer state detection (debug label)
+        transfer = coupling.get('_transfer_state')
+        if transfer:
+            state_icons = {'TRANSFER_STATE': '', 'RECOVERY_STATE': ''}
+            icon = state_icons.get(transfer['state'], '')
+            print(f"\n  {icon} [{transfer['state']}] ({transfer['confidence']} confidence)")
+            print(f"     {transfer['description']}")
+            print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
+            print(f"     → {transfer['interpretation']}")
 
     # Active alerts
     if alerts:

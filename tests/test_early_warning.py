@@ -289,6 +289,40 @@ class TestCouplingMonitor:
         # Should still detect rising trend despite outlier
         assert result['slope_pct_per_hour'] > 0
 
+    def test_transfer_state_detection(self, monitor):
+        """Detect TRANSFER_STATE when 304 rises and 211 falls."""
+        # Add readings with diverging trends
+        # 193-304: rising (0.07 -> 0.10)
+        # 193-211: falling (0.59 -> 0.50)
+        for i in range(8):
+            monitor.add_reading(
+                f"2026-01-01T{10+i}:00:00",
+                {
+                    '193-304': {'delta_mi': 0.07 + i * 0.005},  # Rising
+                    '193-211': {'delta_mi': 0.59 - i * 0.015}   # Falling
+                }
+            )
+
+        transfer = monitor.detect_transfer_state()
+        assert transfer is not None
+        assert transfer['state'] == 'TRANSFER_STATE'
+        assert transfer['slope_193_304'] > 0
+        assert transfer['slope_193_211'] < 0
+
+    def test_no_transfer_state_when_both_stable(self, monitor):
+        """No transfer state when both pairs are stable."""
+        for i in range(8):
+            monitor.add_reading(
+                f"2026-01-01T{10+i}:00:00",
+                {
+                    '193-304': {'delta_mi': 0.07 + (i % 2) * 0.001},
+                    '193-211': {'delta_mi': 0.59 + (i % 2) * 0.001}
+                }
+            )
+
+        transfer = monitor.detect_transfer_state()
+        assert transfer is None
+
 
 class TestAlertThresholds:
     """Test that alert thresholds match paper findings."""
