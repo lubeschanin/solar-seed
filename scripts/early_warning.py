@@ -968,7 +968,7 @@ def detect_artifact(pair: str, current_mi: float, monitor: 'CouplingMonitor', th
 
 def compute_registration_shift(img1, img2, max_shift: int = 10) -> dict:
     """
-    Test B: Spatial registration sanity check using cross-correlation.
+    Test B: Spatial registration sanity check using FFT cross-correlation.
 
     Computes the peak (dx, dy) shift between two images.
     Large shifts may indicate registration issues that cause MI artifacts.
@@ -983,23 +983,27 @@ def compute_registration_shift(img1, img2, max_shift: int = 10) -> dict:
     import numpy as np
 
     try:
-        from scipy import signal
-        from scipy.ndimage import shift as ndshift
+        from scipy import fft
 
-        # Use central region for faster computation
+        # Use small central region for fast computation
         h, w = img1.shape
         cy, cx = h // 2, w // 2
-        size = min(512, h // 2, w // 2)
+        size = 256  # Small crop for speed
 
-        crop1 = img1[cy-size:cy+size, cx-size:cx+size].astype(float)
-        crop2 = img2[cy-size:cy+size, cx-size:cx+size].astype(float)
+        crop1 = img1[cy-size:cy+size, cx-size:cx+size].astype(np.float64)
+        crop2 = img2[cy-size:cy+size, cx-size:cx+size].astype(np.float64)
 
         # Normalize
         crop1 = (crop1 - np.mean(crop1)) / (np.std(crop1) + 1e-10)
         crop2 = (crop2 - np.mean(crop2)) / (np.std(crop2) + 1e-10)
 
-        # Cross-correlation
-        corr = signal.correlate2d(crop1, crop2, mode='same', boundary='fill')
+        # FFT-based cross-correlation (much faster than correlate2d)
+        f1 = fft.fft2(crop1)
+        f2 = fft.fft2(crop2)
+        corr = np.real(fft.ifft2(f1 * np.conj(f2)))
+
+        # Shift zero-frequency to center
+        corr = fft.fftshift(corr)
 
         # Find peak
         peak_idx = np.unravel_index(np.argmax(corr), corr.shape)
@@ -1007,18 +1011,18 @@ def compute_registration_shift(img1, img2, max_shift: int = 10) -> dict:
 
         dy = peak_idx[0] - center[0]
         dx = peak_idx[1] - center[1]
-        peak_val = corr[peak_idx] / (crop1.size)  # Normalized
+        peak_val = corr[peak_idx] / crop1.size  # Normalized
 
         # Is it well-centered? (peak within max_shift of center)
         shift_magnitude = np.sqrt(dx**2 + dy**2)
         is_centered = shift_magnitude <= max_shift
 
         return {
-            'dx': dx,
-            'dy': dy,
-            'shift_pixels': shift_magnitude,
-            'peak_correlation': peak_val,
-            'is_centered': is_centered,
+            'dx': int(dx),
+            'dy': int(dy),
+            'shift_pixels': float(shift_magnitude),
+            'peak_correlation': float(peak_val),
+            'is_centered': bool(is_centered),
             'max_allowed': max_shift,
         }
 
