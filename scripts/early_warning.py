@@ -745,12 +745,19 @@ def run_stereo_coupling_analysis() -> dict | None:
         return None
 
 
-def load_aia_latest(wavelengths: list[int], max_age_minutes: int = 60) -> tuple[dict, str] | tuple[None, None]:
+def load_aia_latest(wavelengths: list[int], max_age_minutes: int = 60) -> tuple[dict, str, dict] | tuple[None, None, None]:
     """
-    Load the most recent available AIA data.
+    Load the most recent available AIA data with quality metadata.
 
     Searches for available images in the last max_age_minutes and picks the newest.
-    Returns (channels_dict, actual_timestamp) or (None, None) if not found.
+    Returns (channels_dict, actual_timestamp, quality_info) or (None, None, None) if not found.
+
+    Quality info includes:
+    - timestamps: dict of wavelength -> timestamp
+    - time_spread_sec: max time difference between channels
+    - quality_flags: dict of wavelength -> QUALITY header value
+    - exposure_times: dict of wavelength -> EXPTIME
+    - warnings: list of quality warnings
     """
     try:
         from sunpy.net import Fido, attrs as a
@@ -764,6 +771,12 @@ def load_aia_latest(wavelengths: list[int], max_age_minutes: int = 60) -> tuple[
 
         channels = {}
         actual_timestamp = None
+
+        # Quality tracking
+        timestamps = {}
+        quality_flags = {}
+        exposure_times = {}
+        warnings = []
 
         for wl in wavelengths:
             print(f"    Searching {wl} Å (last {max_age_minutes} min)...")
@@ -795,21 +808,62 @@ def load_aia_latest(wavelengths: list[int], max_age_minutes: int = 60) -> tuple[
                         channels[wl] = smap.data
 
                         # Get actual timestamp from the FITS header
+                        timestamps[wl] = smap.date.datetime
                         if actual_timestamp is None:
                             actual_timestamp = smap.date.isot
                             print(f"    Actual image time: {actual_timestamp}")
+
+                        # Extract quality metadata from FITS header
+                        header = smap.meta
+                        quality_flags[wl] = header.get('QUALITY', 0)
+                        exposure_times[wl] = header.get('EXPTIME', 0)
+
+                        # Check quality flag (0 = good)
+                        if quality_flags[wl] != 0:
+                            warnings.append(f"{wl}Å: QUALITY={quality_flags[wl]} (non-zero)")
+                            print(f"    ⚠ Quality flag: {quality_flags[wl]}")
+
+                        # Check exposure time (typical: 1-2s for most channels)
+                        expected_exp = {171: 2.0, 193: 2.0, 211: 2.0, 304: 2.0, 335: 2.9, 94: 2.9, 131: 2.9}
+                        exp_expected = expected_exp.get(wl, 2.0)
+                        if exposure_times[wl] < exp_expected * 0.5:
+                            warnings.append(f"{wl}Å: Short exposure {exposure_times[wl]:.2f}s (expected ~{exp_expected}s)")
+                            print(f"    ⚠ Short exposure: {exposure_times[wl]:.2f}s")
 
                         os.remove(files[0])
             else:
                 print(f"    No {wl} Å images found in last {max_age_minutes} min")
 
-        return (channels, actual_timestamp) if channels else (None, None)
+        if not channels:
+            return None, None, None
+
+        # Check time synchronization between channels
+        time_spread_sec = 0
+        if len(timestamps) >= 2:
+            ts_list = list(timestamps.values())
+            time_spread_sec = (max(ts_list) - min(ts_list)).total_seconds()
+            if time_spread_sec > 60:
+                warnings.append(f"ASYNC: Channels spread over {time_spread_sec:.0f}s (>60s)")
+                print(f"    ⚠ Time spread: {time_spread_sec:.0f}s between channels")
+            elif time_spread_sec > 30:
+                print(f"    Time spread: {time_spread_sec:.0f}s (acceptable)")
+
+        quality_info = {
+            'timestamps': {wl: ts.isoformat() for wl, ts in timestamps.items()},
+            'time_spread_sec': time_spread_sec,
+            'quality_flags': quality_flags,
+            'exposure_times': exposure_times,
+            'warnings': warnings,
+            'is_good_quality': len(warnings) == 0,
+        }
+
+        return channels, actual_timestamp, quality_info
 
     except Exception as e:
         print(f"    VSO load error: {e}")
         import traceback
         traceback.print_exc()
-        return None, None
+        return None, None, None
 
 
 def load_aia_direct(timestamp: str, wavelengths: list[int]) -> dict | None:
@@ -849,8 +903,51 @@ def load_aia_direct(timestamp: str, wavelengths: list[int]) -> dict | None:
         return None
 
 
+def detect_artifact(pair: str, current_mi: float, monitor: 'CouplingMonitor', threshold_sigma: float = 3.0) -> dict | None:
+    """
+    Detect if current measurement might be an artifact (single-frame anomaly).
+
+    An artifact is suspected if:
+    - Current value deviates > threshold_sigma from recent mean
+    - AND we have enough history to establish a baseline
+
+    Returns dict with artifact info or None if no artifact suspected.
+    """
+    pair_history = [h for h in monitor.history if pair in h.get('coupling', {})]
+
+    if len(pair_history) < 3:
+        return None  # Not enough data to detect artifacts
+
+    # Get recent values (last 6 readings, ~1 hour)
+    recent = pair_history[-6:]
+    recent_values = [h['coupling'][pair].get('delta_mi', 0) for h in recent if 'delta_mi' in h['coupling'].get(pair, {})]
+
+    if len(recent_values) < 3:
+        return None
+
+    mean_val = sum(recent_values) / len(recent_values)
+    std_val = (sum((v - mean_val)**2 for v in recent_values) / len(recent_values)) ** 0.5
+
+    if std_val < 0.001:  # Avoid division by zero
+        return None
+
+    deviation_sigma = abs(current_mi - mean_val) / std_val
+
+    if deviation_sigma > threshold_sigma:
+        return {
+            'suspected': True,
+            'deviation_sigma': deviation_sigma,
+            'current': current_mi,
+            'recent_mean': mean_val,
+            'recent_std': std_val,
+            'message': f"Jump of {deviation_sigma:.1f}σ from recent mean ({mean_val:.3f} ± {std_val:.3f})"
+        }
+
+    return None
+
+
 def run_coupling_analysis() -> dict | None:
-    """Run quick coupling analysis on latest AIA data."""
+    """Run quick coupling analysis on latest AIA data with quality checks."""
     print("  Running coupling analysis (this may take a few minutes)...")
 
     try:
@@ -859,7 +956,7 @@ def run_coupling_analysis() -> dict | None:
 
         # Load most recent available AIA data (within last 30 min)
         print("  Searching for latest AIA images...")
-        channels, timestamp = load_aia_latest([193, 211, 304], max_age_minutes=30)
+        channels, timestamp, quality_info = load_aia_latest([193, 211, 304], max_age_minutes=30)
 
         if not channels or len(channels) < 2:
             print("  Could not load AIA data via VSO, trying fallback...")
@@ -867,6 +964,7 @@ def run_coupling_analysis() -> dict | None:
             fallback_time = datetime.now(timezone.utc) - timedelta(minutes=10)
             timestamp = fallback_time.strftime("%Y-%m-%dT%H:%M:00")
             channels = load_aia_direct(timestamp, [193, 211, 304])
+            quality_info = None  # No quality info from fallback
 
         if not channels or len(channels) < 2:
             print("  Could not load AIA data")
@@ -874,8 +972,20 @@ def run_coupling_analysis() -> dict | None:
 
         print(f"  Using AIA data from: {timestamp}")
 
+        # Report quality status
+        quality_warnings = []
+        if quality_info:
+            if quality_info['is_good_quality']:
+                print(f"  ✓ Quality check: PASSED (sync={quality_info['time_spread_sec']:.0f}s)")
+            else:
+                print(f"  ⚠ Quality warnings:")
+                for w in quality_info['warnings']:
+                    print(f"    - {w}")
+                quality_warnings = quality_info['warnings']
+
         results = {}
         monitor = get_coupling_monitor()
+        artifact_warnings = []
 
         # Key pairs for monitoring
         pairs = [(193, 211), (193, 304), (171, 193)]
@@ -889,6 +999,13 @@ def run_coupling_analysis() -> dict | None:
                 delta_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
 
                 pair_key = f"{wl1}-{wl2}"
+
+                # Check for artifacts BEFORE computing residuals
+                artifact = detect_artifact(pair_key, delta_mi, monitor)
+                if artifact:
+                    artifact_warnings.append(f"{pair_key}: {artifact['message']}")
+                    print(f"  ⚠ Possible artifact in {pair_key}: {artifact['message']}")
+
                 residual_info = monitor.compute_residual(pair_key, delta_mi)
                 trend_info = monitor.analyze_trend(pair_key)
 
@@ -898,6 +1015,7 @@ def run_coupling_analysis() -> dict | None:
                     'residual': residual_info['residual'],
                     'deviation_pct': residual_info['deviation_pct'],
                     'status': residual_info['status'],
+                    'artifact_warning': artifact is not None,
                     # Pass through all trend info
                     **trend_info
                 }
@@ -909,6 +1027,14 @@ def run_coupling_analysis() -> dict | None:
         transfer = monitor.detect_transfer_state()
         if transfer:
             results['_transfer_state'] = transfer
+
+        # Add quality metadata to results
+        results['_quality'] = {
+            'is_good': quality_info['is_good_quality'] if quality_info else None,
+            'time_spread_sec': quality_info['time_spread_sec'] if quality_info else None,
+            'warnings': quality_warnings + artifact_warnings,
+            'n_warnings': len(quality_warnings) + len(artifact_warnings),
+        }
 
         return results
 
@@ -966,6 +1092,17 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
         print(f"\n  ΔMI COUPLING MONITOR (Pre-Flare Detection)")
         print(f"  {'-'*40}")
 
+        # Show quality status first
+        quality = coupling.get('_quality', {})
+        if quality:
+            n_warn = quality.get('n_warnings', 0)
+            if n_warn == 0:
+                print(f"  ✓ Data quality: GOOD")
+            else:
+                print(f"  ⚠ Data quality: {n_warn} warning(s)")
+                for w in quality.get('warnings', [])[:3]:
+                    print(f"    - {w}")
+
         status_icons = {
             'NORMAL': '',
             'ELEVATED': '',
@@ -1005,7 +1142,8 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             window_min = data.get('window_min', 0)
             method = data.get('method', 'Theil-Sen')
 
-            print(f"  {pair} Å: {data['delta_mi']:.3f} bits  r={residual:+.1f}σ  {icon} {data.get('status', '?')}")
+            artifact_mark = " ⚠ARTIFACT?" if data.get('artifact_warning') else ""
+            print(f"  {pair} Å: {data['delta_mi']:.3f} bits  r={residual:+.1f}σ  {icon} {data.get('status', '?')}{artifact_mark}")
 
             # Show trend with full metadata
             if trend == 'NO_DATA':
