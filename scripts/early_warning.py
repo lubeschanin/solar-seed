@@ -1491,6 +1491,130 @@ def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
         return None
 
 
+def generate_event_narrative(xray: dict, coupling: dict, monitor: 'CouplingMonitor' = None) -> str | None:
+    """
+    Generate a compact Event Narrative Box (A&A Science Highlight style).
+
+    Shows key events and coupling evolution during active phases.
+    Returns None if no significant activity to report.
+    """
+    if not xray or not coupling:
+        return None
+
+    # Determine current phase based on GOES flux
+    flux = xray.get('flux', 0)
+    flare_class = xray.get('flare_class', 'A0')
+
+    # Get coupling data
+    mi_211 = coupling.get('193-211', {})
+    mi_304 = coupling.get('193-304', {})
+
+    delta_211 = mi_211.get('delta_mi', 0)
+    delta_304 = mi_304.get('delta_mi', 0)
+
+    # Get z-scores (significance relative to baseline)
+    z_211 = mi_211.get('z_mad', 0)
+    z_304 = mi_304.get('z_mad', 0)
+
+    # Get trends
+    trend_211 = mi_211.get('trend', 'STABLE')
+    trend_304 = mi_304.get('trend', 'STABLE')
+    slope_211 = mi_211.get('slope_pct_per_hour', 0)
+    slope_304 = mi_304.get('slope_pct_per_hour', 0)
+
+    # Determine phase
+    if flux >= 1e-5:
+        phase = "M/X-CLASS ACTIVE"
+        phase_icon = "⚡"
+    elif flux >= 1e-6:
+        phase = "C-CLASS ACTIVE"
+        phase_icon = "🔥"
+    elif flux >= 5e-7:
+        if slope_211 < -2 or slope_304 > 2:
+            phase = "DECAY PHASE"
+            phase_icon = "📉"
+        else:
+            phase = "ELEVATED"
+            phase_icon = "📈"
+    else:
+        # Check if we're in post-flare decay
+        if z_304 > 3 and slope_304 > 0:
+            phase = "POST-FLARE DECAY"
+            phase_icon = "🌅"
+        elif abs(z_211) > 2 or abs(z_304) > 2:
+            phase = "ANOMALOUS"
+            phase_icon = "⚠"
+        else:
+            return None  # Nothing interesting to report
+
+    # Build narrative
+    lines = []
+    lines.append("")
+    lines.append("  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    lines.append(f"  ┃  {phase_icon} EVENT NARRATIVE: {phase:<40}┃")
+    lines.append("  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    lines.append("")
+
+    # Compact timeline table
+    lines.append("  ┌─────────────┬────────────┬────────────┬─────────────┐")
+    lines.append("  │   Channel   │    ΔMI     │  z-score   │    Trend    │")
+    lines.append("  ├─────────────┼────────────┼────────────┼─────────────┤")
+
+    # 193-211 row
+    trend_arrow_211 = "↓" if slope_211 < -1 else "↑" if slope_211 > 1 else "→"
+    z_str_211 = f"{z_211:+.1f}σ" if z_211 != 0 else "  —"
+    lines.append(f"  │  193-211 Å  │   {delta_211:.3f}   │  {z_str_211:>6}   │  {trend_arrow_211} {slope_211:+.1f}%/h  │")
+
+    # 193-304 row
+    trend_arrow_304 = "↓" if slope_304 < -1 else "↑" if slope_304 > 1 else "→"
+    z_str_304 = f"{z_304:+.1f}σ" if z_304 != 0 else "  —"
+    lines.append(f"  │  193-304 Å  │   {delta_304:.3f}   │  {z_str_304:>6}   │  {trend_arrow_304} {slope_304:+.1f}%/h  │")
+
+    lines.append("  └─────────────┴────────────┴────────────┴─────────────┘")
+    lines.append("")
+
+    # Narrative interpretation (5-8 lines)
+    lines.append("  Interpretation:")
+
+    # Key finding based on phase
+    if phase == "POST-FLARE DECAY" or phase == "DECAY PHASE":
+        if z_304 > z_211:
+            lines.append(f"  • 193-304 Å shows peak significance ({z_304:+.1f}σ) during decay phase")
+            lines.append(f"  • Coronal coupling (193-211) weakening ({slope_211:+.1f}%/h)")
+            lines.append(f"  • Enhanced low-atmosphere coherence relative to coronal morphology")
+            lines.append(f"  • Consistent with post-flare footpoint/transition-region dominance")
+        else:
+            lines.append(f"  • Coupling returning to baseline after elevated activity")
+            lines.append(f"  • Both channels showing recovery trends")
+    elif phase == "C-CLASS ACTIVE" or phase == "M/X-CLASS ACTIVE":
+        lines.append(f"  • Active phase: GOES {flare_class} ({flux:.2e} W/m²)")
+        if z_211 < -1:
+            lines.append(f"  • Coronal coupling suppressed ({z_211:+.1f}σ) — magnetic reorganization")
+        if z_304 > 1:
+            lines.append(f"  • Chromospheric anchor strengthening ({z_304:+.1f}σ)")
+        lines.append(f"  • Monitor for coupling break as stress indicator")
+    elif phase == "ANOMALOUS":
+        lines.append(f"  • Unusual coupling configuration detected")
+        if abs(z_211) > 2:
+            lines.append(f"  • 193-211 Å: {z_211:+.1f}σ deviation from baseline")
+        if abs(z_304) > 2:
+            lines.append(f"  • 193-304 Å: {z_304:+.1f}σ deviation from baseline")
+        lines.append(f"  • Possible precursor signature or instrument artifact")
+
+    # Transfer state note if applicable
+    transfer = coupling.get('_transfer_state')
+    if transfer:
+        state = transfer.get('state', '')
+        if state == 'TRANSFER_STATE':
+            lines.append(f"  • TRANSFER_STATE: Energy redistribution toward lower atmosphere")
+        elif state == 'RECOVERY_STATE':
+            lines.append(f"  • RECOVERY_STATE: Post-flare relaxation in progress")
+
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: dict = None, stereo: dict = None):
     """Print formatted status report."""
     now = datetime.now(timezone.utc)
@@ -1743,6 +1867,11 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             print(f"\n  ─────────────────────────────────────────────────────────────")
             print(f"  Note: Diagnostics remain interpretable even when robustness")
             print(f"        vetoes prevent actionable alerts (\"vetoed ≠ blind\").")
+
+        # Event Narrative Box (A&A Science Highlight style)
+        narrative = generate_event_narrative(xray, coupling)
+        if narrative:
+            print(narrative)
 
     # STEREO-A advance warning (3.9 days ahead)
     if stereo:
