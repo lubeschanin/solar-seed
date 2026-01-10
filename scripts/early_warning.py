@@ -634,8 +634,8 @@ def run_coupling_analysis() -> dict | None:
         from solar_seed.radial_profile import subtract_radial_geometry
         from solar_seed.control_tests import sector_ring_shuffle_test
 
-        # Load data from 30 minutes ago (to ensure availability)
-        now = datetime.now(timezone.utc) - timedelta(minutes=30)
+        # Load data from 5 minutes ago (to ensure availability)
+        now = datetime.now(timezone.utc) - timedelta(minutes=5)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:00")
 
         print(f"  Loading AIA data for {timestamp}...")
@@ -680,8 +680,8 @@ def run_coupling_analysis() -> dict | None:
                     'residual': residual_info['residual'],
                     'deviation_pct': residual_info['deviation_pct'],
                     'status': residual_info['status'],
-                    'trend': trend_info['trend'],
-                    'slope_pct_per_hour': trend_info.get('slope_pct_per_hour', 0)
+                    # Pass through all trend info
+                    **trend_info
                 }
 
         # Save to history
