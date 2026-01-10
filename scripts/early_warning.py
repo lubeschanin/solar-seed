@@ -40,6 +40,9 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent))
+
+from monitoring_db import MonitoringDB
 
 # NOAA SWPC API endpoints
 GOES_XRAY_URL = "https://services.swpc.noaa.gov/json/goes/primary/xrays-1-day.json"
@@ -397,14 +400,97 @@ class CouplingMonitor:
         self._save_history()
 
 
-# Global monitor instance
+# Global instances
 _coupling_monitor = None
+_monitoring_db = None
 
 def get_coupling_monitor() -> CouplingMonitor:
     global _coupling_monitor
     if _coupling_monitor is None:
         _coupling_monitor = CouplingMonitor()
     return _coupling_monitor
+
+
+def get_monitoring_db() -> MonitoringDB:
+    """Get singleton database instance."""
+    global _monitoring_db
+    if _monitoring_db is None:
+        _monitoring_db = MonitoringDB()
+    return _monitoring_db
+
+
+def store_goes_reading(xray: dict):
+    """Store GOES X-ray reading in database."""
+    if not xray:
+        return
+    db = get_monitoring_db()
+    db.insert_goes_xray(
+        timestamp=xray['timestamp'],
+        flux=xray['flux'],
+        flare_class=xray['flare_class'].split('.')[0] if '.' in xray['flare_class'] else xray['flare_class'][0],
+        magnitude=float(xray['flare_class'][1:]) if len(xray['flare_class']) > 1 and xray['flare_class'][1:].replace('.','').isdigit() else None,
+        energy=xray.get('energy')
+    )
+
+
+def store_solar_wind_reading(solar_wind: dict, risk: str, risk_level: int):
+    """Store solar wind reading in database."""
+    if not solar_wind:
+        return
+    db = get_monitoring_db()
+
+    timestamp = None
+    speed = density = temperature = bx = by = bz = bt = None
+
+    if 'plasma' in solar_wind:
+        p = solar_wind['plasma']
+        timestamp = p.get('timestamp')
+        speed = p.get('speed')
+        density = p.get('density')
+        temperature = p.get('temperature')
+
+    if 'mag' in solar_wind:
+        m = solar_wind['mag']
+        if not timestamp:
+            timestamp = m.get('timestamp')
+        bx = m.get('bx')
+        by = m.get('by')
+        bz = m.get('bz')
+        bt = m.get('bt')
+
+    if timestamp:
+        db.insert_solar_wind(
+            timestamp=timestamp,
+            speed=speed,
+            density=density,
+            temperature=temperature,
+            bx=bx, by=by, bz=bz, bt=bt,
+            risk_level=risk_level,
+            risk_description=risk
+        )
+
+
+def store_coupling_reading(timestamp: str, coupling: dict):
+    """Store coupling measurements in database."""
+    if not coupling:
+        return
+    db = get_monitoring_db()
+
+    for pair, data in coupling.items():
+        db.insert_coupling(
+            timestamp=timestamp,
+            pair=pair,
+            delta_mi=data['delta_mi'],
+            mi_original=data.get('mi_original'),
+            residual=data.get('residual'),
+            deviation_pct=data.get('deviation_pct'),
+            status=data.get('status'),
+            trend=data.get('trend'),
+            slope_pct_per_hour=data.get('slope_pct_per_hour'),
+            acceleration=data.get('acceleration'),
+            confidence=data.get('confidence'),
+            n_points=data.get('n_points')
+        )
 
 
 def load_aia_direct(timestamp: str, wavelengths: list[int]) -> dict | None:
@@ -628,9 +714,11 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
     print(f"\n{'='*70}\n")
 
 
-def monitor_loop(interval: int = 60, with_coupling: bool = False):
+def monitor_loop(interval: int = 60, with_coupling: bool = False, store_db: bool = True):
     """Continuous monitoring loop."""
     print(f"\n  Starting continuous monitoring (interval: {interval}s)")
+    if store_db:
+        print(f"  Database: {get_monitoring_db().db_path}")
     print(f"  Press Ctrl+C to stop\n")
 
     coupling_interval = 600  # Run coupling every 10 minutes
@@ -642,10 +730,21 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False):
             solar_wind = get_dscovr_solar_wind()
             alerts = get_noaa_alerts()
 
+            # Store in database
+            if store_db:
+                store_goes_reading(xray)
+                if solar_wind:
+                    risk, risk_level = assess_geomagnetic_risk(solar_wind)
+                    store_solar_wind_reading(solar_wind, risk, risk_level)
+
             coupling = None
             if with_coupling and (time.time() - last_coupling) > coupling_interval:
                 coupling = run_coupling_analysis()
                 last_coupling = time.time()
+                # Store coupling
+                if store_db and coupling:
+                    now = datetime.now(timezone.utc)
+                    store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling)
 
             print_status_report(xray, solar_wind, alerts, coupling)
 
@@ -657,6 +756,9 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False):
 
         except KeyboardInterrupt:
             print("\n  Monitoring stopped.")
+            if store_db:
+                stats = get_monitoring_db().get_database_stats()
+                print(f"  Database stats: {stats['goes_xray']} X-ray, {stats['solar_wind']} wind, {stats['coupling_measurements']} coupling")
             break
 
 
@@ -668,11 +770,49 @@ def main():
                         help='Monitoring interval in seconds (default: 60)')
     parser.add_argument('--coupling', action='store_true',
                         help='Include AIA coupling analysis')
+    parser.add_argument('--no-db', action='store_true',
+                        help='Disable database storage')
+    parser.add_argument('--db-stats', action='store_true',
+                        help='Show database statistics and exit')
+    parser.add_argument('--correlations', action='store_true',
+                        help='Show coupling-flare correlations from database')
     args = parser.parse_args()
+
+    # Database stats mode
+    if args.db_stats:
+        db = get_monitoring_db()
+        stats = db.get_database_stats()
+        print("\n  Solar Monitoring Database")
+        print("  " + "=" * 50)
+        print(f"  Path: {db.db_path}")
+        print("\n  Table Statistics:")
+        for table, count in stats.items():
+            if isinstance(count, dict):
+                print(f"    {table}: {count}")
+            else:
+                print(f"    {table}: {count} rows")
+        return 0
+
+    # Correlations mode
+    if args.correlations:
+        db = get_monitoring_db()
+        print("\n  Coupling-Flare Correlations")
+        print("  " + "=" * 50)
+        correlations = db.get_coupling_before_flares(hours_before=6)
+        if correlations:
+            for c in correlations[:20]:
+                print(f"  {c['pair']}: ΔMI={c['delta_mi']:.3f}, status={c['status']}")
+                print(f"    → {c['hours_before_flare']:.1f}h before {c['flare_class']}{c['flare_magnitude']:.1f} flare")
+        else:
+            print("  No correlations found. Run monitoring to collect data.")
+
+        accuracy = db.get_prediction_accuracy()
+        print(f"\n  Prediction Accuracy: {accuracy['overall']}")
+        return 0
 
     print("""
 ╔═══════════════════════════════════════════════════════════════════════╗
-║          SOLAR EARLY WARNING SYSTEM - Prototype v0.1                  ║
+║          SOLAR EARLY WARNING SYSTEM - Prototype v0.2                  ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 
   Data Sources:
@@ -682,19 +822,34 @@ def main():
     - SDO/AIA coupling analysis (optional)
 """)
 
+    store_db = not args.no_db
+
     if args.monitor:
-        monitor_loop(interval=args.interval, with_coupling=args.coupling)
+        monitor_loop(interval=args.interval, with_coupling=args.coupling, store_db=store_db)
     else:
         # Single check
         xray = get_goes_xray()
         solar_wind = get_dscovr_solar_wind()
         alerts = get_noaa_alerts()
 
+        # Store in database
+        if store_db:
+            store_goes_reading(xray)
+            if solar_wind:
+                risk, risk_level = assess_geomagnetic_risk(solar_wind)
+                store_solar_wind_reading(solar_wind, risk, risk_level)
+
         coupling = None
         if args.coupling:
             coupling = run_coupling_analysis()
+            if store_db and coupling:
+                now = datetime.now(timezone.utc)
+                store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling)
 
         print_status_report(xray, solar_wind, alerts, coupling)
+
+        if store_db:
+            print(f"  Data stored in: {get_monitoring_db().db_path}")
 
     return 0
 
