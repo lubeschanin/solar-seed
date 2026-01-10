@@ -293,42 +293,100 @@ class CouplingMonitor:
             'status': status
         }
 
-    def analyze_trend(self, pair: str) -> dict:
-        """Analyze recent trend in coupling for a pair."""
-        pair_history = [h for h in self.history if pair in h.get('coupling', {})]
-
-        if len(pair_history) < 3:
-            return {'trend': 'insufficient_data', 'slope': 0}
-
-        # Last 6 readings (1 hour at 10min intervals)
-        recent = pair_history[-6:]
-        values = [h['coupling'][pair]['delta_mi'] for h in recent]
-
-        # Simple linear trend
+    def _theil_sen_slope(self, values: list) -> float:
+        """Compute robust Theil-Sen median slope estimator."""
         n = len(values)
         if n < 2:
-            return {'trend': 'insufficient_data', 'slope': 0}
+            return 0.0
 
-        x_mean = (n - 1) / 2
-        y_mean = sum(values) / n
-        slope = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
-        slope /= sum((i - x_mean) ** 2 for i in range(n)) or 1
+        slopes = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                if j != i:
+                    slopes.append((values[j] - values[i]) / (j - i))
 
-        # Normalize slope to % per hour
+        if not slopes:
+            return 0.0
+
+        slopes.sort()
+        mid = len(slopes) // 2
+        if len(slopes) % 2 == 0:
+            return (slopes[mid - 1] + slopes[mid]) / 2
+        return slopes[mid]
+
+    def analyze_trend(self, pair: str) -> dict:
+        """Analyze recent trend in coupling using robust Theil-Sen estimator."""
+        pair_history = [h for h in self.history if pair in h.get('coupling', {})]
+
+        # Minimum 3 points for any trend, but use up to 12 (2 hours at 10min)
+        if len(pair_history) < 3:
+            # Still return useful info even with limited data
+            if len(pair_history) >= 1:
+                return {
+                    'trend': 'INITIALIZING',
+                    'slope_pct_per_hour': 0,
+                    'n_points': len(pair_history),
+                    'confidence': 'low'
+                }
+            return {'trend': 'NO_DATA', 'slope_pct_per_hour': 0, 'n_points': 0, 'confidence': 'none'}
+
+        # Rolling window: last 12 points (2 hours) or all available
+        window_size = min(12, len(pair_history))
+        recent = pair_history[-window_size:]
+        values = [h['coupling'][pair]['delta_mi'] for h in recent]
+        n = len(values)
+
+        # Robust Theil-Sen slope
+        slope = self._theil_sen_slope(values)
+
+        # Mean value for normalization
+        y_mean = sum(values) / n if n > 0 else 1
+
+        # Normalize slope to % per hour (assuming 10min intervals)
         slope_per_hour = slope * 6 / y_mean * 100 if y_mean else 0
 
-        if slope_per_hour < -10:
-            trend = 'DROPPING'
-        elif slope_per_hour < -5:
-            trend = 'DECLINING'
-        elif slope_per_hour > 10:
-            trend = 'RISING'
-        elif slope_per_hour > 5:
-            trend = 'INCREASING'
-        else:
-            trend = 'STABLE'
+        # Acceleration: compare first half vs second half slopes
+        acceleration = 0
+        if n >= 6:
+            first_half = values[:n//2]
+            second_half = values[n//2:]
+            slope1 = self._theil_sen_slope(first_half)
+            slope2 = self._theil_sen_slope(second_half)
+            acceleration = (slope2 - slope1) / y_mean * 100 if y_mean else 0
 
-        return {'trend': trend, 'slope_pct_per_hour': slope_per_hour}
+        # Confidence based on sample size
+        if n >= 9:
+            confidence = 'high'
+        elif n >= 6:
+            confidence = 'medium'
+        else:
+            confidence = 'low'
+
+        # Thresholds for trend classification
+        EPSILON = 3.0      # %/hour for stable vs trending
+        EPSILON_ACC = 2.0  # acceleration threshold
+
+        # Determine trend label
+        if abs(slope_per_hour) < EPSILON:
+            trend = 'STABLE'
+        elif slope_per_hour < -EPSILON:
+            if acceleration < -EPSILON_ACC:
+                trend = 'ACCELERATING_DOWN'  # Getting worse faster
+            else:
+                trend = 'DECLINING'
+        else:  # slope_per_hour > EPSILON
+            if acceleration > EPSILON_ACC:
+                trend = 'ACCELERATING_UP'
+            else:
+                trend = 'RISING'
+
+        return {
+            'trend': trend,
+            'slope_pct_per_hour': slope_per_hour,
+            'acceleration': acceleration,
+            'n_points': n,
+            'confidence': confidence
+        }
 
     def add_reading(self, timestamp: str, coupling_data: dict):
         """Add a new coupling reading to history."""
@@ -511,28 +569,49 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             'ALERT': ''
         }
         trend_icons = {
-            'DROPPING': '',
+            'ACCELERATING_DOWN': '',
             'DECLINING': '',
             'STABLE': '',
-            'INCREASING': '',
             'RISING': '',
-            'insufficient_data': ''
+            'ACCELERATING_UP': '',
+            'INITIALIZING': '',
+            'NO_DATA': ''
+        }
+        confidence_markers = {
+            'high': '',
+            'medium': '',
+            'low': '',
+            'none': ''
         }
 
         any_alert = False
         for pair, data in coupling.items():
             icon = status_icons.get(data.get('status', 'NORMAL'), '')
-            trend_icon = trend_icons.get(data.get('trend', 'STABLE'), '')
+            trend = data.get('trend', 'NO_DATA')
+            trend_icon = trend_icons.get(trend, '')
+            conf = data.get('confidence', 'none')
+            conf_marker = confidence_markers.get(conf, '')
 
             residual = data.get('residual', 0)
-            deviation = data.get('deviation_pct', 0) * 100
-            trend = data.get('trend', 'unknown')
+            slope = data.get('slope_pct_per_hour', 0)
+            n_pts = data.get('n_points', 0)
 
             print(f"  {pair} Å: {data['delta_mi']:.3f} bits  r={residual:+.1f}σ  {icon} {data.get('status', '?')}")
-            print(f"           Trend: {trend_icon} {trend} ({data.get('slope_pct_per_hour', 0):+.1f}%/h)")
+
+            # Show trend with confidence
+            if trend in ['INITIALIZING', 'NO_DATA']:
+                print(f"           Trend: {trend_icon} {trend} (n={n_pts}, collecting data...)")
+            else:
+                acc = data.get('acceleration', 0)
+                acc_str = f" acc={acc:+.1f}" if abs(acc) > 1 else ""
+                print(f"           Trend: {trend_icon} {trend} ({slope:+.1f}%/h{acc_str}) {conf_marker}[{conf}, n={n_pts}]")
 
             if data.get('status') in ['WARNING', 'ALERT']:
                 any_alert = True
+
+            # Special warning for accelerating decline
+            if trend == 'ACCELERATING_DOWN' and data.get('status') in ['ELEVATED', 'WARNING', 'ALERT']:
+                print(f"           ⚠ Coupling declining and accelerating!")
 
         if any_alert:
             print(f"\n  *** COUPLING ANOMALY DETECTED ***")

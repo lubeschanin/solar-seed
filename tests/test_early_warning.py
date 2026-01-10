@@ -220,10 +220,19 @@ class TestCouplingMonitor:
 
         assert len(monitor.history) == 144
 
-    def test_trend_insufficient_data(self, monitor):
-        """Trend requires at least 3 data points."""
+    def test_trend_no_data(self, monitor):
+        """No data returns NO_DATA status."""
         result = monitor.analyze_trend('193-211')
-        assert result['trend'] == 'insufficient_data'
+        assert result['trend'] == 'NO_DATA'
+        assert result['n_points'] == 0
+
+    def test_trend_initializing(self, monitor):
+        """1-2 data points returns INITIALIZING."""
+        monitor.add_reading("2026-01-01T10:00:00", {'193-211': {'delta_mi': 0.59}})
+        result = monitor.analyze_trend('193-211')
+        assert result['trend'] == 'INITIALIZING'
+        assert result['n_points'] == 1
+        assert result['confidence'] == 'low'
 
     def test_trend_stable(self, monitor):
         """Stable trend: minimal change."""
@@ -231,14 +240,16 @@ class TestCouplingMonitor:
         for i in range(6):
             monitor.add_reading(
                 f"2026-01-01T{10+i}:00:00",
-                {'193-211': {'delta_mi': 0.59 + (i % 2) * 0.01}}
+                {'193-211': {'delta_mi': 0.59 + (i % 2) * 0.005}}
             )
 
         result = monitor.analyze_trend('193-211')
         assert result['trend'] == 'STABLE'
+        assert result['confidence'] == 'medium'
+        assert result['n_points'] == 6
 
-    def test_trend_dropping(self, monitor):
-        """Dropping trend: significant decrease."""
+    def test_trend_declining(self, monitor):
+        """Declining trend: significant decrease."""
         # Add readings with decreasing values
         values = [0.60, 0.55, 0.50, 0.45, 0.40, 0.35]
         for i, val in enumerate(values):
@@ -248,8 +259,35 @@ class TestCouplingMonitor:
             )
 
         result = monitor.analyze_trend('193-211')
-        assert result['trend'] in ['DROPPING', 'DECLINING']
+        assert result['trend'] in ['DECLINING', 'ACCELERATING_DOWN']
         assert result['slope_pct_per_hour'] < 0
+        assert 'acceleration' in result
+
+    def test_trend_high_confidence(self, monitor):
+        """High confidence with 9+ data points."""
+        for i in range(10):
+            monitor.add_reading(
+                f"2026-01-01T{10+i}:00:00",
+                {'193-211': {'delta_mi': 0.59}}
+            )
+
+        result = monitor.analyze_trend('193-211')
+        assert result['confidence'] == 'high'
+        assert result['n_points'] == 10
+
+    def test_theil_sen_robust(self, monitor):
+        """Theil-Sen slope is robust to outliers."""
+        # Add readings with one outlier
+        values = [0.50, 0.51, 0.52, 0.90, 0.54, 0.55]  # 0.90 is outlier
+        for i, val in enumerate(values):
+            monitor.add_reading(
+                f"2026-01-01T{10+i}:00:00",
+                {'193-211': {'delta_mi': val}}
+            )
+
+        result = monitor.analyze_trend('193-211')
+        # Should still detect rising trend despite outlier
+        assert result['slope_pct_per_hour'] > 0
 
 
 class TestAlertThresholds:
