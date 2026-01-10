@@ -349,20 +349,69 @@ def get_coupling_monitor() -> CouplingMonitor:
     return _coupling_monitor
 
 
+def load_aia_direct(timestamp: str, wavelengths: list[int]) -> dict | None:
+    """Load AIA data directly via VSO (more reliable for recent data)."""
+    try:
+        from sunpy.net import Fido, attrs as a
+        import astropy.units as u
+        from sunpy.map import Map
+        import tempfile
+        import os
+
+        dt = datetime.fromisoformat(timestamp)
+        start = dt - timedelta(minutes=3)
+        end = dt + timedelta(minutes=3)
+
+        channels = {}
+        for wl in wavelengths:
+            print(f"    Fetching {wl} Å...")
+            result = Fido.search(
+                a.Time(start, end),
+                a.Instrument('AIA'),
+                a.Wavelength(wl * u.Angstrom)
+            )
+
+            if len(result) > 0 and len(result[0]) > 0:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    files = Fido.fetch(result[0, 0], path=tmpdir, progress=False)
+                    if files:
+                        smap = Map(files[0])
+                        channels[wl] = smap.data
+                        # Clean up
+                        os.remove(files[0])
+
+        return channels if channels else None
+
+    except Exception as e:
+        print(f"    VSO load error: {e}")
+        return None
+
+
 def run_coupling_analysis() -> dict | None:
     """Run quick coupling analysis on latest AIA data."""
     print("  Running coupling analysis (this may take a few minutes)...")
 
     try:
-        from solar_seed.multichannel import load_aia_multichannel
         from solar_seed.radial_profile import subtract_radial_geometry
         from solar_seed.control_tests import sector_ring_shuffle_test
 
-        # Load latest data
-        now = datetime.now(timezone.utc)
+        # Load data from 30 minutes ago (to ensure availability)
+        now = datetime.now(timezone.utc) - timedelta(minutes=30)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:00")
 
-        channels, metadata = load_aia_multichannel(timestamp, wavelengths=[193, 211, 304, 171])
+        print(f"  Loading AIA data for {timestamp}...")
+
+        # Try direct VSO load first (more reliable for recent data)
+        channels = load_aia_direct(timestamp, [193, 211, 304])
+
+        if not channels or len(channels) < 2:
+            print("  Could not load AIA data via VSO")
+            # Fallback to multichannel loader
+            try:
+                from solar_seed.multichannel import load_aia_multichannel
+                channels, _ = load_aia_multichannel(timestamp, wavelengths=[193, 211, 304])
+            except:
+                pass
 
         if not channels or len(channels) < 2:
             print("  Could not load AIA data")
