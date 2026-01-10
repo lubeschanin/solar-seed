@@ -369,7 +369,7 @@ The corona, as a magnetically dominated plasma extending across the solar disk, 
 
 This establishes temperature-ordered coupling as an intrinsic organizational principle of the solar atmosphere, independent of viewing geometry, active region population, or instrumental calibration.
 
-**Axiom (Viewpoint Invariance).** *The temperature-ordered coupling hierarchy is invariant under viewpoint reversal, as demonstrated by antipodal observations with independent instruments.*
+**Axiom (Viewpoint Invariance).** *The temperature-ordered coupling hierarchy is invariant under viewpoint reversal and spatial resolution, while absolute coupling amplitudes remain instrument-dependent.*
 
 ### 5.12 Limitations and Outlook
 
@@ -382,6 +382,8 @@ Several methodological and physical considerations constrain the interpretation 
 **Sample size and event generalization.** The flare-regime analysis is based on a limited number of major events (N = 2 X-class flares), with the state-space decomposition relying on relatively few flare-state data points (N ≈ 7). While the observed patterns are internally consistent and statistically significant, generalization to all flare classes and solar cycle phases requires validation across a larger event sample. The checkpoint-enabled analysis pipeline developed here is designed to facilitate such extended studies.
 
 **Cadence and spatial resolution.** The 12-minute synoptic cadence may undersample rapid flare dynamics, particularly during the impulsive phase. Higher-cadence AIA data (12-second full resolution) could reveal finer temporal structure in coupling evolution, though at substantially increased computational cost.
+
+**Resolution robustness.** To verify that the antipodal validation is not an artifact of spatial downsampling, we repeated the cross-instrument comparison at native detector resolution (EUVI 2048², AIA 4096² resampled to 2048²). At matched resolution, the Spearman rank correlation increases from 90.6% to 100%—perfect ordinal agreement. Amplitude ratios remain variable (0.49–1.18), confirming that *ordering* is resolution-invariant while *amplitude* reflects instrumental characteristics. This separation strengthens the interpretation: the coupling hierarchy is a solar property, not a measurement artifact.
 
 **Outlook.** The 8-day rotation analysis presented here confirms temporal stability of the coupling hierarchy over one-third of a solar rotation. Future work should extend this analysis across complete solar rotations and multiple activity cycles to establish baseline variability and long-term trends. Integration with magnetogram data (HMI) could directly test the hypothesis of magnetically mediated coupling, while application to stellar EUV observations may enable comparative studies of atmospheric organization across different stellar types.
 
