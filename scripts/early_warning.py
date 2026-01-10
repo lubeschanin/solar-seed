@@ -588,8 +588,75 @@ def store_coupling_reading(timestamp: str, coupling: dict):
         )
 
 
+def load_aia_latest(wavelengths: list[int], max_age_minutes: int = 60) -> tuple[dict, str] | tuple[None, None]:
+    """
+    Load the most recent available AIA data.
+
+    Searches for available images in the last max_age_minutes and picks the newest.
+    Returns (channels_dict, actual_timestamp) or (None, None) if not found.
+    """
+    try:
+        from sunpy.net import Fido, attrs as a
+        import astropy.units as u
+        from sunpy.map import Map
+        import tempfile
+        import os
+
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(minutes=max_age_minutes)
+
+        channels = {}
+        actual_timestamp = None
+
+        for wl in wavelengths:
+            print(f"    Searching {wl} Å (last {max_age_minutes} min)...")
+
+            # Search for available images in time window
+            result = Fido.search(
+                a.Time(start, now),
+                a.Instrument('AIA'),
+                a.Wavelength(wl * u.Angstrom)
+            )
+
+            if len(result) > 0 and len(result[0]) > 0:
+                # Get the LAST (most recent) result
+                n_results = len(result[0])
+                latest_idx = n_results - 1
+
+                # Extract timestamp from result table if available
+                try:
+                    result_time = result[0][latest_idx]['Start Time']
+                    print(f"    Found {n_results} images, using latest: {result_time}")
+                except:
+                    print(f"    Found {n_results} images, using latest")
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    # Fetch only the most recent one
+                    files = Fido.fetch(result[0, latest_idx], path=tmpdir, progress=False)
+                    if files:
+                        smap = Map(files[0])
+                        channels[wl] = smap.data
+
+                        # Get actual timestamp from the FITS header
+                        if actual_timestamp is None:
+                            actual_timestamp = smap.date.isot
+                            print(f"    Actual image time: {actual_timestamp}")
+
+                        os.remove(files[0])
+            else:
+                print(f"    No {wl} Å images found in last {max_age_minutes} min")
+
+        return (channels, actual_timestamp) if channels else (None, None)
+
+    except Exception as e:
+        print(f"    VSO load error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None
+
+
 def load_aia_direct(timestamp: str, wavelengths: list[int]) -> dict | None:
-    """Load AIA data directly via VSO (more reliable for recent data)."""
+    """Load AIA data for a specific timestamp (legacy, fallback)."""
     try:
         from sunpy.net import Fido, attrs as a
         import astropy.units as u
@@ -616,7 +683,6 @@ def load_aia_direct(timestamp: str, wavelengths: list[int]) -> dict | None:
                     if files:
                         smap = Map(files[0])
                         channels[wl] = smap.data
-                        # Clean up
                         os.remove(files[0])
 
         return channels if channels else None
@@ -634,27 +700,22 @@ def run_coupling_analysis() -> dict | None:
         from solar_seed.radial_profile import subtract_radial_geometry
         from solar_seed.control_tests import sector_ring_shuffle_test
 
-        # Load data from 5 minutes ago (to ensure availability)
-        now = datetime.now(timezone.utc) - timedelta(minutes=5)
-        timestamp = now.strftime("%Y-%m-%dT%H:%M:00")
-
-        print(f"  Loading AIA data for {timestamp}...")
-
-        # Try direct VSO load first (more reliable for recent data)
-        channels = load_aia_direct(timestamp, [193, 211, 304])
+        # Load most recent available AIA data (within last 30 min)
+        print("  Searching for latest AIA images...")
+        channels, timestamp = load_aia_latest([193, 211, 304], max_age_minutes=30)
 
         if not channels or len(channels) < 2:
-            print("  Could not load AIA data via VSO")
-            # Fallback to multichannel loader
-            try:
-                from solar_seed.multichannel import load_aia_multichannel
-                channels, _ = load_aia_multichannel(timestamp, wavelengths=[193, 211, 304])
-            except:
-                pass
+            print("  Could not load AIA data via VSO, trying fallback...")
+            # Fallback: try specific timestamp 10 min ago
+            fallback_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+            timestamp = fallback_time.strftime("%Y-%m-%dT%H:%M:00")
+            channels = load_aia_direct(timestamp, [193, 211, 304])
 
         if not channels or len(channels) < 2:
             print("  Could not load AIA data")
             return None
+
+        print(f"  Using AIA data from: {timestamp}")
 
         results = {}
         monitor = get_coupling_monitor()
