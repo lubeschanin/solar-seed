@@ -42,6 +42,7 @@ from urllib.error import URLError
 
 # Global flag for graceful shutdown
 _shutdown_requested = False
+_original_sigint_handler = None
 
 def _signal_handler(signum, frame):
     """Handle Ctrl+C gracefully."""
@@ -49,8 +50,20 @@ def _signal_handler(signum, frame):
     _shutdown_requested = True
     print("\n  Shutdown requested... (press again to force)")
 
-# Register signal handler
-signal.signal(signal.SIGINT, _signal_handler)
+
+def _install_signal_handler():
+    """Install signal handler for graceful shutdown (only in monitor mode)."""
+    global _original_sigint_handler
+    _original_sigint_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+
+def _restore_signal_handler():
+    """Restore original signal handler."""
+    global _original_sigint_handler
+    if _original_sigint_handler is not None:
+        signal.signal(signal.SIGINT, _original_sigint_handler)
+        _original_sigint_handler = None
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -1228,6 +1241,9 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: b
     global _shutdown_requested
     _shutdown_requested = False
 
+    # Install signal handler for graceful shutdown
+    _install_signal_handler()
+
     print(f"\n  Starting continuous monitoring (interval: {interval}s)")
     if store_db:
         print(f"  Database: {get_monitoring_db().db_path}")
@@ -1294,6 +1310,7 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: b
             time.sleep(1)
 
     # Cleanup
+    _restore_signal_handler()
     print("\n  Monitoring stopped.")
     if store_db:
         stats = get_monitoring_db().get_database_stats()
