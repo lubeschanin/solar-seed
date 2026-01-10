@@ -456,13 +456,19 @@ class CouplingMonitor:
         })
         self._save_history()
 
-    def detect_transfer_state(self) -> dict | None:
+    def detect_transfer_state(self, robustness_checks: dict = None) -> dict | None:
         """
         Detect potential energy transfer between layers.
 
         TRANSFER_STATE: When chromospheric anchor (193-304) strengthens
         while coronal coupling (193-211) weakens - may indicate
         energy reorganization before flare.
+
+        If channels involved have failed robustness checks, state is marked
+        as 'degraded' (diagnostic only, not actionable).
+
+        Args:
+            robustness_checks: Dict of robustness check results by pair
 
         Returns dict with state info or None if not detected.
         """
@@ -483,27 +489,48 @@ class CouplingMonitor:
         RISING_THRESHOLD = 3.0   # %/hour
         FALLING_THRESHOLD = -3.0  # %/hour
 
+        # Check if any involved channel has failed robustness
+        degraded = False
+        degraded_reasons = []
+        if robustness_checks:
+            for pair in ['193-211', '193-304']:
+                rob = robustness_checks.get(pair, {})
+                if rob.get('is_robust') is False:
+                    degraded = True
+                    change = rob.get('change_pct', 0)
+                    degraded_reasons.append(f'{pair} robustness failed (Δbin={change:.1f}%)')
+
         # Transfer state: 304 rising while 211 falling
         if slope_304 > RISING_THRESHOLD and slope_211 < FALLING_THRESHOLD:
-            return {
+            result = {
                 'state': 'TRANSFER_STATE',
                 'description': 'Chromospheric anchor strengthening, coronal coupling weakening',
                 'slope_193_304': slope_304,
                 'slope_193_211': slope_211,
                 'confidence': min(trend_304['confidence'], trend_211['confidence']),
-                'interpretation': 'Possible energy reorganization / magnetic stress buildup'
+                'interpretation': 'Possible energy reorganization / magnetic stress buildup',
+                'degraded': degraded,
+                'degraded_reasons': degraded_reasons,
             }
+            if degraded:
+                result['interpretation'] = 'DIAGNOSTIC ONLY — ' + result['interpretation']
+            return result
 
         # Inverse: recovery after flare?
         if slope_304 < FALLING_THRESHOLD and slope_211 > RISING_THRESHOLD:
-            return {
+            result = {
                 'state': 'RECOVERY_STATE',
                 'description': 'Coronal coupling recovering, chromospheric anchor releasing',
                 'slope_193_304': slope_304,
                 'slope_193_211': slope_211,
                 'confidence': min(trend_304['confidence'], trend_211['confidence']),
-                'interpretation': 'Possible post-flare recovery / relaxation'
+                'interpretation': 'Possible post-flare recovery / relaxation',
+                'degraded': degraded,
+                'degraded_reasons': degraded_reasons,
             }
+            if degraded:
+                result['interpretation'] = 'DIAGNOSTIC ONLY — ' + result['interpretation']
+            return result
 
         return None
 
@@ -1195,6 +1222,108 @@ def compute_robustness_check(img1, img2, original_mi: float, method: str = 'binn
         }
 
 
+# Anomaly Status Classification
+# =============================
+# Three-level model separating actionable from diagnostic:
+#   VALIDATED_BREAK - Actionable: z_mad >= k AND all validation tests PASS
+#   ANOMALY_VETOED  - Diagnostic only: z_mad >= k BUT some validation test FAIL
+#   NORMAL          - No anomaly: z_mad < k
+
+class AnomalyStatus:
+    """Anomaly status constants."""
+    VALIDATED_BREAK = 'VALIDATED_BREAK'  # Actionable - all tests pass
+    ANOMALY_VETOED = 'ANOMALY_VETOED'    # Diagnostic only - some test failed
+    NORMAL = 'NORMAL'                     # No anomaly detected
+
+
+def classify_anomaly_status(break_detection: dict, robustness_check: dict = None,
+                            registration_check: dict = None, time_spread_sec: float = None) -> dict:
+    """
+    Classify anomaly status into Actionable vs Diagnostic.
+
+    Status levels:
+        VALIDATED_BREAK (Actionable): z_mad >= k AND all validation tests PASS
+        ANOMALY_VETOED (Diagnostic only): z_mad >= k BUT some validation test FAIL
+        NORMAL: z_mad < k
+
+    Args:
+        break_detection: Result from detect_coupling_break()
+        robustness_check: Result from compute_robustness_check() (optional)
+        registration_check: Result from compute_registration_shift() (optional)
+        time_spread_sec: Time spread between channels in seconds (optional)
+
+    Returns:
+        dict with status, is_actionable, veto_reasons, and diagnostic info
+    """
+    # No break detected = NORMAL
+    if not break_detection.get('is_break') and not break_detection.get('vetoed'):
+        z_mad = break_detection.get('z_mad', 0)
+        if z_mad < break_detection.get('k', 2.0):
+            return {
+                'status': AnomalyStatus.NORMAL,
+                'is_actionable': False,
+                'z_mad': z_mad,
+                'veto_reasons': [],
+                'passed_tests': [],
+                'failed_tests': [],
+            }
+
+    # Break candidate detected - check validation tests
+    veto_reasons = []
+    passed_tests = []
+    failed_tests = []
+    z_mad = break_detection.get('z_mad', 0)
+
+    # Test A: Time alignment (<60s)
+    if time_spread_sec is not None:
+        if time_spread_sec <= 60:
+            passed_tests.append(f'time_sync ({time_spread_sec:.0f}s)')
+        else:
+            failed_tests.append(f'time_sync ({time_spread_sec:.0f}s > 60s)')
+            veto_reasons.append(f'time sync failed ({time_spread_sec:.0f}s)')
+
+    # Test B: Registration shift (<10px)
+    if registration_check:
+        shift = registration_check.get('shift_pixels', 0)
+        if registration_check.get('is_centered', True) and shift <= 10:
+            passed_tests.append(f'registration ({shift:.1f}px)')
+        else:
+            failed_tests.append(f'registration ({shift:.1f}px > 10px)')
+            veto_reasons.append(f'registration failed ({shift:.1f}px)')
+
+    # Test C: Robustness (<20% binning change)
+    if robustness_check:
+        if robustness_check.get('is_robust') is True:
+            change = robustness_check.get('change_pct', 0)
+            passed_tests.append(f'robustness ({change:.1f}%)')
+        elif robustness_check.get('is_robust') is False:
+            change = robustness_check.get('change_pct', 0)
+            failed_tests.append(f'robustness ({change:.1f}% > 20%)')
+            veto_reasons.append(f'robustness failed ({change:.1f}%)')
+
+    # Already vetoed by earlier logic
+    if break_detection.get('vetoed'):
+        if break_detection['vetoed'] not in [r.split()[0] for r in veto_reasons]:
+            veto_reasons.append(break_detection['vetoed'])
+
+    # Determine final status
+    if veto_reasons:
+        status = AnomalyStatus.ANOMALY_VETOED
+        is_actionable = False
+    else:
+        status = AnomalyStatus.VALIDATED_BREAK
+        is_actionable = True
+
+    return {
+        'status': status,
+        'is_actionable': is_actionable,
+        'z_mad': z_mad,
+        'veto_reasons': veto_reasons,
+        'passed_tests': passed_tests,
+        'failed_tests': failed_tests,
+    }
+
+
 def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
     """
     Run quick coupling analysis on latest AIA data with quality checks.
@@ -1320,25 +1449,37 @@ def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
         # Save to history
         monitor.add_reading(timestamp, results)
 
-        # Check for transfer state (debug label)
-        transfer = monitor.detect_transfer_state()
+        # Check for transfer state (pass robustness checks for degraded flag)
+        transfer = monitor.detect_transfer_state(robustness_checks=robustness_checks)
         if transfer:
             results['_transfer_state'] = transfer
 
         # Add quality metadata to results
+        time_spread = quality_info['time_spread_sec'] if quality_info else None
         results['_quality'] = {
             'is_good': quality_info['is_good_quality'] if quality_info else None,
-            'time_spread_sec': quality_info['time_spread_sec'] if quality_info else None,
+            'time_spread_sec': time_spread,
             'timestamps': quality_info['timestamps'] if quality_info else {},
             'warnings': quality_warnings + artifact_warnings,
             'n_warnings': len(quality_warnings) + len(artifact_warnings),
         }
+
+        # Compute anomaly status for each pair with breaks
+        anomaly_statuses = {}
+        for pair_key, bd in break_detections.items():
+            if bd.get('is_break') or bd.get('vetoed'):
+                reg_check = registration_checks.get(pair_key)
+                rob_check = robustness_checks.get(pair_key)
+                anomaly_statuses[pair_key] = classify_anomaly_status(
+                    bd, rob_check, reg_check, time_spread
+                )
 
         # Add validation metadata
         results['_validation'] = {
             'registration_checks': registration_checks,
             'break_detections': break_detections,
             'robustness_checks': robustness_checks,
+            'anomaly_statuses': anomaly_statuses,
         }
 
         return results
@@ -1358,8 +1499,8 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
     print(f"  SOLAR EARLY WARNING SYSTEM - {now.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*70}")
 
-    # X-ray status
-    print(f"\n  GOES X-RAY STATUS")
+    # X-ray status (contextual indicator)
+    print(f"\n  GOES X-RAY STATUS [Contextual Indicator]")
     print(f"  {'-'*40}")
     if xray:
         severity_icons = ['', '', '', '', '']
@@ -1373,8 +1514,8 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
     else:
         print("  Data unavailable")
 
-    # Solar wind status
-    print(f"\n  SOLAR WIND (DSCOVR L1)")
+    # Solar wind status (contextual indicator - L1 point, may reflect earlier structures)
+    print(f"\n  SOLAR WIND (DSCOVR L1) [Contextual Indicator]")
     print(f"  {'-'*40}")
     if solar_wind:
         partial_data = False
@@ -1490,85 +1631,114 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             # Show break detection status
             if data.get('is_break'):
                 z_mad = data.get('z_mad', 0)
-                print(f"           *** COUPLING BREAK ({z_mad:.1f} MAD below median) ***")
+                print(f"           *** VALIDATED BREAK ({z_mad:.1f} MAD below median) ***")
             elif data.get('break_vetoed'):
                 z_mad = data.get('z_mad', 0)
-                print(f"           [break vetoed: {data['break_vetoed']}] ({z_mad:.1f} MAD below median)")
+                print(f"           [VETOED: {data['break_vetoed']}] anomaly observed ({z_mad:.1f} MAD) - diagnostic only")
 
             # Show registration shift if notable
             reg_shift = data.get('registration_shift', 0)
             if reg_shift > 3:
                 print(f"           Registration: {reg_shift:.1f}px shift")
 
-        if any_alert:
-            print(f"\n  *** COUPLING ANOMALY DETECTED ***")
-            print(f"  Reduced coupling may indicate magnetic stress buildup")
-            print(f"  Monitor for potential flare activity in coming hours")
-
         # Show validation summary for any detected breaks
         validation = coupling.get('_validation', {})
         breaks = validation.get('break_detections', {})
         robustness = validation.get('robustness_checks', {})
+        anomaly_statuses = validation.get('anomaly_statuses', {})
 
-        # Show validated breaks (not vetoed)
-        validated_breaks = [p for p, b in breaks.items() if b.get('is_break') and not b.get('vetoed')]
-        vetoed_breaks = [p for p, b in breaks.items() if b.get('vetoed')]
+        # Classify breaks by status
+        actionable_breaks = []
+        diagnostic_breaks = []
+        for pair, status in anomaly_statuses.items():
+            if status.get('status') == AnomalyStatus.VALIDATED_BREAK:
+                actionable_breaks.append(pair)
+            elif status.get('status') == AnomalyStatus.ANOMALY_VETOED:
+                diagnostic_breaks.append(pair)
 
-        if validated_breaks or vetoed_breaks:
-            print(f"\n  VALIDATION STATUS (Reviewer-Proof)")
+        # Also check for breaks not in anomaly_statuses (legacy)
+        for pair, bd in breaks.items():
+            if pair not in anomaly_statuses:
+                if bd.get('is_break') and not bd.get('vetoed'):
+                    actionable_breaks.append(pair)
+                elif bd.get('vetoed'):
+                    diagnostic_breaks.append(pair)
+
+        # Show actionable alert only for validated breaks
+        if actionable_breaks:
+            print(f"\n  *** ACTIONABLE: VALIDATED COUPLING BREAK ***")
+            print(f"  Reduced coupling may indicate magnetic stress buildup")
+            print(f"  Recommend: Monitor for potential flare activity")
+        elif diagnostic_breaks and any_alert:
+            print(f"\n  DIAGNOSTIC ONLY — anomaly observed but not validated")
+            print(f"  Coupling anomaly detected, but artifact screening failed")
+            print(f"  Status: Not reliable for triggering alerts")
+
+        if actionable_breaks or diagnostic_breaks:
+            print(f"\n  ANOMALY STATUS (Actionable vs Diagnostic)")
             print(f"  {'-'*40}")
 
-            for pair in validated_breaks:
-                bd = breaks[pair]
-                z_mad = bd.get('z_mad', 0)
-                print(f"  {pair}: ✓ VALIDATED BREAK at {bd.get('current_mi', 0):.4f}")
+            # Show VALIDATED breaks (actionable)
+            for pair in actionable_breaks:
+                bd = breaks.get(pair, {})
+                status = anomaly_statuses.get(pair, {})
+                z_mad = bd.get('z_mad', status.get('z_mad', 0))
+                print(f"  {pair}: ✓ VALIDATED_BREAK [ACTIONABLE]")
                 print(f"    Criterion: {bd.get('criterion', '?')}")
                 print(f"    Deviation: {z_mad:.1f} MAD below median")
 
-                # Registration status
-                reg = validation.get('registration_checks', {}).get(pair, {})
-                shift = reg.get('shift_pixels', 0)
-                if shift <= 3:
-                    print(f"    ✓ Registration: OK ({shift:.1f}px shift)")
-                else:
-                    print(f"    ⚠ Registration: {shift:.1f}px shift")
+                # Show passed tests
+                passed = status.get('passed_tests', [])
+                for test in passed:
+                    print(f"    ✓ {test}")
 
-                # Time sync status
-                ts = coupling.get('_quality', {}).get('time_spread_sec', 0)
-                if ts and ts <= 60:
-                    print(f"    ✓ Time sync: OK ({ts:.0f}s spread)")
-                elif ts:
-                    print(f"    ⚠ Time sync: {ts:.0f}s spread (>60s)")
+            # Show VETOED breaks (diagnostic only)
+            for pair in diagnostic_breaks:
+                bd = breaks.get(pair, {})
+                status = anomaly_statuses.get(pair, {})
+                z_mad = bd.get('z_mad', status.get('z_mad', 0))
+                veto_reasons = status.get('veto_reasons', [bd.get('vetoed', 'unknown')])
 
-                # Robustness check
-                rob = robustness.get(pair, {})
-                if rob.get('is_robust') is True:
-                    print(f"    ✓ Robustness: STABLE under 2x2 binning ({rob.get('change_pct', 0):.1f}% change)")
-                elif rob.get('is_robust') is False:
-                    print(f"    ⚠ Robustness: SENSITIVE ({rob.get('change_pct', 0):.1f}% change)")
-                elif rob.get('error'):
-                    print(f"    ? Robustness: Error - {rob.get('error')}")
-
-            # Show vetoed breaks
-            for pair in vetoed_breaks:
-                bd = breaks[pair]
-                z_mad = bd.get('z_mad', 0)
-                reason = bd.get('vetoed', 'unknown')
-                print(f"  {pair}: ✗ VETOED (reason: {reason})")
+                print(f"  {pair}: ✗ ANOMALY_VETOED [DIAGNOSTIC ONLY]")
                 print(f"    Deviation: {z_mad:.1f} MAD below median")
-                rob = robustness.get(pair, {})
-                if rob:
-                    print(f"    Binning change: {rob.get('change_pct', 0):.1f}% (>20% = unreliable)")
+                print(f"    Veto reason(s):")
+                for reason in veto_reasons:
+                    print(f"      - {reason}")
 
-        # Transfer state detection (debug label)
+                # Show passed tests (if any)
+                passed = status.get('passed_tests', [])
+                if passed:
+                    print(f"    Passed tests:")
+                    for test in passed:
+                        print(f"      ✓ {test}")
+
+                # Show failed tests
+                failed = status.get('failed_tests', [])
+                if failed:
+                    print(f"    Failed tests:")
+                    for test in failed:
+                        print(f"      ✗ {test}")
+
+        # Transfer state detection
         transfer = coupling.get('_transfer_state')
         if transfer:
             state_icons = {'TRANSFER_STATE': '', 'RECOVERY_STATE': ''}
             icon = state_icons.get(transfer['state'], '')
-            print(f"\n  {icon} [{transfer['state']}] ({transfer['confidence']} confidence)")
-            print(f"     {transfer['description']}")
-            print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
-            print(f"     → {transfer['interpretation']}")
+            degraded = transfer.get('degraded', False)
+
+            if degraded:
+                print(f"\n  {icon} [{transfer['state']}] DEGRADED ({transfer['confidence']} confidence)")
+                print(f"     {transfer['description']}")
+                print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
+                print(f"     ⚠ DIAGNOSTIC ONLY — involved channel unreliable:")
+                for reason in transfer.get('degraded_reasons', []):
+                    print(f"       - {reason}")
+                print(f"     → Observation logged; not used for triggering")
+            else:
+                print(f"\n  {icon} [{transfer['state']}] ({transfer['confidence']} confidence)")
+                print(f"     {transfer['description']}")
+                print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
+                print(f"     → {transfer['interpretation']}")
 
     # STEREO-A advance warning (3.9 days ahead)
     if stereo:
