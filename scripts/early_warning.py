@@ -1245,24 +1245,117 @@ class AnomalyStatus:
     NORMAL = 'NORMAL'                     # No anomaly detected
 
 
-def classify_anomaly_status(break_detection: dict, robustness_check: dict = None,
-                            registration_check: dict = None, time_spread_sec: float = None) -> dict:
+# Break Type Classification (Phase-Gating)
+# =========================================
+# Not all validated breaks are precursors. Phase-gating prevents
+# false alerts during flare decay / relaxation phases.
+#
+#   PRECURSOR  - Alert-worthy: rising activity OR accelerating decoupling
+#   POSTCURSOR - Late break during decay (no alert)
+#   AMBIGUOUS  - Cannot determine phase (no alert, needs context)
+
+class BreakType:
+    """Break type constants for phase-gating."""
+    PRECURSOR = 'PRECURSOR'      # Pre-flare: rising activity, stress buildup
+    POSTCURSOR = 'POSTCURSOR'    # Post-flare: decay phase, relaxation
+    AMBIGUOUS = 'AMBIGUOUS'      # Cannot determine: insufficient context
+
+
+def classify_break_type(trend_info: dict = None, goes_context: dict = None) -> dict:
     """
-    Classify anomaly status into Actionable vs Diagnostic.
+    Classify whether a validated break is a precursor or postcursor.
+
+    Phase-Gating Rules:
+    - PRECURSOR if: GOES rising OR (|trend| > 3%/h AND acc < 0)
+    - POSTCURSOR if: GOES falling AND acc > 0 (relaxation)
+    - AMBIGUOUS otherwise
+
+    Args:
+        trend_info: Trend data with slope_pct_per_hour and acceleration
+        goes_context: GOES data with flux, derivative, and phase
+
+    Returns:
+        dict with break_type, reason, and is_alertable
+    """
+    reasons = []
+
+    # Extract values
+    slope = abs(trend_info.get('slope_pct_per_hour', 0)) if trend_info else 0
+    acc = trend_info.get('acceleration', 0) if trend_info else 0
+
+    goes_rising = False
+    goes_phase = 'unknown'
+    if goes_context:
+        goes_rising = goes_context.get('rising', False)
+        goes_phase = goes_context.get('phase', 'unknown')
+
+    # Rule 1: GOES rising → PRECURSOR
+    if goes_rising:
+        return {
+            'break_type': BreakType.PRECURSOR,
+            'reason': 'GOES activity rising',
+            'is_alertable': True,
+        }
+
+    # Rule 2: Accelerating decoupling (steep negative trend, negative acc) → PRECURSOR
+    if slope > 3.0 and acc < -1.0:
+        return {
+            'break_type': BreakType.PRECURSOR,
+            'reason': f'Accelerating decoupling ({slope:.1f}%/h, acc={acc:.1f})',
+            'is_alertable': True,
+        }
+
+    # Rule 3: GOES falling/decay AND positive acceleration (relaxation) → POSTCURSOR
+    if goes_phase in ['decay', 'post-flare', 'falling'] or (not goes_rising and acc > 1.0):
+        if acc > 0:
+            return {
+                'break_type': BreakType.POSTCURSOR,
+                'reason': f'Decay phase relaxation (acc={acc:+.1f}%/h²)',
+                'is_alertable': False,
+            }
+
+    # Rule 4: Positive acceleration without rising GOES → likely POSTCURSOR
+    if acc > 2.0 and not goes_rising:
+        return {
+            'break_type': BreakType.POSTCURSOR,
+            'reason': f'Relaxation signature (acc={acc:+.1f}%/h²)',
+            'is_alertable': False,
+        }
+
+    # Cannot determine with confidence
+    return {
+        'break_type': BreakType.AMBIGUOUS,
+        'reason': 'Insufficient phase context',
+        'is_alertable': False,  # Conservative: don't alert if unsure
+    }
+
+
+def classify_anomaly_status(break_detection: dict, robustness_check: dict = None,
+                            registration_check: dict = None, time_spread_sec: float = None,
+                            trend_info: dict = None, goes_context: dict = None) -> dict:
+    """
+    Classify anomaly status into Actionable vs Diagnostic with Phase-Gating.
 
     Status levels:
-        VALIDATED_BREAK (Actionable): z_mad >= k AND all validation tests PASS
-        ANOMALY_VETOED (Diagnostic only): z_mad >= k BUT some validation test FAIL
+        VALIDATED_BREAK (Actionable): z_mad >= k AND all tests PASS AND is PRECURSOR
+        ANOMALY_VETOED (Diagnostic only): z_mad >= k BUT some test FAIL OR is POSTCURSOR
         NORMAL: z_mad < k
+
+    Phase-Gating (critical for avoiding false alerts during decay):
+        - PRECURSOR breaks → Actionable (issue alert)
+        - POSTCURSOR breaks → Diagnostic only (no alert)
+        - AMBIGUOUS breaks → Diagnostic only (conservative)
 
     Args:
         break_detection: Result from detect_coupling_break()
         robustness_check: Result from compute_robustness_check() (optional)
         registration_check: Result from compute_registration_shift() (optional)
         time_spread_sec: Time spread between channels in seconds (optional)
+        trend_info: Trend data for phase-gating (slope, acceleration)
+        goes_context: GOES context for phase-gating (rising, phase)
 
     Returns:
-        dict with status, is_actionable, veto_reasons, and diagnostic info
+        dict with status, is_actionable, break_type, veto_reasons, and diagnostic info
     """
     # No break detected = NORMAL
     if not break_detection.get('is_break') and not break_detection.get('vetoed'):
@@ -1315,17 +1408,31 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
         if break_detection['vetoed'] not in [r.split()[0] for r in veto_reasons]:
             veto_reasons.append(break_detection['vetoed'])
 
-    # Determine final status
+    # Phase-Gating: classify break type (PRECURSOR vs POSTCURSOR)
+    break_type_info = classify_break_type(trend_info, goes_context)
+    break_type = break_type_info['break_type']
+    phase_reason = break_type_info['reason']
+
+    # Determine final status with phase-gating
     if veto_reasons:
+        # Validation failed → diagnostic only
         status = AnomalyStatus.ANOMALY_VETOED
         is_actionable = False
-    else:
+    elif break_type == BreakType.PRECURSOR:
+        # Validated + PRECURSOR → actionable alert
         status = AnomalyStatus.VALIDATED_BREAK
         is_actionable = True
+    else:
+        # Validated but POSTCURSOR/AMBIGUOUS → diagnostic only (phase-gated)
+        status = AnomalyStatus.VALIDATED_BREAK  # Still validated, but...
+        is_actionable = False  # ...not actionable due to phase
+        veto_reasons.append(f'phase-gated: {break_type} ({phase_reason})')
 
     return {
         'status': status,
         'is_actionable': is_actionable,
+        'break_type': break_type,
+        'phase_reason': phase_reason,
         'z_mad': z_mad,
         'veto_reasons': veto_reasons,
         'passed_tests': passed_tests,
@@ -1333,7 +1440,7 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
     }
 
 
-def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
+def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None) -> dict | None:
     """
     Run quick coupling analysis on latest AIA data with quality checks.
 
@@ -1342,6 +1449,11 @@ def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
     - Test B: Registration shift (cross-correlation)
     - Test C: Robustness check (2x2 binning) - only on breaks
     - Formal Coupling Break detection (median - k×MAD)
+    - Phase-Gating: PRECURSOR vs POSTCURSOR classification
+
+    Args:
+        validate_breaks: Whether to run validation tests on breaks
+        xray: GOES X-ray data for phase-gating (optional)
     """
     print("  Running coupling analysis (this may take a few minutes)...")
 
@@ -1477,14 +1589,51 @@ def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
             'n_warnings': len(quality_warnings) + len(artifact_warnings),
         }
 
+        # Build GOES context for phase-gating
+        goes_context = None
+        if xray:
+            # Determine if GOES is rising or falling (simple heuristic)
+            flux = xray.get('flux', 0)
+            flare_class = xray.get('flare_class', 'A0')
+
+            # Check recent history for trend (from database if available)
+            goes_rising = False
+            goes_phase = 'unknown'
+
+            # Simple heuristic: B-class or below during quiet = likely decay/quiet
+            # C-class+ with no recent higher = possibly rising
+            if flare_class.startswith(('A', 'B')):
+                goes_phase = 'quiet_or_decay'
+            elif flare_class.startswith('C'):
+                # Could be rising or decaying - check acceleration from coupling
+                goes_phase = 'active'
+            else:
+                goes_phase = 'elevated'
+
+            goes_context = {
+                'flux': flux,
+                'flare_class': flare_class,
+                'rising': goes_rising,  # Will be refined by trend analysis
+                'phase': goes_phase,
+            }
+
         # Compute anomaly status for each pair with breaks
         anomaly_statuses = {}
         for pair_key, bd in break_detections.items():
             if bd.get('is_break') or bd.get('vetoed'):
                 reg_check = registration_checks.get(pair_key)
                 rob_check = robustness_checks.get(pair_key)
+
+                # Get trend info for this pair (stored in results)
+                trend_info = {
+                    'slope_pct_per_hour': results.get(pair_key, {}).get('slope_pct_per_hour', 0),
+                    'acceleration': results.get(pair_key, {}).get('acceleration', 0),
+                    'trend': results.get(pair_key, {}).get('trend', 'stable'),
+                }
+
                 anomaly_statuses[pair_key] = classify_anomaly_status(
-                    bd, rob_check, reg_check, time_spread
+                    bd, rob_check, reg_check, time_spread,
+                    trend_info=trend_info, goes_context=goes_context
                 )
 
         # Add validation metadata
@@ -1786,13 +1935,15 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
         robustness = validation.get('robustness_checks', {})
         anomaly_statuses = validation.get('anomaly_statuses', {})
 
-        # Classify breaks by status
+        # Classify breaks by status WITH phase-gating
         actionable_breaks = []
         diagnostic_breaks = []
         for pair, status in anomaly_statuses.items():
-            if status.get('status') == AnomalyStatus.VALIDATED_BREAK:
+            # Phase-gating: only VALIDATED + is_actionable triggers alert
+            if status.get('is_actionable'):
                 actionable_breaks.append(pair)
-            elif status.get('status') == AnomalyStatus.ANOMALY_VETOED:
+            elif status.get('status') in [AnomalyStatus.VALIDATED_BREAK, AnomalyStatus.ANOMALY_VETOED]:
+                # Either vetoed OR phase-gated (POSTCURSOR/AMBIGUOUS)
                 diagnostic_breaks.append(pair)
 
         # Also check for breaks not in anomaly_statuses (legacy)
@@ -1810,17 +1961,22 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             print(f"\n  ╔═══════════════════════════════════════════════════════════╗")
             print(f"  ║  ALERT ENGINE                                             ║")
             print(f"  ╚═══════════════════════════════════════════════════════════╝")
-            print(f"\n  *** VALIDATED COUPLING BREAK ***")
-            print(f"  Reduced coupling may indicate magnetic stress buildup")
+            print(f"\n  *** VALIDATED PRECURSOR BREAK ***")
+            print(f"  Reduced coupling during rising/active phase")
             print(f"  Recommend: Monitor for potential flare activity")
 
             for pair in actionable_breaks:
                 bd = breaks.get(pair, {})
                 status = anomaly_statuses.get(pair, {})
                 z_mad = bd.get('z_mad', status.get('z_mad', 0))
-                print(f"\n  {pair}: ✓ VALIDATED_BREAK")
+                break_type = status.get('break_type', 'PRECURSOR')
+                phase_reason = status.get('phase_reason', '')
+
+                print(f"\n  {pair}: ✓ VALIDATED_BREAK ({break_type})")
                 print(f"    Criterion: {bd.get('criterion', '?')}")
                 print(f"    Deviation: {z_mad:.1f} MAD below median")
+                if phase_reason:
+                    print(f"    Phase: {phase_reason}")
 
                 # Show passed tests
                 passed = status.get('passed_tests', [])
@@ -1850,9 +2006,18 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
                     status = anomaly_statuses.get(pair, {})
                     z_mad = bd.get('z_mad', status.get('z_mad', 0))
                     veto_reasons = status.get('veto_reasons', [bd.get('vetoed', 'unknown')])
+                    break_type = status.get('break_type', 'UNKNOWN')
+                    phase_reason = status.get('phase_reason', '')
 
-                    print(f"\n  {pair}: {z_mad:.1f}σ anomaly (VETOED)")
-                    print(f"    Veto: {', '.join(veto_reasons)}")
+                    # Show break type prominently
+                    if break_type == BreakType.POSTCURSOR:
+                        print(f"\n  {pair}: VALIDATED BREAK ({break_type})")
+                        print(f"    Classification: Late/Post-Event Break — no alert")
+                        print(f"    Reason: {phase_reason}")
+                    else:
+                        print(f"\n  {pair}: {z_mad:.1f}σ anomaly (VETOED)")
+                        if veto_reasons:
+                            print(f"    Veto: {', '.join(veto_reasons)}")
 
                     # Show what passed
                     passed = status.get('passed_tests', [])
@@ -1974,7 +2139,7 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: b
         coupling = None
         if with_coupling and (time.time() - last_coupling) > coupling_interval:
             if not _shutdown_requested:
-                coupling = run_coupling_analysis()
+                coupling = run_coupling_analysis(xray=xray)
                 last_coupling = time.time()
                 # Store coupling
                 if store_db and coupling:
@@ -2097,7 +2262,7 @@ def main():
 
         coupling = None
         if args.coupling:
-            coupling = run_coupling_analysis()
+            coupling = run_coupling_analysis(xray=xray)
             if store_db and coupling:
                 now = datetime.now(timezone.utc)
                 store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling)
