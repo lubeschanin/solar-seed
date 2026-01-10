@@ -226,13 +226,15 @@ class TestCouplingMonitor:
         assert result['trend'] == 'NO_DATA'
         assert result['n_points'] == 0
 
-    def test_trend_initializing(self, monitor):
-        """1-2 data points returns INITIALIZING."""
+    def test_trend_collecting(self, monitor):
+        """1-2 data points returns COLLECTING with reason."""
         monitor.add_reading("2026-01-01T10:00:00", {'193-211': {'delta_mi': 0.59}})
         result = monitor.analyze_trend('193-211')
-        assert result['trend'] == 'INITIALIZING'
+        assert result['trend'] == 'COLLECTING'
         assert result['n_points'] == 1
-        assert result['confidence'] == 'low'
+        assert result['confidence'] == 'insufficient'
+        assert 'Need 3 points' in result['reason']
+        assert result['method'] == 'Theil-Sen'
 
     def test_trend_stable(self, monitor):
         """Stable trend: minimal change."""
@@ -247,6 +249,10 @@ class TestCouplingMonitor:
         assert result['trend'] == 'STABLE'
         assert result['confidence'] == 'medium'
         assert result['n_points'] == 6
+        # Check metadata
+        assert result['method'] == 'Theil-Sen'
+        assert result['window_min'] > 0  # Time span calculated
+        assert 'window_max' in result
 
     def test_trend_declining(self, monitor):
         """Declining trend: significant decrease."""

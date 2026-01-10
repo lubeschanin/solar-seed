@@ -320,24 +320,53 @@ class CouplingMonitor:
     def analyze_trend(self, pair: str) -> dict:
         """Analyze recent trend in coupling using robust Theil-Sen estimator."""
         pair_history = [h for h in self.history if pair in h.get('coupling', {})]
+        n_available = len(pair_history)
 
-        # Minimum 3 points for any trend, but use up to 12 (2 hours at 10min)
-        if len(pair_history) < 3:
-            # Still return useful info even with limited data
-            if len(pair_history) >= 1:
+        # Base result with metadata
+        base_result = {
+            'method': 'Theil-Sen',
+            'interval_min': 10,  # Assumed interval between readings
+            'window_max': 12,    # Max window size (2 hours)
+        }
+
+        # Minimum 3 points for any trend
+        MIN_POINTS = 3
+        if n_available < MIN_POINTS:
+            if n_available == 0:
                 return {
-                    'trend': 'INITIALIZING',
+                    **base_result,
+                    'trend': 'NO_DATA',
                     'slope_pct_per_hour': 0,
-                    'n_points': len(pair_history),
-                    'confidence': 'low'
+                    'n_points': 0,
+                    'window_min': 0,
+                    'confidence': 'none',
+                    'reason': 'No readings available'
                 }
-            return {'trend': 'NO_DATA', 'slope_pct_per_hour': 0, 'n_points': 0, 'confidence': 'none'}
+            else:
+                return {
+                    **base_result,
+                    'trend': 'COLLECTING',
+                    'slope_pct_per_hour': 0,
+                    'n_points': n_available,
+                    'window_min': n_available * 10,
+                    'confidence': 'insufficient',
+                    'reason': f'Need {MIN_POINTS} points, have {n_available}'
+                }
 
         # Rolling window: last 12 points (2 hours) or all available
-        window_size = min(12, len(pair_history))
+        window_size = min(12, n_available)
         recent = pair_history[-window_size:]
         values = [h['coupling'][pair]['delta_mi'] for h in recent]
         n = len(values)
+
+        # Calculate actual time span from timestamps
+        try:
+            from datetime import datetime
+            t_first = datetime.fromisoformat(recent[0]['timestamp'].replace('Z', '+00:00'))
+            t_last = datetime.fromisoformat(recent[-1]['timestamp'].replace('Z', '+00:00'))
+            window_min = (t_last - t_first).total_seconds() / 60
+        except:
+            window_min = n * 10  # Fallback: assume 10min intervals
 
         # Robust Theil-Sen slope
         slope = self._theil_sen_slope(values)
@@ -384,10 +413,12 @@ class CouplingMonitor:
                 trend = 'RISING'
 
         return {
+            **base_result,
             'trend': trend,
             'slope_pct_per_hour': slope_per_hour,
             'acceleration': acceleration,
             'n_points': n,
+            'window_min': window_min,
             'confidence': confidence
         }
 
@@ -728,6 +759,9 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
 
         any_alert = False
         for pair, data in coupling.items():
+            if pair.startswith('_'):  # Skip internal fields like _transfer_state
+                continue
+
             icon = status_icons.get(data.get('status', 'NORMAL'), '')
             trend = data.get('trend', 'NO_DATA')
             trend_icon = trend_icons.get(trend, '')
@@ -737,16 +771,28 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
             residual = data.get('residual', 0)
             slope = data.get('slope_pct_per_hour', 0)
             n_pts = data.get('n_points', 0)
+            window_min = data.get('window_min', 0)
+            method = data.get('method', 'Theil-Sen')
 
             print(f"  {pair} Å: {data['delta_mi']:.3f} bits  r={residual:+.1f}σ  {icon} {data.get('status', '?')}")
 
-            # Show trend with confidence
-            if trend in ['INITIALIZING', 'NO_DATA']:
-                print(f"           Trend: {trend_icon} {trend} (n={n_pts}, collecting data...)")
+            # Show trend with full metadata
+            if trend == 'NO_DATA':
+                reason = data.get('reason', 'No data')
+                print(f"           Trend: {trend_icon} {trend} — {reason}")
+            elif trend == 'COLLECTING':
+                reason = data.get('reason', '')
+                print(f"           Trend: {trend_icon} {trend} — {reason}")
             else:
                 acc = data.get('acceleration', 0)
-                acc_str = f" acc={acc:+.1f}" if abs(acc) > 1 else ""
-                print(f"           Trend: {trend_icon} {trend} ({slope:+.1f}%/h{acc_str}) {conf_marker}[{conf}, n={n_pts}]")
+                acc_str = f", acc={acc:+.1f}%/h²" if abs(acc) > 1 else ""
+                # Format window time nicely
+                if window_min >= 60:
+                    window_str = f"{window_min/60:.1f}h"
+                else:
+                    window_str = f"{window_min:.0f}min"
+                print(f"           Trend: {trend_icon} {trend} ({slope:+.1f}%/h{acc_str})")
+                print(f"                  {conf_marker} {conf} confidence | n={n_pts} | {window_str} window | {method}")
 
             if data.get('status') in ['WARNING', 'ALERT']:
                 any_alert = True
