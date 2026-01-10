@@ -456,7 +456,8 @@ class CouplingMonitor:
         })
         self._save_history()
 
-    def detect_transfer_state(self, robustness_checks: dict = None) -> dict | None:
+    def detect_transfer_state(self, robustness_checks: dict = None,
+                              time_spread_sec: float = None) -> dict | None:
         """
         Detect potential energy transfer between layers.
 
@@ -464,11 +465,12 @@ class CouplingMonitor:
         while coronal coupling (193-211) weakens - may indicate
         energy reorganization before flare.
 
-        If channels involved have failed robustness checks, state is marked
-        as 'degraded' (diagnostic only, not actionable).
+        If channels involved have failed robustness checks or time_sync fails,
+        state is marked as 'degraded' (diagnostic only, not actionable).
 
         Args:
             robustness_checks: Dict of robustness check results by pair
+            time_spread_sec: Time spread between channel observations (>60s = ASYNC)
 
         Returns dict with state info or None if not detected.
         """
@@ -489,9 +491,16 @@ class CouplingMonitor:
         RISING_THRESHOLD = 3.0   # %/hour
         FALLING_THRESHOLD = -3.0  # %/hour
 
-        # Check if any involved channel has failed robustness
+        # Check degradation conditions
         degraded = False
         degraded_reasons = []
+
+        # 1. Time sync failure (ASYNC)
+        if time_spread_sec is not None and time_spread_sec > 60:
+            degraded = True
+            degraded_reasons.append(f'ASYNC (channels {time_spread_sec:.0f}s apart)')
+
+        # 2. Robustness failures
         if robustness_checks:
             for pair in ['193-211', '193-304']:
                 rob = robustness_checks.get(pair, {})
@@ -1449,8 +1458,12 @@ def run_coupling_analysis(validate_breaks: bool = True) -> dict | None:
         # Save to history
         monitor.add_reading(timestamp, results)
 
-        # Check for transfer state (pass robustness checks for degraded flag)
-        transfer = monitor.detect_transfer_state(robustness_checks=robustness_checks)
+        # Check for transfer state (pass robustness checks + time_spread for degraded flag)
+        time_spread = quality_info['time_spread_sec'] if quality_info else None
+        transfer = monitor.detect_transfer_state(
+            robustness_checks=robustness_checks,
+            time_spread_sec=time_spread
+        )
         if transfer:
             results['_transfer_state'] = transfer
 
@@ -1851,14 +1864,21 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
                 state_icons = {'TRANSFER_STATE': '↓↑', 'RECOVERY_STATE': '↑↓'}
                 icon = state_icons.get(transfer['state'], '⟷')
                 degraded = transfer.get('degraded', False)
+                degraded_reasons = transfer.get('degraded_reasons', [])
+
+                # Determine degradation type for display
+                is_async = any('ASYNC' in r for r in degraded_reasons)
 
                 print(f"\n  State Analysis:")
                 if degraded:
-                    print(f"  {icon} {transfer['state']} (degraded — {transfer['confidence']} confidence)")
+                    if is_async:
+                        print(f"  {icon} {transfer['state']} (DEGRADED — ASYNC) — diagnostic only")
+                    else:
+                        print(f"  {icon} {transfer['state']} (DEGRADED) — diagnostic only")
                     print(f"     {transfer['description']}")
                     print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
-                    print(f"     Note: Involved channel binning-sensitive; state interpretable but not trigger-grade")
-                    for reason in transfer.get('degraded_reasons', []):
+                    print(f"     Note: State interpretable but not trigger-grade due to:")
+                    for reason in degraded_reasons:
                         print(f"       - {reason}")
                 else:
                     print(f"  {icon} {transfer['state']} ({transfer['confidence']} confidence)")
