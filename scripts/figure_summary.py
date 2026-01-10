@@ -281,7 +281,9 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
         Line2D([0], [0], marker='d', color='w', markerfacecolor=colors['bz_south'],
                markersize=8, label='Bz < -5 nT', markeredgecolor='black'),
     ]
-    ax4.legend(handles=legend_elements, loc='upper right', fontsize=7, ncol=4)
+    # Place legend below the panel to avoid overlap
+    ax4.legend(handles=legend_elements, loc='upper center', fontsize=7, ncol=4,
+               bbox_to_anchor=(0.5, -0.25), frameon=True, fancybox=True)
 
     # =========================================================================
     # Add annotation box
@@ -299,7 +301,7 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
     fig.text(0.99, 0.01, 'Solar Seed Early Warning System', ha='right', fontsize=8,
              color='#aaaaaa', style='italic')
 
-    plt.subplots_adjust(bottom=0.08, top=0.94, left=0.10, right=0.95)
+    plt.subplots_adjust(bottom=0.12, top=0.94, left=0.10, right=0.95)
 
     # Save or show
     if output_path:
