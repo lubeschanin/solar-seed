@@ -1512,9 +1512,10 @@ def generate_event_narrative(xray: dict, coupling: dict, monitor: 'CouplingMonit
     delta_211 = mi_211.get('delta_mi', 0)
     delta_304 = mi_304.get('delta_mi', 0)
 
-    # Get z-scores (significance relative to baseline)
-    z_211 = mi_211.get('z_mad', 0)
-    z_304 = mi_304.get('z_mad', 0)
+    # Get residual r = (ΔMI - baseline) / std (significance vs long-term reference)
+    # Note: This is different from z_mad which is for break detection vs recent window
+    r_211 = mi_211.get('residual', 0)
+    r_304 = mi_304.get('residual', 0)
 
     # Get trends
     trend_211 = mi_211.get('trend', 'STABLE')
@@ -1537,11 +1538,11 @@ def generate_event_narrative(xray: dict, coupling: dict, monitor: 'CouplingMonit
             phase = "ELEVATED"
             phase_icon = "📈"
     else:
-        # Check if we're in post-flare decay
-        if z_304 > 3 and slope_304 > 0:
+        # Check if we're in post-flare decay (high 193-304 significance)
+        if r_304 > 3 and slope_304 > 0:
             phase = "POST-FLARE DECAY"
             phase_icon = "🌅"
-        elif abs(z_211) > 2 or abs(z_304) > 2:
+        elif abs(r_211) > 2 or abs(r_304) > 2:
             phase = "ANOMALOUS"
             phase_icon = "⚠"
         else:
@@ -1556,19 +1557,20 @@ def generate_event_narrative(xray: dict, coupling: dict, monitor: 'CouplingMonit
     lines.append("")
 
     # Compact timeline table
+    # r = residual significance vs long-term baseline (not z_mad for break detection)
     lines.append("  ┌─────────────┬────────────┬────────────┬─────────────┐")
-    lines.append("  │   Channel   │    ΔMI     │  z-score   │    Trend    │")
+    lines.append("  │   Channel   │    ΔMI     │   r (σ)    │    Trend    │")
     lines.append("  ├─────────────┼────────────┼────────────┼─────────────┤")
 
     # 193-211 row
     trend_arrow_211 = "↓" if slope_211 < -1 else "↑" if slope_211 > 1 else "→"
-    z_str_211 = f"{z_211:+.1f}σ" if z_211 != 0 else "  —"
-    lines.append(f"  │  193-211 Å  │   {delta_211:.3f}   │  {z_str_211:>6}   │  {trend_arrow_211} {slope_211:+.1f}%/h  │")
+    r_str_211 = f"{r_211:+.1f}σ" if r_211 != 0 else "  —"
+    lines.append(f"  │  193-211 Å  │   {delta_211:.3f}   │  {r_str_211:>6}   │  {trend_arrow_211} {slope_211:+.1f}%/h  │")
 
     # 193-304 row
     trend_arrow_304 = "↓" if slope_304 < -1 else "↑" if slope_304 > 1 else "→"
-    z_str_304 = f"{z_304:+.1f}σ" if z_304 != 0 else "  —"
-    lines.append(f"  │  193-304 Å  │   {delta_304:.3f}   │  {z_str_304:>6}   │  {trend_arrow_304} {slope_304:+.1f}%/h  │")
+    r_str_304 = f"{r_304:+.1f}σ" if r_304 != 0 else "  —"
+    lines.append(f"  │  193-304 Å  │   {delta_304:.3f}   │  {r_str_304:>6}   │  {trend_arrow_304} {slope_304:+.1f}%/h  │")
 
     lines.append("  └─────────────┴────────────┴────────────┴─────────────┘")
     lines.append("")
@@ -1578,8 +1580,8 @@ def generate_event_narrative(xray: dict, coupling: dict, monitor: 'CouplingMonit
 
     # Key finding based on phase
     if phase == "POST-FLARE DECAY" or phase == "DECAY PHASE":
-        if z_304 > z_211:
-            lines.append(f"  • 193-304 Å shows peak significance ({z_304:+.1f}σ) during decay phase")
+        if r_304 > r_211:
+            lines.append(f"  • 193-304 Å shows peak significance (r={r_304:+.1f}σ) during decay phase")
             lines.append(f"  • Coronal coupling (193-211) weakening ({slope_211:+.1f}%/h)")
             lines.append(f"  • Enhanced low-atmosphere coherence relative to coronal morphology")
             lines.append(f"  • Consistent with post-flare footpoint/transition-region dominance")
@@ -1588,17 +1590,17 @@ def generate_event_narrative(xray: dict, coupling: dict, monitor: 'CouplingMonit
             lines.append(f"  • Both channels showing recovery trends")
     elif phase == "C-CLASS ACTIVE" or phase == "M/X-CLASS ACTIVE":
         lines.append(f"  • Active phase: GOES {flare_class} ({flux:.2e} W/m²)")
-        if z_211 < -1:
-            lines.append(f"  • Coronal coupling suppressed ({z_211:+.1f}σ) — magnetic reorganization")
-        if z_304 > 1:
-            lines.append(f"  • Chromospheric anchor strengthening ({z_304:+.1f}σ)")
+        if r_211 < -1:
+            lines.append(f"  • Coronal coupling suppressed (r={r_211:+.1f}σ) — magnetic reorganization")
+        if r_304 > 1:
+            lines.append(f"  • Chromospheric anchor strengthening (r={r_304:+.1f}σ)")
         lines.append(f"  • Monitor for coupling break as stress indicator")
     elif phase == "ANOMALOUS":
         lines.append(f"  • Unusual coupling configuration detected")
-        if abs(z_211) > 2:
-            lines.append(f"  • 193-211 Å: {z_211:+.1f}σ deviation from baseline")
-        if abs(z_304) > 2:
-            lines.append(f"  • 193-304 Å: {z_304:+.1f}σ deviation from baseline")
+        if abs(r_211) > 2:
+            lines.append(f"  • 193-211 Å: r={r_211:+.1f}σ deviation from baseline")
+        if abs(r_304) > 2:
+            lines.append(f"  • 193-304 Å: r={r_304:+.1f}σ deviation from baseline")
         lines.append(f"  • Possible precursor signature or instrument artifact")
 
     # Transfer state note if applicable
