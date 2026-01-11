@@ -303,22 +303,24 @@ uv run python scripts/stereo_sync_native.py
 Real-time space weather monitoring with ΔMI coupling analysis:
 
 ```bash
-# Single status check (GOES X-ray + solar wind)
-uv run python scripts/early_warning.py check
+# Set your location (one-time setup)
+uv run python scripts/early_warning.py location          # Interactive
+uv run python scripts/early_warning.py location berlin   # Direct
 
-# Include coupling analysis
-uv run python scripts/early_warning.py check --coupling
+# Minimal alert view (operators)
+uv run python scripts/early_warning.py check -m
 
-# Include STEREO-A advance warning (~3.9 days ahead)
-uv run python scripts/early_warning.py check --coupling --stereo
+# Full scientific dashboard
+uv run python scripts/early_warning.py check -c
+
+# With STEREO-A advance warning (~3.9 days ahead)
+uv run python scripts/early_warning.py check -c -s
 
 # Continuous monitoring (5-minute interval)
-uv run python scripts/early_warning.py monitor --coupling --interval 300
+uv run python scripts/early_warning.py monitor -c -i 300
 
-# Database statistics
+# Database statistics & correlations
 uv run python scripts/early_warning.py stats
-
-# Coupling-flare correlations
 uv run python scripts/early_warning.py correlations
 ```
 
@@ -326,8 +328,9 @@ uv run python scripts/early_warning.py correlations
 
 | Command | Description |
 |---------|-------------|
-| `check` | 🔍 Single status check of all data sources |
+| `check` | 🔍 Single status check (use `-m` for minimal, `-c` for coupling) |
 | `monitor` | 📡 Continuous monitoring with periodic updates |
+| `location` | 📍 Set/show your location for personal relevance |
 | `stats` | 📊 Show database statistics |
 | `correlations` | 📈 Show coupling-flare correlations |
 
@@ -337,8 +340,36 @@ uv run python scripts/early_warning.py correlations
 |--------|-------|-------------|
 | `--coupling` | `-c` | Include SDO/AIA coupling analysis |
 | `--stereo` | `-s` | Include STEREO-A EUVI (~3.9 days ahead) |
+| `--minimal` | `-m` | Minimal alert view (only actionable info) |
+| `--location` | `-l` | Show personal relevance (or use `location` command) |
 | `--interval` | `-i` | Monitoring interval in seconds (default: 60) |
 | `--no-db` | | Disable database storage |
+
+**Display Modes:**
+
+| Mode | Command | Shows |
+|------|---------|-------|
+| Minimal | `check -m` | 193-211 status, trend, CLEAR/CAUTION/BREAK |
+| Full | `check -c` | All channels, Anomaly levels, Phase, GOES, Solar Wind |
+| Personal | `check -m -l berlin` | + Day/night status, radio/GPS risk |
+
+**Anomaly Level (Statistical):**
+- `NORMAL`: \|z\| < 2σ
+- `ELEVATED`: 2-4σ
+- `STRONG`: 4-7σ
+- `EXTREME`: > 7σ
+
+**Phase (Interpretive):**
+- `BASELINE`: Quiet conditions
+- `PRE-FLARE`: Destabilization detected
+- `FLARE`: Active flare (M/X class)
+- `RECOVERY`: Post-peak decay
+- `POST-FLARE REORG`: Chromosphere coupling elevated
+
+**Personal Relevance:**
+- Day side: Radio/GPS effects affect you NOW (~8 min latency)
+- Night side: Only geomagnetic effects (15-48h latency)
+- Aurora possible at high latitudes when Kp ≥ 7
 
 **Data Sources:**
 - GOES X-ray flux (NOAA SWPC) — flare classification
