@@ -753,7 +753,7 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
 
     # Coupling analysis
     if coupling:
-        fmt.print_coupling_analysis(coupling, AnomalyStatus, BreakType)
+        fmt.print_coupling_analysis(coupling, AnomalyStatus, BreakType, xray=xray)
         fmt.print_event_narrative(xray, coupling)
 
     # STEREO-A section

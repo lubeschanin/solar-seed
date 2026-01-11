@@ -19,7 +19,14 @@ Usage:
 
 from .db import MonitoringDB
 from .coupling import CouplingMonitor
-from .constants import MIN_MI_THRESHOLD, MIN_ROI_STD
+from .constants import (
+    MIN_MI_THRESHOLD,
+    MIN_ROI_STD,
+    AnomalyLevel,
+    Phase,
+    get_anomaly_level,
+    classify_phase,
+)
 from .validation import validate_roi_variance, validate_mi_measurement
 from .detection import (
     AnomalyStatus,
@@ -38,9 +45,13 @@ __all__ = [
     'MonitoringDB',
     # Coupling monitor
     'CouplingMonitor',
-    # Constants
+    # Constants & Classification
     'MIN_MI_THRESHOLD',
     'MIN_ROI_STD',
+    'AnomalyLevel',      # Statistical: NORMAL/ELEVATED/STRONG/EXTREME
+    'Phase',             # Interpretive: BASELINE/PRE-FLARE/FLARE/RECOVERY/POST-FLARE REORG
+    'get_anomaly_level',
+    'classify_phase',
     # Validation
     'validate_roi_variance',
     'validate_mi_measurement',

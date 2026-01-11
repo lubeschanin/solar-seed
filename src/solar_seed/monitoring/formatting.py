@@ -15,6 +15,8 @@ from rich.columns import Columns
 from rich.style import Style
 from rich import box
 
+from .constants import AnomalyLevel, Phase, get_anomaly_level, classify_phase
+
 
 console = Console()
 
@@ -24,13 +26,30 @@ class StatusFormatter:
     Format status reports using Rich for beautiful terminal output.
     """
 
-    # Status styles
-    STYLES = {
-        'NORMAL': Style(color="green"),
-        'ELEVATED': Style(color="yellow"),
-        'WARNING': Style(color="bright_yellow", bold=True),
-        'ALERT': Style(color="red", bold=True),
+    # Anomaly level styles (statistical)
+    ANOMALY_STYLES = {
+        AnomalyLevel.NORMAL: Style(color="green"),
+        AnomalyLevel.ELEVATED: Style(color="yellow"),
+        AnomalyLevel.STRONG: Style(color="bright_yellow", bold=True),
+        AnomalyLevel.EXTREME: Style(color="red", bold=True),
         'DATA_ERROR': Style(color="bright_black"),
+    }
+
+    # Phase styles (interpretive)
+    PHASE_STYLES = {
+        Phase.BASELINE: Style(color="green"),
+        Phase.PRE_FLARE: Style(color="red", bold=True),
+        Phase.FLARE: Style(color="bright_red", bold=True),
+        Phase.RECOVERY: Style(color="yellow"),
+        Phase.POST_FLARE_REORG: Style(color="cyan"),
+    }
+
+    PHASE_ICONS = {
+        Phase.BASELINE: '🟢',
+        Phase.PRE_FLARE: '⚠️',
+        Phase.FLARE: '🔴',
+        Phase.RECOVERY: '🟡',
+        Phase.POST_FLARE_REORG: '🔵',
     }
 
     TREND_ICONS = {
@@ -137,8 +156,14 @@ class StatusFormatter:
         panel = Panel(table, title="💨 SOLAR WIND (DSCOVR L1)", border_style="blue", subtitle="[dim]Contextual[/]")
         self.console.print(panel)
 
-    def print_coupling_analysis(self, coupling: dict, AnomalyStatus, BreakType):
-        """Print coupling analysis with Rich formatting."""
+    def print_coupling_analysis(self, coupling: dict, AnomalyStatus, BreakType,
+                                 xray: dict = None):
+        """Print coupling analysis with Rich formatting.
+
+        Now shows two separate classifications:
+        - Anomaly (statistical): NORMAL/ELEVATED/STRONG/EXTREME based on |z|
+        - Phase (interpretive): BASELINE/PRE-FLARE/FLARE/RECOVERY/POST-FLARE REORG
+        """
         if not coupling:
             return
 
@@ -147,7 +172,15 @@ class StatusFormatter:
         n_warn = quality.get('n_warnings', 0)
         quality_text = "[green]✓ GOOD[/]" if n_warn == 0 else f"[yellow]⚠ {n_warn} warning(s)[/]"
 
-        # Build coupling table
+        # Classify phase based on all pair data
+        goes_flux = xray.get('flux') if xray else None
+        goes_rising = xray.get('rising', False) if xray else None
+        goes_class = xray.get('flare_class') if xray else None
+
+        pairs_data = {k: v for k, v in coupling.items() if not k.startswith('_')}
+        phase, phase_reason = classify_phase(pairs_data, goes_flux, goes_rising, goes_class)
+
+        # Build coupling table with Anomaly column
         table = Table(
             title=f"Data Quality: {quality_text}",
             box=box.ROUNDED,
@@ -157,7 +190,7 @@ class StatusFormatter:
         table.add_column("Pair", style="bold")
         table.add_column("ΔMI", justify="right")
         table.add_column("r(σ)", justify="right")
-        table.add_column("Status")
+        table.add_column("Anomaly")  # Statistical level
         table.add_column("Trend")
 
         for pair, data in coupling.items():
@@ -166,18 +199,20 @@ class StatusFormatter:
 
             delta_mi = data.get('delta_mi', 0)
             residual = data.get('residual', 0)
-            status = data.get('status', 'NORMAL')
             trend = data.get('trend', 'NO_DATA')
             slope = data.get('slope_pct_per_hour', 0)
 
-            # Style based on status
-            status_style = self.STYLES.get(status, Style())
+            # Compute anomaly level from z-score
+            anomaly_level = get_anomaly_level(residual)
+            anomaly_style = self.ANOMALY_STYLES.get(anomaly_level, Style())
             trend_icon = self.TREND_ICONS.get(trend, '?')
 
-            # Residual coloring
-            if abs(residual) > 3:
+            # Residual coloring (matches anomaly level)
+            if abs(residual) >= 7:
                 r_style = "red"
-            elif abs(residual) > 2:
+            elif abs(residual) >= 4:
+                r_style = "bright_yellow"
+            elif abs(residual) >= 2:
                 r_style = "yellow"
             else:
                 r_style = "green"
@@ -185,27 +220,51 @@ class StatusFormatter:
             # Build trend string
             trend_str = f"{trend_icon} {slope:+.1f}%/h"
 
-            # Break indicator
+            # Anomaly text with sign indicator
+            sign = "+" if residual > 0 else ""
+            anomaly_text = Text(f"{anomaly_level} ({sign}{residual:.1f}σ)", style=anomaly_style)
+
+            # Break indicator overrides
             if data.get('is_break'):
-                status_text = f"[bold red]🚨 BREAK[/]"
+                anomaly_text = Text("🚨 BREAK", style="bold red")
             elif data.get('break_vetoed'):
-                status_text = f"[dim]VETOED[/]"
-            else:
-                status_text = Text(status, style=status_style)
+                anomaly_text = Text("VETOED", style="dim")
 
             table.add_row(
                 f"{pair} Å",
                 f"{delta_mi:.3f}",
                 f"[{r_style}]{residual:+.1f}σ[/]",
-                status_text,
+                anomaly_text,
                 trend_str,
             )
 
         panel = Panel(table, title="📊 ΔMI COUPLING MONITOR", border_style="magenta", subtitle="[dim]Pre-Flare Detection[/]")
         self.console.print(panel)
 
+        # Print phase panel (interpretive)
+        self._print_phase(phase, phase_reason)
+
         # Show alerts if any
         self._print_alerts(coupling, AnomalyStatus, BreakType)
+
+    def _print_phase(self, phase: str, reason: str):
+        """Print interpretive phase panel."""
+        phase_style = self.PHASE_STYLES.get(phase, Style())
+        phase_icon = self.PHASE_ICONS.get(phase, '❓')
+
+        phase_text = Text()
+        phase_text.append(f"{phase_icon} ", style="bold")
+        phase_text.append(phase, style=phase_style)
+        phase_text.append(f"\n{reason}", style="dim")
+
+        border_color = "green" if phase == Phase.BASELINE else "yellow" if phase == Phase.RECOVERY else "red" if phase in [Phase.PRE_FLARE, Phase.FLARE] else "cyan"
+
+        self.console.print(Panel(
+            phase_text,
+            title="🎯 PHASE (Interpretive)",
+            border_style=border_color,
+            subtitle="[dim]Rule-based classification[/]"
+        ))
 
     def _print_alerts(self, coupling: dict, AnomalyStatus, BreakType):
         """Print alert and diagnostic sections."""
