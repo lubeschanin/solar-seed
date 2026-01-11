@@ -22,8 +22,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 import json
 
-sys.path.insert(0, str(Path(__file__).parent))
-from monitoring_db import MonitoringDB
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from solar_seed.monitoring import MonitoringDB
 
 
 class ReportGenerator:
@@ -888,8 +888,10 @@ Examples:
         stats = report.get_precursor_statistics()
         print("\n  PRECURSOR DETECTION STATISTICS")
         print("  " + "-" * 40)
-        print(f"  Total Breaks:     {stats['total_breaks']}")
+        print(f"  Break Candidates: {stats['break_candidates']}")
+        print(f"  Actionable:       {stats['actionable_alerts']}")
         print(f"  Total Flares:     {stats['total_flares']}")
+        print(f"  Total Episodes:   {stats['total_episodes']}")
         print(f"  True Positives:   {stats['true_positives']}")
         print(f"  False Positives:  {stats['false_positives']}")
         print(f"  False Negatives:  {stats['false_negatives']}")

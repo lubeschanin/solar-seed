@@ -66,9 +66,8 @@ def _restore_signal_handler():
         _original_sigint_handler = None
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-sys.path.insert(0, str(Path(__file__).parent))
 
-from monitoring_db import MonitoringDB
+from solar_seed.monitoring import MonitoringDB
 
 # NOAA SWPC API endpoints
 GOES_XRAY_URL = "https://services.swpc.noaa.gov/json/goes/primary/xrays-1-day.json"
