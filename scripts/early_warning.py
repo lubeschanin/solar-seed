@@ -67,7 +67,32 @@ def _restore_signal_handler():
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from solar_seed.monitoring import MonitoringDB
+from solar_seed.monitoring import (
+    MonitoringDB,
+    CouplingMonitor,
+    MIN_MI_THRESHOLD,
+    MIN_ROI_STD,
+    validate_roi_variance,
+    validate_mi_measurement,
+    AnomalyStatus,
+    BreakType,
+    detect_artifact,
+    detect_coupling_break,
+    compute_registration_shift,
+    compute_robustness_check,
+    classify_break_type,
+    classify_anomaly_status,
+    StatusFormatter,
+)
+from solar_seed.data_sources import (
+    load_aia_synoptic,
+    load_aia_latest,
+    load_aia_direct,
+    load_stereo_a_latest,
+    STEREO_A_INFO,
+    EUVI_TO_AIA,
+    SYNOPTIC_BASE_URL,
+)
 
 # NOAA SWPC API endpoints
 GOES_XRAY_URL = "https://services.swpc.noaa.gov/json/goes/primary/xrays-1-day.json"
@@ -261,288 +286,6 @@ def assess_geomagnetic_risk(solar_wind: dict) -> tuple[str, int]:
         return "QUIET", 0
 
 
-class CouplingMonitor:
-    """Track coupling residuals over time for pre-flare detection."""
-
-    # Baseline values from 8-day rotation analysis
-    BASELINES = {
-        '193-211': {'mean': 0.59, 'std': 0.12},
-        '193-304': {'mean': 0.07, 'std': 0.02},
-        '171-193': {'mean': 0.17, 'std': 0.04},
-        '211-335': {'mean': 0.28, 'std': 0.06},
-    }
-
-    # Flare analysis showed -25% to -47% reduction during flares
-    ALERT_THRESHOLD = -0.25  # 25% below baseline triggers warning
-
-    def __init__(self, history_file: Path = None):
-        self.history_file = history_file or Path("results/early_warning/coupling_history.json")
-        self.history = self._load_history()
-
-    def _load_history(self) -> list:
-        """Load coupling history from file."""
-        if self.history_file.exists():
-            try:
-                with open(self.history_file) as f:
-                    return json.load(f)
-            except:
-                pass
-        return []
-
-    def _save_history(self):
-        """Save coupling history to file."""
-        self.history_file.parent.mkdir(parents=True, exist_ok=True)
-        # Keep last 24 hours (144 entries at 10min intervals)
-        self.history = self.history[-144:]
-        with open(self.history_file, 'w') as f:
-            json.dump(self.history, f)
-
-    def compute_residual(self, pair: str, delta_mi: float) -> dict:
-        """Compute residual r(t) = (ΔMI - baseline) / std."""
-        if pair not in self.BASELINES:
-            return {'residual': 0, 'deviation_pct': 0, 'status': 'unknown'}
-
-        baseline = self.BASELINES[pair]
-        residual = (delta_mi - baseline['mean']) / baseline['std']
-        deviation_pct = (delta_mi - baseline['mean']) / baseline['mean']
-
-        if deviation_pct < self.ALERT_THRESHOLD:
-            status = 'ALERT'
-        elif deviation_pct < -0.15:
-            status = 'WARNING'
-        elif deviation_pct < -0.10:
-            status = 'ELEVATED'
-        else:
-            status = 'NORMAL'
-
-        return {
-            'residual': residual,
-            'deviation_pct': deviation_pct,
-            'status': status
-        }
-
-    def _theil_sen_slope(self, values: list) -> float:
-        """Compute robust Theil-Sen median slope estimator."""
-        n = len(values)
-        if n < 2:
-            return 0.0
-
-        slopes = []
-        for i in range(n):
-            for j in range(i + 1, n):
-                if j != i:
-                    slopes.append((values[j] - values[i]) / (j - i))
-
-        if not slopes:
-            return 0.0
-
-        slopes.sort()
-        mid = len(slopes) // 2
-        if len(slopes) % 2 == 0:
-            return (slopes[mid - 1] + slopes[mid]) / 2
-        return slopes[mid]
-
-    def analyze_trend(self, pair: str) -> dict:
-        """Analyze recent trend in coupling using robust Theil-Sen estimator."""
-        pair_history = [h for h in self.history if pair in h.get('coupling', {})]
-        n_available = len(pair_history)
-
-        # Base result with metadata
-        base_result = {
-            'method': 'Theil-Sen',
-            'interval_min': 10,  # Assumed interval between readings
-            'window_max': 12,    # Max window size (2 hours)
-        }
-
-        # Minimum 3 points for any trend
-        MIN_POINTS = 3
-        if n_available < MIN_POINTS:
-            if n_available == 0:
-                return {
-                    **base_result,
-                    'trend': 'NO_DATA',
-                    'slope_pct_per_hour': 0,
-                    'n_points': 0,
-                    'window_min': 0,
-                    'confidence': 'none',
-                    'reason': 'No readings available'
-                }
-            else:
-                return {
-                    **base_result,
-                    'trend': 'COLLECTING',
-                    'slope_pct_per_hour': 0,
-                    'n_points': n_available,
-                    'window_min': n_available * 10,
-                    'confidence': 'insufficient',
-                    'reason': f'Need {MIN_POINTS} points, have {n_available}'
-                }
-
-        # Rolling window: last 12 points (2 hours) or all available
-        window_size = min(12, n_available)
-        recent = pair_history[-window_size:]
-        values = [h['coupling'][pair]['delta_mi'] for h in recent]
-        n = len(values)
-
-        # Calculate actual time span from timestamps
-        try:
-            from datetime import datetime
-            t_first = datetime.fromisoformat(recent[0]['timestamp'].replace('Z', '+00:00'))
-            t_last = datetime.fromisoformat(recent[-1]['timestamp'].replace('Z', '+00:00'))
-            window_min = (t_last - t_first).total_seconds() / 60
-        except:
-            window_min = n * 10  # Fallback: assume 10min intervals
-
-        # Robust Theil-Sen slope
-        slope = self._theil_sen_slope(values)
-
-        # Mean value for normalization
-        y_mean = sum(values) / n if n > 0 else 1
-
-        # Normalize slope to % per hour (assuming 10min intervals)
-        slope_per_hour = slope * 6 / y_mean * 100 if y_mean else 0
-
-        # Acceleration: compare first half vs second half slopes
-        acceleration = 0
-        if n >= 6:
-            first_half = values[:n//2]
-            second_half = values[n//2:]
-            slope1 = self._theil_sen_slope(first_half)
-            slope2 = self._theil_sen_slope(second_half)
-            acceleration = (slope2 - slope1) / y_mean * 100 if y_mean else 0
-
-        # Confidence based on sample size
-        if n >= 9:
-            confidence = 'high'
-        elif n >= 6:
-            confidence = 'medium'
-        else:
-            confidence = 'low'
-
-        # Thresholds for trend classification
-        EPSILON = 3.0      # %/hour for stable vs trending
-        EPSILON_ACC = 2.0  # acceleration threshold
-
-        # Determine trend label
-        if abs(slope_per_hour) < EPSILON:
-            trend = 'STABLE'
-        elif slope_per_hour < -EPSILON:
-            if acceleration < -EPSILON_ACC:
-                trend = 'ACCELERATING_DOWN'  # Getting worse faster
-            else:
-                trend = 'DECLINING'
-        else:  # slope_per_hour > EPSILON
-            if acceleration > EPSILON_ACC:
-                trend = 'ACCELERATING_UP'
-            else:
-                trend = 'RISING'
-
-        return {
-            **base_result,
-            'trend': trend,
-            'slope_pct_per_hour': slope_per_hour,
-            'acceleration': acceleration,
-            'n_points': n,
-            'window_min': window_min,
-            'confidence': confidence
-        }
-
-    def add_reading(self, timestamp: str, coupling_data: dict):
-        """Add a new coupling reading to history."""
-        self.history.append({
-            'timestamp': timestamp,
-            'coupling': coupling_data
-        })
-        self._save_history()
-
-    def detect_transfer_state(self, robustness_checks: dict = None,
-                              time_spread_sec: float = None) -> dict | None:
-        """
-        Detect potential energy transfer between layers.
-
-        TRANSFER_STATE: When chromospheric anchor (193-304) strengthens
-        while coronal coupling (193-211) weakens - may indicate
-        energy reorganization before flare.
-
-        If channels involved have failed robustness checks or time_sync fails,
-        state is marked as 'degraded' (diagnostic only, not actionable).
-
-        Args:
-            robustness_checks: Dict of robustness check results by pair
-            time_spread_sec: Time spread between channel observations (>60s = ASYNC)
-
-        Returns dict with state info or None if not detected.
-        """
-        # Need trends for both pairs
-        trend_304 = self.analyze_trend('193-304')
-        trend_211 = self.analyze_trend('193-211')
-
-        # Require at least medium confidence
-        if trend_304.get('confidence') in ['none', 'low']:
-            return None
-        if trend_211.get('confidence') in ['none', 'low']:
-            return None
-
-        slope_304 = trend_304.get('slope_pct_per_hour', 0)
-        slope_211 = trend_211.get('slope_pct_per_hour', 0)
-
-        # Thresholds for transfer detection
-        RISING_THRESHOLD = 3.0   # %/hour
-        FALLING_THRESHOLD = -3.0  # %/hour
-
-        # Check degradation conditions
-        degraded = False
-        degraded_reasons = []
-
-        # 1. Time sync failure (ASYNC)
-        if time_spread_sec is not None and time_spread_sec > 60:
-            degraded = True
-            degraded_reasons.append(f'ASYNC (channels {time_spread_sec:.0f}s apart)')
-
-        # 2. Robustness failures
-        if robustness_checks:
-            for pair in ['193-211', '193-304']:
-                rob = robustness_checks.get(pair, {})
-                if rob.get('is_robust') is False:
-                    degraded = True
-                    change = rob.get('change_pct', 0)
-                    degraded_reasons.append(f'{pair} robustness failed (Δbin={change:.1f}%)')
-
-        # Transfer state: 304 rising while 211 falling
-        if slope_304 > RISING_THRESHOLD and slope_211 < FALLING_THRESHOLD:
-            result = {
-                'state': 'TRANSFER_STATE',
-                'description': 'Chromospheric anchor strengthening, coronal coupling weakening',
-                'slope_193_304': slope_304,
-                'slope_193_211': slope_211,
-                'confidence': min(trend_304['confidence'], trend_211['confidence']),
-                'interpretation': 'Possible energy reorganization / magnetic stress buildup',
-                'degraded': degraded,
-                'degraded_reasons': degraded_reasons,
-            }
-            if degraded:
-                result['interpretation'] = 'DIAGNOSTIC ONLY — ' + result['interpretation']
-            return result
-
-        # Inverse: recovery after flare?
-        if slope_304 < FALLING_THRESHOLD and slope_211 > RISING_THRESHOLD:
-            result = {
-                'state': 'RECOVERY_STATE',
-                'description': 'Coronal coupling recovering, chromospheric anchor releasing',
-                'slope_193_304': slope_304,
-                'slope_193_211': slope_211,
-                'confidence': min(trend_304['confidence'], trend_211['confidence']),
-                'interpretation': 'Possible post-flare recovery / relaxation',
-                'degraded': degraded,
-                'degraded_reasons': degraded_reasons,
-            }
-            if degraded:
-                result['interpretation'] = 'DIAGNOSTIC ONLY — ' + result['interpretation']
-            return result
-
-        return None
-
-
 # Global instances
 _coupling_monitor = None
 _monitoring_db = None
@@ -639,106 +382,6 @@ def store_coupling_reading(timestamp: str, coupling: dict):
         )
 
 
-# =============================================================================
-# STEREO-A EUVI Data Loading
-# =============================================================================
-
-# STEREO-A position info (updated periodically)
-STEREO_A_INFO = {
-    'separation_deg': 51.0,  # Degrees ahead of Earth
-    'light_travel_min': 7.0,  # Light travel time to Earth
-    'advance_warning_days': 3.9,  # How many days ahead it sees (51° / 13.2°/day)
-}
-
-# EUVI to AIA wavelength mapping
-EUVI_TO_AIA = {
-    171: 171,  # Fe IX - same
-    195: 193,  # Fe XII - similar to AIA 193
-    284: 211,  # Fe XV - similar to AIA 211
-    304: 304,  # He II - same
-}
-
-
-def load_stereo_a_latest(wavelengths: list[int] = None, max_age_minutes: int = 120) -> tuple[dict, str, dict] | tuple[None, None, None]:
-    """
-    Load most recent STEREO-A EUVI data.
-
-    STEREO-A is ~51° ahead of Earth, providing ~3.9 days advance warning.
-
-    Args:
-        wavelengths: EUVI wavelengths to load [171, 195, 284, 304]
-        max_age_minutes: How far back to search (STEREO data may be delayed)
-
-    Returns:
-        (channels_dict, timestamp, metadata) or (None, None, None)
-    """
-    if wavelengths is None:
-        wavelengths = [195, 284, 304]  # Similar to AIA 193, 211, 304
-
-    try:
-        from sunpy.net import Fido, attrs as a
-        import astropy.units as u
-        from sunpy.map import Map
-        import tempfile
-        import os
-
-        now = datetime.now(timezone.utc)
-        start = now - timedelta(minutes=max_age_minutes)
-
-        channels = {}
-        actual_timestamp = None
-
-        print(f"\n  STEREO-A EUVI ({STEREO_A_INFO['separation_deg']:.0f}° ahead, ~{STEREO_A_INFO['advance_warning_days']:.1f} days warning)")
-
-        for wl in wavelengths:
-            print(f"    Searching EUVI {wl} Å (last {max_age_minutes} min)...")
-
-            # Search STEREO-A EUVI data
-            result = Fido.search(
-                a.Time(start, now),
-                a.Source('STEREO_A'),
-                a.Instrument('EUVI'),
-                a.Wavelength(wl * u.Angstrom)
-            )
-
-            if len(result) > 0 and len(result[0]) > 0:
-                n_results = len(result[0])
-                latest_idx = n_results - 1
-
-                try:
-                    result_time = result[0][latest_idx]['Start Time']
-                    print(f"    Found {n_results} images, using latest: {result_time}")
-                except:
-                    print(f"    Found {n_results} images, using latest")
-
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    files = Fido.fetch(result[0, latest_idx], path=tmpdir, progress=False)
-                    if files:
-                        smap = Map(files[0])
-                        channels[wl] = smap.data
-
-                        if actual_timestamp is None:
-                            actual_timestamp = smap.date.isot
-                            print(f"    Actual image time: {actual_timestamp}")
-
-                        os.remove(files[0])
-            else:
-                print(f"    No EUVI {wl} Å images found")
-
-        metadata = {
-            'source': 'STEREO-A',
-            'instrument': 'EUVI',
-            'separation_deg': STEREO_A_INFO['separation_deg'],
-            'advance_warning_days': STEREO_A_INFO['advance_warning_days'],
-        }
-
-        return (channels, actual_timestamp, metadata) if channels else (None, None, None)
-
-    except Exception as e:
-        print(f"    STEREO-A load error: {e}")
-        return None, None, None
-
-
 def run_stereo_coupling_analysis() -> dict | None:
     """
     Run coupling analysis on STEREO-A EUVI data.
@@ -809,909 +452,176 @@ def run_stereo_coupling_analysis() -> dict | None:
         return None
 
 
-def load_aia_latest(wavelengths: list[int], max_age_minutes: int = 60) -> tuple[dict, str, dict] | tuple[None, None, None]:
+def _load_channels(wavelengths: list[int], use_synoptic: bool = True) -> tuple[dict | None, str | None, dict | None, str | None]:
     """
-    Load the most recent available AIA data with quality metadata.
+    Load AIA channel data with fallback strategy.
 
-    Searches for available images in the last max_age_minutes and picks the newest.
-    Returns (channels_dict, actual_timestamp, quality_info) or (None, None, None) if not found.
-
-    Quality info includes:
-    - timestamps: dict of wavelength -> timestamp
-    - time_spread_sec: max time difference between channels
-    - quality_flags: dict of wavelength -> QUALITY header value
-    - exposure_times: dict of wavelength -> EXPTIME
-    - warnings: list of quality warnings
+    Returns:
+        (channels, timestamp, quality_info, data_source) or (None, None, None, None) on failure
     """
-    try:
-        from sunpy.net import Fido, attrs as a
-        import astropy.units as u
-        from sunpy.map import Map
-        import tempfile
-        import os
+    channels = None
+    timestamp = None
+    quality_info = None
+    data_source = None
 
-        now = datetime.now(timezone.utc)
-        start = now - timedelta(minutes=max_age_minutes)
+    # Primary: Try synoptic data (fast, reliable, no queue)
+    if use_synoptic:
+        print("  Trying AIA synoptic data (1k, direct access)...")
+        channels, timestamp, quality_info = load_aia_synoptic(wavelengths)
+        if channels and len(channels) >= 2:
+            data_source = 'synoptic'
+            print(f"  ✓ Using synoptic data from: {timestamp}")
 
-        channels = {}
-        actual_timestamp = None
+    # Fallback 1: Full-res via VSO
+    if not channels or len(channels) < 2:
+        print("  Synoptic unavailable, trying full-res via VSO...")
+        channels, timestamp, quality_info = load_aia_latest(wavelengths, max_age_minutes=30)
+        if channels and len(channels) >= 2:
+            data_source = 'full-res'
 
-        # Quality tracking
-        timestamps = {}
-        quality_flags = {}
-        exposure_times = {}
-        warnings = []
+    # Fallback 2: Direct load (legacy)
+    if not channels or len(channels) < 2:
+        print("  VSO unavailable, trying direct fallback...")
+        fallback_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        timestamp = fallback_time.strftime("%Y-%m-%dT%H:%M:00")
+        channels = load_aia_direct(timestamp, wavelengths)
+        quality_info = None
+        if channels and len(channels) >= 2:
+            data_source = 'direct-fallback'
 
-        for wl in wavelengths:
-            print(f"    Searching {wl} Å (last {max_age_minutes} min)...")
+    if not channels or len(channels) < 2:
+        print("  ✗ Could not load AIA data from any source")
+        return None, None, None, None
 
-            # Search for available images in time window
-            result = Fido.search(
-                a.Time(start, now),
-                a.Instrument('AIA'),
-                a.Wavelength(wl * u.Angstrom)
-            )
+    print(f"  Data source: {data_source}")
+    return channels, timestamp, quality_info, data_source
 
-            if len(result) > 0 and len(result[0]) > 0:
-                # Get the LAST (most recent) result
-                n_results = len(result[0])
-                latest_idx = n_results - 1
 
-                # Extract timestamp from result table if available
-                try:
-                    result_time = result[0][latest_idx]['Start Time']
-                    print(f"    Found {n_results} images, using latest: {result_time}")
-                except:
-                    print(f"    Found {n_results} images, using latest")
+def _analyze_pair(wl1: int, wl2: int, channels: dict, monitor, validate_breaks: bool,
+                  subtract_radial_geometry, sector_ring_shuffle_test) -> dict:
+    """
+    Analyze a single channel pair: compute MI, detect breaks, run validation.
 
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    # Fetch only the most recent one
-                    files = Fido.fetch(result[0, latest_idx], path=tmpdir, progress=False)
-                    if files:
-                        smap = Map(files[0])
-                        channels[wl] = smap.data
+    Returns dict with keys: result, break_detection, registration_check, robustness_check,
+                            quality_warnings, artifact_warnings
+    """
+    pair_key = f"{wl1}-{wl2}"
+    output = {
+        'pair_key': pair_key,
+        'result': None,
+        'break_detection': None,
+        'registration_check': None,
+        'robustness_check': None,
+        'quality_warnings': [],
+        'artifact_warnings': [],
+    }
 
-                        # Get actual timestamp from the FITS header
-                        timestamps[wl] = smap.date.datetime
-                        if actual_timestamp is None:
-                            actual_timestamp = smap.date.isot
-                            print(f"    Actual image time: {actual_timestamp}")
+    # Test B: Registration shift BEFORE geometry subtraction
+    reg_check = compute_registration_shift(channels[wl1], channels[wl2])
+    output['registration_check'] = reg_check
 
-                        # Extract quality metadata from FITS header
-                        header = smap.meta
-                        quality_flags[wl] = header.get('QUALITY', 0)
-                        exposure_times[wl] = header.get('EXPTIME', 0)
+    if not reg_check['is_centered']:
+        warn_msg = f"{pair_key}: Registration shift {reg_check['shift_pixels']:.1f}px (dx={reg_check['dx']}, dy={reg_check['dy']})"
+        output['quality_warnings'].append(warn_msg)
+        print(f"  ⚠ {warn_msg}")
 
-                        # Check quality flag (only warn on critical bits)
-                        # Bit 30 (2^30 = 1073741824) = AEC flag (normal operation)
-                        # Critical bits: 0-15 indicate actual data issues
-                        critical_bits = quality_flags[wl] & 0x0000FFFF  # Lower 16 bits
-                        if critical_bits != 0:
-                            warnings.append(f"{wl}Å: QUALITY={quality_flags[wl]} (critical bits set)")
-                            print(f"    ⚠ Quality flag: {quality_flags[wl]} (critical)")
+    res1, _, _ = subtract_radial_geometry(channels[wl1])
+    res2, _, _ = subtract_radial_geometry(channels[wl2])
 
-                        # Check exposure time (typical: 1-2s for most channels)
-                        expected_exp = {171: 2.0, 193: 2.0, 211: 2.0, 304: 2.0, 335: 2.9, 94: 2.9, 131: 2.9}
-                        exp_expected = expected_exp.get(wl, 2.0)
-                        if exposure_times[wl] < exp_expected * 0.5:
-                            warnings.append(f"{wl}Å: Short exposure {exposure_times[wl]:.2f}s (expected ~{exp_expected}s)")
-                            print(f"    ⚠ Short exposure: {exposure_times[wl]:.2f}s")
+    # Validate ROI variance before MI calculation
+    roi_check = validate_roi_variance(res1, res2, pair_key)
+    if not roi_check['is_valid']:
+        print(f"  ⚠ DATA_ERROR in {pair_key}: {roi_check['error_reason']}")
+        output['result'] = {
+            'delta_mi': 0.0,
+            'data_error': True,
+            'error_type': roi_check['error_type'],
+            'error_reason': roi_check['error_reason'],
+            'std1': roi_check['std1'],
+            'std2': roi_check['std2'],
+            'status': 'DATA_ERROR',
+        }
+        output['break_detection'] = {
+            'is_break': False,
+            'data_error': True,
+            'error_type': roi_check['error_type'],
+            'error_reason': roi_check['error_reason'],
+        }
+        return output
 
-                        os.remove(files[0])
+    shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
+    delta_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
+
+    # Check for artifacts (3σ jump)
+    artifact = detect_artifact(pair_key, delta_mi, monitor)
+    if artifact:
+        output['artifact_warnings'].append(f"{pair_key}: {artifact['message']}")
+        print(f"  ⚠ Possible artifact in {pair_key}: {artifact['message']}")
+
+    # Formal Coupling Break detection
+    break_check = detect_coupling_break(pair_key, delta_mi, monitor)
+    output['break_detection'] = break_check
+
+    if break_check['is_break']:
+        z_mad = break_check.get('z_mad', 0)
+        print(f"  ⚠ COUPLING BREAK detected in {pair_key}:")
+        print(f"     {break_check['criterion']}")
+        print(f"     Current: {delta_mi:.4f}, Deviation: {z_mad:.1f} MAD below median")
+
+        # Test C: Robustness check on detected breaks
+        if validate_breaks:
+            print(f"  → Running robustness check (2x2 binning)...")
+            robust = compute_robustness_check(channels[wl1], channels[wl2], delta_mi)
+            output['robustness_check'] = robust
+            if robust.get('is_robust'):
+                print(f"     ✓ Break is ROBUST under binning (Δ={robust['change_pct']:.1f}%)")
             else:
-                print(f"    No {wl} Å images found in last {max_age_minutes} min")
-
-        if not channels:
-            return None, None, None
-
-        # Check time synchronization between channels
-        time_spread_sec = 0
-        if len(timestamps) >= 2:
-            ts_list = list(timestamps.values())
-            time_spread_sec = (max(ts_list) - min(ts_list)).total_seconds()
-            if time_spread_sec > 60:
-                warnings.append(f"ASYNC: Channels spread over {time_spread_sec:.0f}s (>60s)")
-                print(f"    ⚠ Time spread: {time_spread_sec:.0f}s between channels")
-            elif time_spread_sec > 30:
-                print(f"    Time spread: {time_spread_sec:.0f}s (acceptable)")
-
-        quality_info = {
-            'timestamps': {wl: ts.isoformat() for wl, ts in timestamps.items()},
-            'time_spread_sec': time_spread_sec,
-            'quality_flags': quality_flags,
-            'exposure_times': exposure_times,
-            'warnings': warnings,
-            'is_good_quality': len(warnings) == 0,
-        }
-
-        return channels, actual_timestamp, quality_info
-
-    except Exception as e:
-        print(f"    VSO load error: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None, None
-
-
-def load_aia_direct(timestamp: str, wavelengths: list[int]) -> dict | None:
-    """Load AIA data for a specific timestamp (legacy, fallback)."""
-    try:
-        from sunpy.net import Fido, attrs as a
-        import astropy.units as u
-        from sunpy.map import Map
-        import tempfile
-        import os
-
-        dt = datetime.fromisoformat(timestamp)
-        start = dt - timedelta(minutes=3)
-        end = dt + timedelta(minutes=3)
-
-        channels = {}
-        for wl in wavelengths:
-            print(f"    Fetching {wl} Å...")
-            result = Fido.search(
-                a.Time(start, end),
-                a.Instrument('AIA'),
-                a.Wavelength(wl * u.Angstrom)
-            )
-
-            if len(result) > 0 and len(result[0]) > 0:
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    files = Fido.fetch(result[0, 0], path=tmpdir, progress=False)
-                    if files:
-                        smap = Map(files[0])
-                        channels[wl] = smap.data
-                        os.remove(files[0])
-
-        return channels if channels else None
-
-    except Exception as e:
-        print(f"    VSO load error: {e}")
-        return None
-
-
-# =============================================================================
-# SYNOPTIC DATA LOADER (1k resolution, direct access, no queue)
-# =============================================================================
-
-SYNOPTIC_BASE_URL = "https://jsoc1.stanford.edu/data/aia/synoptic"
-
-def load_aia_synoptic(wavelengths: list[int] = None) -> tuple[dict, str, dict] | tuple[None, None, None]:
-    """
-    Load most recent AIA synoptic data (1024x1024 resolution).
-
-    The synoptic archive is directly accessible without JSOC export queue.
-    Updated every 2 minutes. Stable and reliable for real-time monitoring.
-
-    Args:
-        wavelengths: List of wavelengths to load (default: [193, 211, 304])
-
-    Returns:
-        (channels_dict, timestamp_str, quality_info) or (None, None, None)
-    """
-    from urllib.request import urlopen, Request
-    from urllib.error import URLError
-    import tempfile
-    import os
-
-    if wavelengths is None:
-        wavelengths = [193, 211, 304]
-
-    print("  Loading AIA synoptic data (1k resolution)...")
-
-    try:
-        # Check mostrecent timestamp
-        times_url = f"{SYNOPTIC_BASE_URL}/mostrecent/image_times"
-        req = Request(times_url, headers={'User-Agent': 'SolarSeed/1.0'})
-        with urlopen(req, timeout=10) as response:
-            times_content = response.read().decode()
-
-        # Parse timestamp: "Time     20260111_114600"
-        timestamp_str = None
-        for line in times_content.split('\n'):
-            if line.startswith('Time'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    timestamp_str = parts[1]  # "20260111_114600"
-                    break
-
-        if not timestamp_str:
-            print("    Could not parse synoptic timestamp")
-            return None, None, None
-
-        # Convert to ISO format
-        iso_timestamp = f"{timestamp_str[:4]}-{timestamp_str[4:6]}-{timestamp_str[6:8]}T{timestamp_str[9:11]}:{timestamp_str[11:13]}:{timestamp_str[13:15]}Z"
-        print(f"    Synoptic timestamp: {iso_timestamp}")
-
-        # Load FITS files
-        try:
-            from astropy.io import fits
-            import numpy as np
-        except ImportError:
-            print("    Error: astropy required for FITS loading")
-            return None, None, None
-
-        channels = {}
-        timestamps = {}
-
-        for wl in wavelengths:
-            fits_url = f"{SYNOPTIC_BASE_URL}/mostrecent/AIAsynoptic{wl:04d}.fits"
-            print(f"    Fetching {wl} Å from synoptic...")
-
-            try:
-                req = Request(fits_url, headers={'User-Agent': 'SolarSeed/1.0'})
-                with urlopen(req, timeout=30) as response:
-                    fits_data = response.read()
-
-                # Save to temp file and load with astropy
-                with tempfile.NamedTemporaryFile(suffix='.fits', delete=False) as tmp:
-                    tmp.write(fits_data)
-                    tmp_path = tmp.name
-
-                with fits.open(tmp_path) as hdul:
-                    # Synoptic FITS uses compressed images in HDU[1]
-                    data = None
-                    header = None
-                    if len(hdul) > 1 and hdul[1].data is not None:
-                        data = hdul[1].data
-                        header = hdul[1].header
-                    elif hdul[0].data is not None:
-                        data = hdul[0].data
-                        header = hdul[0].header
-
-                    if data is not None:
-                        channels[wl] = data.astype(np.float64)
-                        # Get timestamp from header if available
-                        obs_time = header.get('T_OBS', header.get('DATE-OBS', iso_timestamp))
-                        timestamps[wl] = obs_time
-                        print(f"      ✓ {wl} Å: {data.shape} loaded")
-                    else:
-                        print(f"      ✗ {wl} Å: No data in FITS")
-
-                os.remove(tmp_path)
-
-            except URLError as e:
-                print(f"      ✗ {wl} Å: Network error - {e}")
-            except Exception as e:
-                print(f"      ✗ {wl} Å: Load error - {e}")
-
-        if not channels:
-            print("    No synoptic data loaded")
-            return None, None, None
-
-        # Quality info
-        quality_info = {
-            'source': 'synoptic',
-            'resolution': '1024x1024',
-            'is_good_quality': len(channels) == len(wavelengths),
-            'time_spread_sec': 0,  # All same timestamp in synoptic
-            'timestamps': timestamps,
-            'warnings': [],
-        }
-
-        if len(channels) < len(wavelengths):
-            missing = [wl for wl in wavelengths if wl not in channels]
-            quality_info['warnings'].append(f"Missing wavelengths: {missing}")
-            quality_info['is_good_quality'] = False
-
-        return channels, iso_timestamp, quality_info
-
-    except Exception as e:
-        print(f"    Synoptic load error: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None, None
-
-
-def detect_artifact(pair: str, current_mi: float, monitor: 'CouplingMonitor', threshold_sigma: float = 3.0) -> dict | None:
-    """
-    Detect if current measurement might be an artifact (single-frame anomaly).
-
-    An artifact is suspected if:
-    - Current value deviates > threshold_sigma from recent mean
-    - AND we have enough history to establish a baseline
-
-    Returns dict with artifact info or None if no artifact suspected.
-    """
-    pair_history = [h for h in monitor.history if pair in h.get('coupling', {})]
-
-    if len(pair_history) < 3:
-        return None  # Not enough data to detect artifacts
-
-    # Get recent values (last 6 readings, ~1 hour)
-    recent = pair_history[-6:]
-    recent_values = [h['coupling'][pair].get('delta_mi', 0) for h in recent if 'delta_mi' in h['coupling'].get(pair, {})]
-
-    if len(recent_values) < 3:
-        return None
-
-    mean_val = sum(recent_values) / len(recent_values)
-    std_val = (sum((v - mean_val)**2 for v in recent_values) / len(recent_values)) ** 0.5
-
-    if std_val < 0.001:  # Avoid division by zero
-        return None
-
-    deviation_sigma = abs(current_mi - mean_val) / std_val
-
-    if deviation_sigma > threshold_sigma:
-        return {
-            'suspected': True,
-            'deviation_sigma': deviation_sigma,
-            'current': current_mi,
-            'recent_mean': mean_val,
-            'recent_std': std_val,
-            'message': f"Jump of {deviation_sigma:.1f}σ from recent mean ({mean_val:.3f} ± {std_val:.3f})"
-        }
-
-    return None
-
-
-# =============================================================================
-# ARTIFACT VALIDATION TESTS (Reviewer-Proof Diagnostics)
-# =============================================================================
-
-def compute_registration_shift(img1, img2, max_shift: int = 10) -> dict:
-    """
-    Test B: Spatial registration sanity check using FFT cross-correlation.
-
-    Computes the peak (dx, dy) shift between two images.
-    Large shifts may indicate registration issues that cause MI artifacts.
-
-    Args:
-        img1, img2: Image arrays (same shape)
-        max_shift: Maximum shift to search (pixels)
-
-    Returns:
-        dict with dx, dy, peak_value, is_centered
-    """
-    import numpy as np
-
-    try:
-        from scipy import fft
-
-        # Use small central region for fast computation
-        h, w = img1.shape
-        cy, cx = h // 2, w // 2
-        size = 256  # Small crop for speed
-
-        crop1 = img1[cy-size:cy+size, cx-size:cx+size].astype(np.float64)
-        crop2 = img2[cy-size:cy+size, cx-size:cx+size].astype(np.float64)
-
-        # Normalize
-        crop1 = (crop1 - np.mean(crop1)) / (np.std(crop1) + 1e-10)
-        crop2 = (crop2 - np.mean(crop2)) / (np.std(crop2) + 1e-10)
-
-        # FFT-based cross-correlation (much faster than correlate2d)
-        f1 = fft.fft2(crop1)
-        f2 = fft.fft2(crop2)
-        corr = np.real(fft.ifft2(f1 * np.conj(f2)))
-
-        # Shift zero-frequency to center
-        corr = fft.fftshift(corr)
-
-        # Find peak
-        peak_idx = np.unravel_index(np.argmax(corr), corr.shape)
-        center = (corr.shape[0] // 2, corr.shape[1] // 2)
-
-        dy = peak_idx[0] - center[0]
-        dx = peak_idx[1] - center[1]
-        peak_val = corr[peak_idx] / crop1.size  # Normalized
-
-        # Is it well-centered? (peak within max_shift of center)
-        shift_magnitude = np.sqrt(dx**2 + dy**2)
-        is_centered = shift_magnitude <= max_shift
-
-        return {
-            'dx': int(dx),
-            'dy': int(dy),
-            'shift_pixels': float(shift_magnitude),
-            'peak_correlation': float(peak_val),
-            'is_centered': bool(is_centered),
-            'max_allowed': max_shift,
-        }
-
-    except Exception as e:
-        return {
-            'dx': 0,
-            'dy': 0,
-            'shift_pixels': 0,
-            'peak_correlation': 0,
-            'is_centered': True,
-            'error': str(e),
-        }
-
-
-def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonitor',
-                          window_minutes: int = 60, k: float = 2.0) -> dict:
-    """
-    Formal "Coupling Break" detection using rolling median and MAD.
-
-    Definition (reviewer-proof):
-        A Coupling Break occurs when:
-        ΔMI(t) < median(last 60 min) - k × MAD(last 60 min)
-
-    Data Quality Gate (runs FIRST):
-        If current_mi < MIN_MI_THRESHOLD or is NaN/Inf, return DATA_ERROR.
-        Invalid values are excluded from statistics to prevent contamination.
-
-    Args:
-        pair: Channel pair name
-        current_mi: Current ΔMI value
-        monitor: CouplingMonitor instance
-        window_minutes: Rolling window size
-        k: MAD multiplier (default 2.0 = ~95% interval)
-
-    Returns:
-        dict with break detection result and metadata
-    """
-    # === DATA QUALITY GATE (runs before any statistics) ===
-    mi_validation = validate_mi_measurement(current_mi, pair)
-    if not mi_validation['is_valid']:
-        return {
-            'is_break': False,
-            'data_error': True,
-            'error_type': mi_validation['error_type'],
-            'error_reason': mi_validation['error_reason'],
-            'current_mi': current_mi,
-            'reason': f"DATA_ERROR: {mi_validation['error_reason']}",
-        }
-
-    pair_history = [h for h in monitor.history if pair in h.get('coupling', {})]
-
-    # Filter to window AND exclude invalid values from statistics
-    now = datetime.now(timezone.utc)
-    window_start = now - timedelta(minutes=window_minutes)
-
-    window_values = []
-    excluded_count = 0
-    for h in pair_history:
-        try:
-            ts = datetime.fromisoformat(h['timestamp'].replace('Z', '+00:00'))
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            if ts >= window_start:
-                val = h['coupling'][pair].get('delta_mi')
-                if val is not None:
-                    # Validate historical value too (don't let bad data contaminate stats)
-                    val_check = validate_mi_measurement(val, pair)
-                    if val_check['is_valid']:
-                        window_values.append(val)
-                    else:
-                        excluded_count += 1
-        except:
-            continue
-
-    if len(window_values) < 3:
-        return {
-            'is_break': False,
-            'reason': f'Insufficient data ({len(window_values)}/{3} points)',
-            'n_points': len(window_values),
-            'window_minutes': window_minutes,
-        }
-
-    # Compute robust statistics (median and MAD)
-    window_values.sort()
-    n = len(window_values)
-    if n % 2 == 0:
-        median = (window_values[n//2 - 1] + window_values[n//2]) / 2
-    else:
-        median = window_values[n//2]
-
-    # MAD = median(|x_i - median|)
-    deviations = sorted([abs(v - median) for v in window_values])
-    if len(deviations) % 2 == 0:
-        mad = (deviations[len(deviations)//2 - 1] + deviations[len(deviations)//2]) / 2
-    else:
-        mad = deviations[len(deviations)//2]
-
-    # Scale MAD to approximate std (1.4826 for normal distribution)
-    mad_scaled = mad * 1.4826
-
-    # Threshold
-    threshold = median - k * mad_scaled
-
-    # Compute z_mad = (median - current) / MAD (positive = below median)
-    # This is the number of MADs below median
-    if mad_scaled > 0.001:
-        z_mad = (median - current_mi) / mad_scaled
-    else:
-        z_mad = 0
-
-    # Detect break: z_mad >= k means we're k MADs below median
-    is_break = z_mad >= k
-
-    return {
-        'is_break': is_break,
-        'current_mi': current_mi,
-        'median': median,
-        'mad': mad,
-        'mad_scaled': mad_scaled,
-        'threshold': threshold,
-        'k': k,
-        'z_mad': z_mad,  # MADs below median (positive = below)
-        'n_points': n,
-        'window_minutes': window_minutes,
-        'criterion': f'ΔMI < median - {k}×MAD = {threshold:.4f}',
+                change = robust.get('change_pct', 0)
+                print(f"     ⚠ Break is UNRELIABLE (binning Δ={change:.1f}% > 20%)")
+                break_check['is_break'] = False
+                break_check['vetoed'] = 'robustness'
+                output['break_detection'] = break_check
+
+    residual_info = monitor.compute_residual(pair_key, delta_mi)
+    trend_info = monitor.analyze_trend(pair_key)
+
+    output['result'] = {
+        'delta_mi': delta_mi,
+        'mi_original': shuffle_result.mi_original,
+        'residual': residual_info['residual'],
+        'deviation_pct': residual_info['deviation_pct'],
+        'status': residual_info['status'],
+        'artifact_warning': artifact is not None,
+        'is_break': break_check.get('is_break', False),
+        'break_vetoed': break_check.get('vetoed'),
+        'z_mad': break_check.get('z_mad', 0),
+        'registration_shift': reg_check.get('shift_pixels', 0),
+        **trend_info
     }
+    return output
 
 
-def compute_robustness_check(img1, img2, original_mi: float, method: str = 'binning') -> dict:
-    """
-    Test C: Robustness check - verify MI is stable under preprocessing changes.
+def _build_goes_context(xray: dict) -> dict | None:
+    """Build GOES context for phase-gating from X-ray data."""
+    if not xray:
+        return None
 
-    Recomputes ΔMI with:
-    - 2x2 binning (reduces resolution)
-
-    If the drop is stable under binning, it's much harder to dismiss as artifact.
-
-    Args:
-        img1, img2: Original image arrays
-        original_mi: MI computed at full resolution
-        method: 'binning' (default)
-
-    Returns:
-        dict with robustness check results
-    """
-    import numpy as np
-
-    try:
-        from solar_seed.radial_profile import subtract_radial_geometry
-        from solar_seed.control_tests import sector_ring_shuffle_test
-
-        # 2x2 binning
-        def bin2x2(img):
-            h, w = img.shape
-            h_new, w_new = h // 2, w // 2
-            return img[:h_new*2, :w_new*2].reshape(h_new, 2, w_new, 2).mean(axis=(1, 3))
-
-        binned1 = bin2x2(img1)
-        binned2 = bin2x2(img2)
-
-        # Recompute MI on binned data
-        res1, _, _ = subtract_radial_geometry(binned1)
-        res2, _, _ = subtract_radial_geometry(binned2)
-        shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
-        binned_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
-
-        # Compare
-        change_pct = (binned_mi - original_mi) / original_mi * 100 if original_mi else 0
-
-        # Stable if change < 20%
-        is_robust = abs(change_pct) < 20
-
-        return {
-            'original_mi': original_mi,
-            'binned_mi': binned_mi,
-            'change_pct': change_pct,
-            'is_robust': is_robust,
-            'method': '2x2 binning',
-            'interpretation': 'STABLE' if is_robust else 'SENSITIVE to resolution',
-        }
-
-    except Exception as e:
-        return {
-            'original_mi': original_mi,
-            'binned_mi': None,
-            'change_pct': None,
-            'is_robust': None,
-            'error': str(e),
-        }
-
-
-# Data Quality Gate
-# =================
-# Physical minimum thresholds to detect data errors BEFORE break detection.
-# ΔMI = 0.0 or very low values indicate data pipeline failures, not real breaks.
-
-MIN_MI_THRESHOLD = 0.05  # bits - below this is DATA_ERROR (not a real measurement)
-MIN_ROI_STD = 0.5        # DN - minimum std dev in residual ROI (after geometry subtraction)
-
-
-def validate_roi_variance(img1, img2, pair: str = None) -> dict:
-    """
-    Validate that ROI images have sufficient variance for meaningful MI.
-
-    A constant (or near-constant) image will produce artificially low MI,
-    which could be misinterpreted as a coupling break.
-
-    Args:
-        img1, img2: Residual images after geometry subtraction
-        pair: Channel pair name for reporting
-
-    Returns:
-        dict with 'is_valid', 'error_type', 'error_reason', 'std1', 'std2'
-    """
-    import numpy as np
-
-    # Compute standard deviation of each image
-    std1 = np.nanstd(img1)
-    std2 = np.nanstd(img2)
-
-    if not np.isfinite(std1) or not np.isfinite(std2):
-        return {
-            'is_valid': False,
-            'error_type': 'INVALID_IMAGE',
-            'error_reason': f'Non-finite std dev: std1={std1}, std2={std2}',
-            'std1': std1,
-            'std2': std2,
-        }
-
-    if std1 < MIN_ROI_STD or std2 < MIN_ROI_STD:
-        low_ch = []
-        if std1 < MIN_ROI_STD:
-            low_ch.append(f'ch1={std1:.2f}')
-        if std2 < MIN_ROI_STD:
-            low_ch.append(f'ch2={std2:.2f}')
-        return {
-            'is_valid': False,
-            'error_type': 'CONSTANT_ROI',
-            'error_reason': f'Near-constant image ({", ".join(low_ch)} DN std < {MIN_ROI_STD})',
-            'std1': std1,
-            'std2': std2,
-        }
-
-    return {
-        'is_valid': True,
-        'error_type': None,
-        'error_reason': None,
-        'std1': std1,
-        'std2': std2,
-    }
-
-
-def validate_mi_measurement(delta_mi: float, pair: str = None) -> dict:
-    """
-    Validate MI measurement before it enters break detection.
-
-    This gate runs BEFORE MAD/baseline calculation to prevent
-    data errors from contaminating statistics.
-
-    Returns:
-        dict with 'is_valid', 'error_type', 'error_reason'
-    """
-    import numpy as np
-
-    # Check for NaN/Inf
-    if not np.isfinite(delta_mi):
-        return {
-            'is_valid': False,
-            'error_type': 'INVALID_VALUE',
-            'error_reason': f'Non-finite value: {delta_mi}',
-        }
-
-    # Check for suspiciously low MI (indicates data pipeline failure)
-    if delta_mi < MIN_MI_THRESHOLD:
-        return {
-            'is_valid': False,
-            'error_type': 'BELOW_THRESHOLD',
-            'error_reason': f'ΔMI={delta_mi:.4f} < {MIN_MI_THRESHOLD} (likely data error)',
-        }
-
-    return {'is_valid': True, 'error_type': None, 'error_reason': None}
-
-
-# Anomaly Status Classification
-# =============================
-# Four-level model separating actionable from diagnostic:
-#   DATA_ERROR      - Invalid data: ΔMI < threshold or NaN (skip entirely)
-#   VALIDATED_BREAK - Actionable: z_mad >= k AND all validation tests PASS
-#   ANOMALY_VETOED  - Diagnostic only: z_mad >= k BUT some validation test FAIL
-#   NORMAL          - No anomaly: z_mad < k
-
-class AnomalyStatus:
-    """Anomaly status constants."""
-    DATA_ERROR = 'DATA_ERROR'            # Invalid data - do not process
-    VALIDATED_BREAK = 'VALIDATED_BREAK'  # Actionable - all tests pass
-    ANOMALY_VETOED = 'ANOMALY_VETOED'    # Diagnostic only - some test failed
-    NORMAL = 'NORMAL'                     # No anomaly detected
-
-
-# Break Type Classification (Phase-Gating)
-# =========================================
-# Not all validated breaks are precursors. Phase-gating prevents
-# false alerts during flare decay / relaxation phases.
-#
-#   PRECURSOR  - Alert-worthy: rising activity OR accelerating decoupling
-#   POSTCURSOR - Late break during decay (no alert)
-#   AMBIGUOUS  - Cannot determine phase (no alert, needs context)
-
-class BreakType:
-    """Break type constants for phase-gating."""
-    PRECURSOR = 'PRECURSOR'      # Pre-flare: rising activity, stress buildup
-    POSTCURSOR = 'POSTCURSOR'    # Post-flare: decay phase, relaxation
-    AMBIGUOUS = 'AMBIGUOUS'      # Cannot determine: insufficient context
-
-
-def classify_break_type(trend_info: dict = None, goes_context: dict = None) -> dict:
-    """
-    Classify whether a validated break is a precursor or postcursor.
-
-    Phase-Gating Rules:
-    - PRECURSOR if: GOES rising OR (|trend| > 3%/h AND acc < 0)
-    - POSTCURSOR if: GOES falling AND acc > 0 (relaxation)
-    - AMBIGUOUS otherwise
-
-    Args:
-        trend_info: Trend data with slope_pct_per_hour and acceleration
-        goes_context: GOES data with flux, derivative, and phase
-
-    Returns:
-        dict with break_type, reason, and is_alertable
-    """
-    reasons = []
-
-    # Extract values
-    slope = abs(trend_info.get('slope_pct_per_hour', 0)) if trend_info else 0
-    acc = trend_info.get('acceleration', 0) if trend_info else 0
-
+    flux = xray.get('flux', 0)
+    flare_class = xray.get('flare_class', 'A0')
     goes_rising = False
-    goes_phase = 'unknown'
-    if goes_context:
-        goes_rising = goes_context.get('rising', False)
-        goes_phase = goes_context.get('phase', 'unknown')
 
-    # Rule 1: GOES rising → PRECURSOR
-    if goes_rising:
-        return {
-            'break_type': BreakType.PRECURSOR,
-            'reason': 'GOES activity rising',
-            'is_alertable': True,
-        }
-
-    # Rule 2: Accelerating decoupling (steep negative trend, negative acc) → PRECURSOR
-    if slope > 3.0 and acc < -1.0:
-        return {
-            'break_type': BreakType.PRECURSOR,
-            'reason': f'Accelerating decoupling ({slope:.1f}%/h, acc={acc:.1f})',
-            'is_alertable': True,
-        }
-
-    # Rule 3: GOES falling/decay AND positive acceleration (relaxation) → POSTCURSOR
-    if goes_phase in ['decay', 'post-flare', 'falling'] or (not goes_rising and acc > 1.0):
-        if acc > 0:
-            return {
-                'break_type': BreakType.POSTCURSOR,
-                'reason': f'Decay phase relaxation (acc={acc:+.1f}%/h²)',
-                'is_alertable': False,
-            }
-
-    # Rule 4: Positive acceleration without rising GOES → likely POSTCURSOR
-    if acc > 2.0 and not goes_rising:
-        return {
-            'break_type': BreakType.POSTCURSOR,
-            'reason': f'Relaxation signature (acc={acc:+.1f}%/h²)',
-            'is_alertable': False,
-        }
-
-    # Cannot determine with confidence
-    return {
-        'break_type': BreakType.AMBIGUOUS,
-        'reason': 'Insufficient phase context',
-        'is_alertable': False,  # Conservative: don't alert if unsure
-    }
-
-
-def classify_anomaly_status(break_detection: dict, robustness_check: dict = None,
-                            registration_check: dict = None, time_spread_sec: float = None,
-                            trend_info: dict = None, goes_context: dict = None) -> dict:
-    """
-    Classify anomaly status into Actionable vs Diagnostic with Phase-Gating.
-
-    Status levels:
-        VALIDATED_BREAK (Actionable): z_mad >= k AND all tests PASS AND is PRECURSOR
-        ANOMALY_VETOED (Diagnostic only): z_mad >= k BUT some test FAIL OR is POSTCURSOR
-        NORMAL: z_mad < k
-
-    Phase-Gating (critical for avoiding false alerts during decay):
-        - PRECURSOR breaks → Actionable (issue alert)
-        - POSTCURSOR breaks → Diagnostic only (no alert)
-        - AMBIGUOUS breaks → Diagnostic only (conservative)
-
-    Args:
-        break_detection: Result from detect_coupling_break()
-        robustness_check: Result from compute_robustness_check() (optional)
-        registration_check: Result from compute_registration_shift() (optional)
-        time_spread_sec: Time spread between channels in seconds (optional)
-        trend_info: Trend data for phase-gating (slope, acceleration)
-        goes_context: GOES context for phase-gating (rising, phase)
-
-    Returns:
-        dict with status, is_actionable, break_type, veto_reasons, and diagnostic info
-    """
-    # === DATA_ERROR: Invalid measurement (skip entirely) ===
-    if break_detection.get('data_error'):
-        return {
-            'status': AnomalyStatus.DATA_ERROR,
-            'is_actionable': False,
-            'data_error': True,
-            'error_type': break_detection.get('error_type'),
-            'error_reason': break_detection.get('error_reason'),
-            'z_mad': 0,
-            'veto_reasons': [f"DATA_ERROR: {break_detection.get('error_reason', 'unknown')}"],
-            'passed_tests': [],
-            'failed_tests': ['data_quality'],
-        }
-
-    # No break detected = NORMAL
-    if not break_detection.get('is_break') and not break_detection.get('vetoed'):
-        z_mad = break_detection.get('z_mad', 0)
-        if z_mad < break_detection.get('k', 2.0):
-            return {
-                'status': AnomalyStatus.NORMAL,
-                'is_actionable': False,
-                'z_mad': z_mad,
-                'veto_reasons': [],
-                'passed_tests': [],
-                'failed_tests': [],
-            }
-
-    # Break candidate detected - check validation tests
-    veto_reasons = []
-    passed_tests = []
-    failed_tests = []
-    z_mad = break_detection.get('z_mad', 0)
-
-    # Test A: Time alignment (<60s)
-    if time_spread_sec is not None:
-        if time_spread_sec <= 60:
-            passed_tests.append(f'time_sync ({time_spread_sec:.0f}s)')
-        else:
-            failed_tests.append(f'time_sync ({time_spread_sec:.0f}s > 60s)')
-            veto_reasons.append(f'time sync failed ({time_spread_sec:.0f}s)')
-
-    # Test B: Registration shift (<10px)
-    if registration_check:
-        shift = registration_check.get('shift_pixels', 0)
-        if registration_check.get('is_centered', True) and shift <= 10:
-            passed_tests.append(f'registration ({shift:.1f}px)')
-        else:
-            failed_tests.append(f'registration ({shift:.1f}px > 10px)')
-            veto_reasons.append(f'registration failed ({shift:.1f}px)')
-
-    # Test C: Robustness (<20% binning change)
-    if robustness_check:
-        if robustness_check.get('is_robust') is True:
-            change = robustness_check.get('change_pct', 0)
-            passed_tests.append(f'robustness ({change:.1f}%)')
-        elif robustness_check.get('is_robust') is False:
-            change = robustness_check.get('change_pct', 0)
-            failed_tests.append(f'robustness ({change:.1f}% > 20%)')
-            veto_reasons.append(f'robustness failed ({change:.1f}%)')
-
-    # Already vetoed by earlier logic
-    if break_detection.get('vetoed'):
-        if break_detection['vetoed'] not in [r.split()[0] for r in veto_reasons]:
-            veto_reasons.append(break_detection['vetoed'])
-
-    # Phase-Gating: classify break type (PRECURSOR vs POSTCURSOR)
-    break_type_info = classify_break_type(trend_info, goes_context)
-    break_type = break_type_info['break_type']
-    phase_reason = break_type_info['reason']
-
-    # Determine final status with phase-gating
-    if veto_reasons:
-        # Validation failed → diagnostic only
-        status = AnomalyStatus.ANOMALY_VETOED
-        is_actionable = False
-    elif break_type == BreakType.PRECURSOR:
-        # Validated + PRECURSOR → actionable alert
-        status = AnomalyStatus.VALIDATED_BREAK
-        is_actionable = True
+    if flare_class.startswith(('A', 'B')):
+        goes_phase = 'quiet_or_decay'
+    elif flare_class.startswith('C'):
+        goes_phase = 'active'
     else:
-        # Validated but POSTCURSOR/AMBIGUOUS → diagnostic only (phase-gated)
-        status = AnomalyStatus.VALIDATED_BREAK  # Still validated, but...
-        is_actionable = False  # ...not actionable due to phase
-        veto_reasons.append(f'phase-gated: {break_type} ({phase_reason})')
+        goes_phase = 'elevated'
 
     return {
-        'status': status,
-        'is_actionable': is_actionable,
-        'break_type': break_type,
-        'phase_reason': phase_reason,
-        'z_mad': z_mad,
-        'veto_reasons': veto_reasons,
-        'passed_tests': passed_tests,
-        'failed_tests': failed_tests,
+        'flux': flux,
+        'flare_class': flare_class,
+        'rising': goes_rising,
+        'phase': goes_phase,
     }
 
 
@@ -1723,17 +633,8 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
     - Primary: AIA synoptic data (1024x1024, direct access, no queue)
     - Fallback: Full-res via VSO (4096x4096, may be rate-limited)
 
-    Includes reviewer-proof validation:
-    - Test A: Time alignment (<60s between channels)
-    - Test B: Registration shift (cross-correlation)
-    - Test C: Robustness check (2x2 binning) - only on breaks
-    - Formal Coupling Break detection (median - k×MAD)
-    - Phase-Gating: PRECURSOR vs POSTCURSOR classification
-
-    Args:
-        validate_breaks: Whether to run validation tests on breaks
-        xray: GOES X-ray data for phase-gating (optional)
-        use_synoptic: Try synoptic data first (default: True)
+    Includes validation: time alignment, registration shift, robustness check,
+    coupling break detection, and phase-gating.
     """
     print("  Running coupling analysis...")
 
@@ -1741,43 +642,12 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
         from solar_seed.radial_profile import subtract_radial_geometry
         from solar_seed.control_tests import sector_ring_shuffle_test
 
-        channels = None
-        timestamp = None
-        quality_info = None
-        data_source = None
-
-        # Primary: Try synoptic data (fast, reliable, no queue)
-        if use_synoptic:
-            print("  Trying AIA synoptic data (1k, direct access)...")
-            channels, timestamp, quality_info = load_aia_synoptic([193, 211, 304])
-            if channels and len(channels) >= 2:
-                data_source = 'synoptic'
-                print(f"  ✓ Using synoptic data from: {timestamp}")
-
-        # Fallback 1: Full-res via VSO
-        if not channels or len(channels) < 2:
-            print("  Synoptic unavailable, trying full-res via VSO...")
-            channels, timestamp, quality_info = load_aia_latest([193, 211, 304], max_age_minutes=30)
-            if channels and len(channels) >= 2:
-                data_source = 'full-res'
-
-        # Fallback 2: Direct load (legacy)
-        if not channels or len(channels) < 2:
-            print("  VSO unavailable, trying direct fallback...")
-            fallback_time = datetime.now(timezone.utc) - timedelta(minutes=10)
-            timestamp = fallback_time.strftime("%Y-%m-%dT%H:%M:00")
-            channels = load_aia_direct(timestamp, [193, 211, 304])
-            quality_info = None
-            if channels and len(channels) >= 2:
-                data_source = 'direct-fallback'
-
-        if not channels or len(channels) < 2:
-            print("  ✗ Could not load AIA data from any source")
+        # Load data
+        channels, timestamp, quality_info, data_source = _load_channels([193, 211, 304], use_synoptic)
+        if not channels:
             return None
 
-        print(f"  Data source: {data_source}")
-
-        # Report quality status
+        # Report quality
         quality_warnings = []
         if quality_info:
             if quality_info['is_good_quality']:
@@ -1788,6 +658,7 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
                     print(f"    - {w}")
                 quality_warnings = quality_info['warnings']
 
+        # Analyze each pair
         results = {}
         monitor = get_coupling_monitor()
         artifact_warnings = []
@@ -1795,101 +666,26 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
         break_detections = {}
         robustness_checks = {}
 
-        # Key pairs for monitoring
         pairs = [(193, 211), (193, 304), (171, 193)]
-
         for wl1, wl2 in pairs:
             if wl1 in channels and wl2 in channels:
-                # Test B: Registration shift BEFORE geometry subtraction
-                reg_check = compute_registration_shift(channels[wl1], channels[wl2])
-                pair_key = f"{wl1}-{wl2}"
-                registration_checks[pair_key] = reg_check
-
-                if not reg_check['is_centered']:
-                    warn_msg = f"{pair_key}: Registration shift {reg_check['shift_pixels']:.1f}px (dx={reg_check['dx']}, dy={reg_check['dy']})"
-                    quality_warnings.append(warn_msg)
-                    print(f"  ⚠ {warn_msg}")
-
-                res1, _, _ = subtract_radial_geometry(channels[wl1])
-                res2, _, _ = subtract_radial_geometry(channels[wl2])
-
-                # Validate ROI variance before MI calculation
-                roi_check = validate_roi_variance(res1, res2, pair_key)
-                if not roi_check['is_valid']:
-                    print(f"  ⚠ DATA_ERROR in {pair_key}: {roi_check['error_reason']}")
-                    results[pair_key] = {
-                        'delta_mi': 0.0,
-                        'data_error': True,
-                        'error_type': roi_check['error_type'],
-                        'error_reason': roi_check['error_reason'],
-                        'std1': roi_check['std1'],
-                        'std2': roi_check['std2'],
-                        'status': 'DATA_ERROR',
-                    }
-                    break_detections[pair_key] = {
-                        'is_break': False,
-                        'data_error': True,
-                        'error_type': roi_check['error_type'],
-                        'error_reason': roi_check['error_reason'],
-                    }
-                    continue  # Skip this pair - no MI calculation
-
-                shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
-                delta_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
-
-                # Check for artifacts (3σ jump)
-                artifact = detect_artifact(pair_key, delta_mi, monitor)
-                if artifact:
-                    artifact_warnings.append(f"{pair_key}: {artifact['message']}")
-                    print(f"  ⚠ Possible artifact in {pair_key}: {artifact['message']}")
-
-                # Formal Coupling Break detection
-                break_check = detect_coupling_break(pair_key, delta_mi, monitor)
-                break_detections[pair_key] = break_check
-
-                if break_check['is_break']:
-                    z_mad = break_check.get('z_mad', 0)
-                    print(f"  ⚠ COUPLING BREAK detected in {pair_key}:")
-                    print(f"     {break_check['criterion']}")
-                    print(f"     Current: {delta_mi:.4f}, Deviation: {z_mad:.1f} MAD below median")
-
-                    # Test C: Robustness check on detected breaks
-                    if validate_breaks:
-                        print(f"  → Running robustness check (2x2 binning)...")
-                        robust = compute_robustness_check(channels[wl1], channels[wl2], delta_mi)
-                        robustness_checks[pair_key] = robust
-                        if robust.get('is_robust'):
-                            print(f"     ✓ Break is ROBUST under binning (Δ={robust['change_pct']:.1f}%)")
-                        else:
-                            change = robust.get('change_pct', 0)
-                            print(f"     ⚠ Break is UNRELIABLE (binning Δ={change:.1f}% > 20%)")
-                            # Veto the break if not robust
-                            break_check['is_break'] = False
-                            break_check['vetoed'] = 'robustness'
-                            break_detections[pair_key] = break_check
-
-                residual_info = monitor.compute_residual(pair_key, delta_mi)
-                trend_info = monitor.analyze_trend(pair_key)
-
-                results[pair_key] = {
-                    'delta_mi': delta_mi,
-                    'mi_original': shuffle_result.mi_original,
-                    'residual': residual_info['residual'],
-                    'deviation_pct': residual_info['deviation_pct'],
-                    'status': residual_info['status'],
-                    'artifact_warning': artifact is not None,
-                    'is_break': break_check.get('is_break', False),
-                    'break_vetoed': break_check.get('vetoed'),  # 'robustness' if vetoed
-                    'z_mad': break_check.get('z_mad', 0),  # MADs below median
-                    'registration_shift': reg_check.get('shift_pixels', 0),
-                    # Pass through all trend info
-                    **trend_info
-                }
+                pair_output = _analyze_pair(
+                    wl1, wl2, channels, monitor, validate_breaks,
+                    subtract_radial_geometry, sector_ring_shuffle_test
+                )
+                pair_key = pair_output['pair_key']
+                results[pair_key] = pair_output['result']
+                break_detections[pair_key] = pair_output['break_detection']
+                registration_checks[pair_key] = pair_output['registration_check']
+                if pair_output['robustness_check']:
+                    robustness_checks[pair_key] = pair_output['robustness_check']
+                quality_warnings.extend(pair_output['quality_warnings'])
+                artifact_warnings.extend(pair_output['artifact_warnings'])
 
         # Save to history
         monitor.add_reading(timestamp, results)
 
-        # Check for transfer state (pass robustness checks + time_spread for degraded flag)
+        # Transfer state detection
         time_spread = quality_info['time_spread_sec'] if quality_info else None
         transfer = monitor.detect_transfer_state(
             robustness_checks=robustness_checks,
@@ -1898,10 +694,9 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
         if transfer:
             results['_transfer_state'] = transfer
 
-        # Add quality metadata to results
-        time_spread = quality_info['time_spread_sec'] if quality_info else None
+        # Quality metadata
         results['_quality'] = {
-            'data_source': data_source,  # 'synoptic', 'full-res', or 'direct-fallback'
+            'data_source': data_source,
             'resolution': '1024x1024' if data_source == 'synoptic' else '4096x4096',
             'is_good': quality_info['is_good_quality'] if quality_info else None,
             'time_spread_sec': time_spread,
@@ -1910,54 +705,21 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
             'n_warnings': len(quality_warnings) + len(artifact_warnings),
         }
 
-        # Build GOES context for phase-gating
-        goes_context = None
-        if xray:
-            # Determine if GOES is rising or falling (simple heuristic)
-            flux = xray.get('flux', 0)
-            flare_class = xray.get('flare_class', 'A0')
-
-            # Check recent history for trend (from database if available)
-            goes_rising = False
-            goes_phase = 'unknown'
-
-            # Simple heuristic: B-class or below during quiet = likely decay/quiet
-            # C-class+ with no recent higher = possibly rising
-            if flare_class.startswith(('A', 'B')):
-                goes_phase = 'quiet_or_decay'
-            elif flare_class.startswith('C'):
-                # Could be rising or decaying - check acceleration from coupling
-                goes_phase = 'active'
-            else:
-                goes_phase = 'elevated'
-
-            goes_context = {
-                'flux': flux,
-                'flare_class': flare_class,
-                'rising': goes_rising,  # Will be refined by trend analysis
-                'phase': goes_phase,
-            }
-
-        # Compute anomaly status for each pair with breaks
+        # Phase-gating and anomaly classification
+        goes_context = _build_goes_context(xray)
         anomaly_statuses = {}
         for pair_key, bd in break_detections.items():
             if bd.get('is_break') or bd.get('vetoed'):
-                reg_check = registration_checks.get(pair_key)
-                rob_check = robustness_checks.get(pair_key)
-
-                # Get trend info for this pair (stored in results)
                 trend_info = {
                     'slope_pct_per_hour': results.get(pair_key, {}).get('slope_pct_per_hour', 0),
                     'acceleration': results.get(pair_key, {}).get('acceleration', 0),
                     'trend': results.get(pair_key, {}).get('trend', 'stable'),
                 }
-
                 anomaly_statuses[pair_key] = classify_anomaly_status(
-                    bd, rob_check, reg_check, time_spread,
-                    trend_info=trend_info, goes_context=goes_context
+                    bd, robustness_checks.get(pair_key), registration_checks.get(pair_key),
+                    time_spread, trend_info=trend_info, goes_context=goes_context
                 )
 
-        # Add validation metadata
         results['_validation'] = {
             'registration_checks': registration_checks,
             'break_detections': break_detections,
@@ -1974,304 +736,57 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
         return None
 
 
-def generate_event_narrative(xray: dict, coupling: dict, monitor: 'CouplingMonitor' = None) -> str | None:
-    """
-    Generate a compact Event Narrative Box (A&A Science Highlight style).
-
-    Shows key events and coupling evolution during active phases.
-    Returns None if no significant activity to report.
-    """
-    if not xray or not coupling:
-        return None
-
-    # Determine current phase based on GOES flux
-    flux = xray.get('flux', 0)
-    flare_class = xray.get('flare_class', 'A0')
-
-    # Get coupling data
-    mi_211 = coupling.get('193-211', {})
-    mi_304 = coupling.get('193-304', {})
-
-    delta_211 = mi_211.get('delta_mi', 0)
-    delta_304 = mi_304.get('delta_mi', 0)
-
-    # Get residual r = (ΔMI - baseline) / std (significance vs long-term reference)
-    # Note: This is different from z_mad which is for break detection vs recent window
-    r_211 = mi_211.get('residual', 0)
-    r_304 = mi_304.get('residual', 0)
-
-    # Get trends
-    trend_211 = mi_211.get('trend', 'STABLE')
-    trend_304 = mi_304.get('trend', 'STABLE')
-    slope_211 = mi_211.get('slope_pct_per_hour', 0)
-    slope_304 = mi_304.get('slope_pct_per_hour', 0)
-
-    # Determine phase
-    if flux >= 1e-5:
-        phase = "M/X-CLASS ACTIVE"
-        phase_icon = "⚡"
-    elif flux >= 1e-6:
-        phase = "C-CLASS ACTIVE"
-        phase_icon = "🔥"
-    elif flux >= 5e-7:
-        if slope_211 < -2 or slope_304 > 2:
-            phase = "DECAY PHASE"
-            phase_icon = "📉"
-        else:
-            phase = "ELEVATED"
-            phase_icon = "📈"
-    else:
-        # Check if we're in post-flare decay (high 193-304 significance)
-        if r_304 > 3 and slope_304 > 0:
-            phase = "POST-FLARE DECAY"
-            phase_icon = "🌅"
-        elif abs(r_211) > 2 or abs(r_304) > 2:
-            phase = "ANOMALOUS"
-            phase_icon = "⚠"
-        else:
-            return None  # Nothing interesting to report
-
-    # Build narrative
-    lines = []
-    lines.append("")
-    lines.append("  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-    lines.append(f"  ┃  {phase_icon} EVENT NARRATIVE: {phase:<40}┃")
-    lines.append("  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
-    lines.append("")
-
-    # Compact timeline table
-    # r = residual significance vs long-term baseline (not z_mad for break detection)
-    lines.append("  ┌─────────────┬────────────┬────────────┬─────────────┐")
-    lines.append("  │   Channel   │    ΔMI     │   r (σ)    │    Trend    │")
-    lines.append("  ├─────────────┼────────────┼────────────┼─────────────┤")
-
-    # 193-211 row
-    trend_arrow_211 = "↓" if slope_211 < -1 else "↑" if slope_211 > 1 else "→"
-    r_str_211 = f"{r_211:+.1f}σ" if r_211 != 0 else "  —"
-    lines.append(f"  │  193-211 Å  │   {delta_211:.3f}   │  {r_str_211:>6}   │  {trend_arrow_211} {slope_211:+.1f}%/h  │")
-
-    # 193-304 row
-    trend_arrow_304 = "↓" if slope_304 < -1 else "↑" if slope_304 > 1 else "→"
-    r_str_304 = f"{r_304:+.1f}σ" if r_304 != 0 else "  —"
-    lines.append(f"  │  193-304 Å  │   {delta_304:.3f}   │  {r_str_304:>6}   │  {trend_arrow_304} {slope_304:+.1f}%/h  │")
-
-    lines.append("  └─────────────┴────────────┴────────────┴─────────────┘")
-    lines.append("")
-
-    # Narrative interpretation (5-8 lines)
-    lines.append("  Interpretation:")
-
-    # Key finding based on phase
-    if phase == "POST-FLARE DECAY" or phase == "DECAY PHASE":
-        if r_304 > r_211:
-            lines.append(f"  • 193-304 Å shows peak significance (r={r_304:+.1f}σ) during decay phase")
-            lines.append(f"  • Coronal coupling (193-211) weakening ({slope_211:+.1f}%/h)")
-            lines.append(f"  • Enhanced low-atmosphere coherence relative to coronal morphology")
-            lines.append(f"  • Consistent with post-flare footpoint/transition-region dominance")
-        else:
-            lines.append(f"  • Coupling returning to baseline after elevated activity")
-            lines.append(f"  • Both channels showing recovery trends")
-    elif phase == "C-CLASS ACTIVE" or phase == "M/X-CLASS ACTIVE":
-        lines.append(f"  • Active phase: GOES {flare_class} ({flux:.2e} W/m²)")
-        if r_211 < -1:
-            lines.append(f"  • Coronal coupling suppressed (r={r_211:+.1f}σ) — magnetic reorganization")
-        if r_304 > 1:
-            lines.append(f"  • Chromospheric anchor strengthening (r={r_304:+.1f}σ)")
-        lines.append(f"  • Monitor for coupling break as stress indicator")
-    elif phase == "ANOMALOUS":
-        lines.append(f"  • Unusual coupling configuration detected")
-        if abs(r_211) > 2:
-            lines.append(f"  • 193-211 Å: r={r_211:+.1f}σ deviation from baseline")
-        if abs(r_304) > 2:
-            lines.append(f"  • 193-304 Å: r={r_304:+.1f}σ deviation from baseline")
-        lines.append(f"  • Possible precursor signature or instrument artifact")
-
-    # Transfer state note if applicable
-    transfer = coupling.get('_transfer_state')
-    if transfer:
-        state = transfer.get('state', '')
-        if state == 'TRANSFER_STATE':
-            lines.append(f"  • TRANSFER_STATE: Energy redistribution toward lower atmosphere")
-        elif state == 'RECOVERY_STATE':
-            lines.append(f"  • RECOVERY_STATE: Post-flare relaxation in progress")
-
-    lines.append("")
-
-    return "\n".join(lines)
-
-
 def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: dict = None, stereo: dict = None):
-    """Print formatted status report."""
-    now = datetime.now(timezone.utc)
+    """Print formatted status report using StatusFormatter."""
+    fmt = StatusFormatter()
 
-    print(f"\n{'='*70}")
-    print(f"  SOLAR EARLY WARNING SYSTEM - {now.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-    print(f"{'='*70}")
+    # Header
+    for line in fmt.format_header():
+        print(line)
 
-    # X-ray status (contextual indicator)
-    print(f"\n  GOES X-RAY STATUS [Contextual Indicator]")
-    print(f"  {'-'*40}")
-    if xray:
-        severity_icons = ['', '', '', '', '']
-        icon = severity_icons[min(xray['severity'], 4)]
-        print(f"  Flux:        {xray['flux']:.2e} W/m²")
-        print(f"  Flare Class: {icon} {xray['flare_class']}")
-        print(f"  Timestamp:   {xray['timestamp']}")
+    # X-ray status
+    for line in fmt.format_xray_status(xray):
+        print(line)
 
-        if xray['severity'] >= 3:
-            print(f"\n  *** FLARE ALERT: {xray['flare_class']} class flare detected! ***")
-    else:
-        print("  Data unavailable")
+    # Solar wind status
+    for line in fmt.format_solar_wind(solar_wind, assess_geomagnetic_risk):
+        print(line)
 
-    # Solar wind status (contextual indicator - L1 point, may reflect earlier structures)
-    print(f"\n  SOLAR WIND (DSCOVR L1) [Contextual Indicator]")
-    print(f"  {'-'*40}")
-    if solar_wind:
-        partial_data = False
-        if 'plasma' in solar_wind:
-            p = solar_wind['plasma']
-            speed = p.get('speed')
-            density = p.get('density')
-            print(f"  Speed:       {speed:.1f} km/s" if speed else "  Speed:       unavailable")
-            print(f"  Density:     {density:.2f} p/cm³" if density else "  Density:     unavailable")
-            if speed is None or density is None:
-                partial_data = True
-        if 'mag' in solar_wind:
-            m = solar_wind['mag']
-            bz = m.get('bz')
-            bt = m.get('bt')
-            print(f"  Bz:          {bz:.2f} nT" if bz is not None else "  Bz:          unavailable")
-            print(f"  Bt:          {bt:.2f} nT" if bt is not None else "  Bt:          unavailable")
-            if bz is None or bt is None:
-                partial_data = True
-
-        risk, risk_level = assess_geomagnetic_risk(solar_wind)
-        risk_icons = ['', '', '', '']
-        if partial_data:
-            print(f"\n  Geomag Risk: {risk_icons[risk_level]} {risk} (partial data)")
-        else:
-            print(f"\n  Geomag Risk: {risk_icons[risk_level]} {risk}")
-    else:
-        print("  Data unavailable")
-
-    # Coupling analysis with residual tracking
+    # Coupling analysis
     if coupling:
         print(f"\n  ΔMI COUPLING MONITOR (Pre-Flare Detection)")
         print(f"  {'-'*40}")
 
-        # Show quality status first
+        # Quality status
         quality = coupling.get('_quality', {})
-        if quality:
-            n_warn = quality.get('n_warnings', 0)
-            if n_warn == 0:
-                print(f"  ✓ Data quality: GOOD")
-            else:
-                print(f"  ⚠ Data quality: {n_warn} warning(s)")
-                for w in quality.get('warnings', [])[:3]:
-                    print(f"    - {w}")
+        for line in fmt.format_coupling_quality(quality):
+            print(line)
 
-        status_icons = {
-            'NORMAL': '',
-            'ELEVATED': '',
-            'WARNING': '',
-            'ALERT': ''
-        }
-        trend_icons = {
-            'ACCELERATING_DOWN': '',
-            'DECLINING': '',
-            'STABLE': '',
-            'RISING': '',
-            'ACCELERATING_UP': '',
-            'INITIALIZING': '',
-            'NO_DATA': ''
-        }
-        confidence_markers = {
-            'high': '',
-            'medium': '',
-            'low': '',
-            'none': ''
-        }
-
-        any_alert = False
+        # Each channel pair
         for pair, data in coupling.items():
-            if pair.startswith('_'):  # Skip internal fields like _transfer_state
+            if pair.startswith('_'):
                 continue
+            for line in fmt.format_coupling_pair(pair, data):
+                print(line)
 
-            icon = status_icons.get(data.get('status', 'NORMAL'), '')
-            trend = data.get('trend', 'NO_DATA')
-            trend_icon = trend_icons.get(trend, '')
-            conf = data.get('confidence', 'none')
-            conf_marker = confidence_markers.get(conf, '')
-
-            residual = data.get('residual', 0)
-            slope = data.get('slope_pct_per_hour', 0)
-            n_pts = data.get('n_points', 0)
-            window_min = data.get('window_min', 0)
-            method = data.get('method', 'Theil-Sen')
-
-            artifact_mark = " ⚠ARTIFACT?" if data.get('artifact_warning') else ""
-            print(f"  {pair} Å: {data['delta_mi']:.3f} bits  r={residual:+.1f}σ  {icon} {data.get('status', '?')}{artifact_mark}")
-
-            # Show trend with full metadata
-            if trend == 'NO_DATA':
-                reason = data.get('reason', 'No data')
-                print(f"           Trend: {trend_icon} {trend} — {reason}")
-            elif trend == 'COLLECTING':
-                reason = data.get('reason', '')
-                print(f"           Trend: {trend_icon} {trend} — {reason}")
-            else:
-                acc = data.get('acceleration', 0)
-                acc_str = f", acc={acc:+.1f}%/h²" if abs(acc) > 1 else ""
-                # Format window time nicely
-                if window_min >= 60:
-                    window_str = f"{window_min/60:.1f}h"
-                else:
-                    window_str = f"{window_min:.0f}min"
-                print(f"           Trend: {trend_icon} {trend} ({slope:+.1f}%/h{acc_str})")
-                print(f"                  {conf_marker} {conf} confidence | n={n_pts} | {window_str} window | {method}")
-
-            if data.get('status') in ['WARNING', 'ALERT']:
-                any_alert = True
-
-            # Special warning for accelerating decline
-            if trend == 'ACCELERATING_DOWN' and data.get('status') in ['ELEVATED', 'WARNING', 'ALERT']:
-                print(f"           ⚠ Coupling declining and accelerating!")
-
-            # Show break detection status
-            if data.get('is_break'):
-                z_mad = data.get('z_mad', 0)
-                print(f"           *** VALIDATED BREAK ({z_mad:.1f} MAD below median) ***")
-            elif data.get('break_vetoed'):
-                z_mad = data.get('z_mad', 0)
-                print(f"           [VETOED: {data['break_vetoed']}] anomaly observed ({z_mad:.1f} MAD) - diagnostic only")
-
-            # Show registration shift if notable
-            reg_shift = data.get('registration_shift', 0)
-            if reg_shift > 3:
-                print(f"           Registration: {reg_shift:.1f}px shift")
-
-        # Show validation summary for any detected breaks
+        # Classify breaks
         validation = coupling.get('_validation', {})
         breaks = validation.get('break_detections', {})
-        robustness = validation.get('robustness_checks', {})
         anomaly_statuses = validation.get('anomaly_statuses', {})
 
-        # Classify breaks by status WITH phase-gating and data quality
         actionable_breaks = []
         diagnostic_breaks = []
         data_errors = []
+
         for pair, status in anomaly_statuses.items():
-            # DATA_ERROR: skip entirely, don't count as break
             if status.get('status') == AnomalyStatus.DATA_ERROR:
                 data_errors.append(pair)
-            # Phase-gating: only VALIDATED + is_actionable triggers alert
             elif status.get('is_actionable'):
                 actionable_breaks.append(pair)
             elif status.get('status') in [AnomalyStatus.VALIDATED_BREAK, AnomalyStatus.ANOMALY_VETOED]:
-                # Either vetoed OR phase-gated (POSTCURSOR/AMBIGUOUS)
                 diagnostic_breaks.append(pair)
 
-        # Also check for breaks not in anomaly_statuses (legacy)
+        # Legacy break handling
         for pair, bd in breaks.items():
             if pair not in anomaly_statuses:
                 if bd.get('is_break') and not bd.get('vetoed'):
@@ -2279,159 +794,35 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
                 elif bd.get('vetoed'):
                     diagnostic_breaks.append(pair)
 
-        # =================================================================
-        # ALERT ENGINE (strict) - Only actionable, validated breaks
-        # =================================================================
-        if actionable_breaks:
-            print(f"\n  ╔═══════════════════════════════════════════════════════════╗")
-            print(f"  ║  ALERT ENGINE                                             ║")
-            print(f"  ╚═══════════════════════════════════════════════════════════╝")
-            print(f"\n  *** VALIDATED PRECURSOR BREAK ***")
-            print(f"  Reduced coupling during rising/active phase")
-            print(f"  Recommend: Monitor for potential flare activity")
+        # Alert engine
+        for line in fmt.format_alert_engine(actionable_breaks, breaks, anomaly_statuses, AnomalyStatus):
+            print(line)
 
-            for pair in actionable_breaks:
-                bd = breaks.get(pair, {})
-                status = anomaly_statuses.get(pair, {})
-                z_mad = bd.get('z_mad', status.get('z_mad', 0))
-                break_type = status.get('break_type', 'PRECURSOR')
-                phase_reason = status.get('phase_reason', '')
+        # Data errors
+        for line in fmt.format_data_errors(data_errors, anomaly_statuses):
+            print(line)
 
-                print(f"\n  {pair}: ✓ VALIDATED_BREAK ({break_type})")
-                print(f"    Criterion: {bd.get('criterion', '?')}")
-                print(f"    Deviation: {z_mad:.1f} MAD below median")
-                if phase_reason:
-                    print(f"    Phase: {phase_reason}")
-
-                # Show passed tests
-                passed = status.get('passed_tests', [])
-                for test in passed:
-                    print(f"    ✓ {test}")
-
-        elif not diagnostic_breaks:
-            # No breaks at all - quiet engine
-            pass
-
-        # =================================================================
-        # DATA ERRORS (excluded from statistics)
-        # =================================================================
-        if data_errors:
-            print(f"\n  ⚠ DATA QUALITY ISSUES (excluded from analysis):")
-            for pair in data_errors:
-                status = anomaly_statuses.get(pair, {})
-                error_reason = status.get('error_reason', 'Unknown error')
-                print(f"    {pair}: {error_reason}")
-            print(f"    Note: These measurements are not counted in statistics")
-
-        # =================================================================
-        # PHYSICS DIAGNOSTICS (contextual) - Vetoed breaks, state analysis
-        # =================================================================
+        # Diagnostics
         transfer = coupling.get('_transfer_state')
-        has_diagnostics = diagnostic_breaks or transfer
+        for line in fmt.format_diagnostics(diagnostic_breaks, breaks, anomaly_statuses, transfer, BreakType):
+            print(line)
 
-        if has_diagnostics:
-            print(f"\n  ┌───────────────────────────────────────────────────────────┐")
-            print(f"  │  PHYSICS DIAGNOSTICS (contextual, not for triggering)     │")
-            print(f"  └───────────────────────────────────────────────────────────┘")
-
-            # Vetoed anomalies (observed but not trigger-grade)
-            if diagnostic_breaks:
-                print(f"\n  Observed Anomalies (vetoed — interpretable, not actionable):")
-                for pair in diagnostic_breaks:
-                    bd = breaks.get(pair, {})
-                    status = anomaly_statuses.get(pair, {})
-                    z_mad = bd.get('z_mad', status.get('z_mad', 0))
-                    veto_reasons = status.get('veto_reasons', [bd.get('vetoed', 'unknown')])
-                    break_type = status.get('break_type', 'UNKNOWN')
-                    phase_reason = status.get('phase_reason', '')
-
-                    # Show break type prominently
-                    if break_type == BreakType.POSTCURSOR:
-                        print(f"\n  {pair}: VALIDATED BREAK ({break_type})")
-                        print(f"    Classification: Late/Post-Event Break — no alert")
-                        print(f"    Reason: {phase_reason}")
-                    else:
-                        print(f"\n  {pair}: {z_mad:.1f}σ anomaly (VETOED)")
-                        if veto_reasons:
-                            print(f"    Veto: {', '.join(veto_reasons)}")
-
-                    # Show what passed
-                    passed = status.get('passed_tests', [])
-                    if passed:
-                        print(f"    Passed: {', '.join(passed)}")
-
-            # Transfer/Recovery state analysis
-            if transfer:
-                state_icons = {'TRANSFER_STATE': '↓↑', 'RECOVERY_STATE': '↑↓'}
-                icon = state_icons.get(transfer['state'], '⟷')
-                degraded = transfer.get('degraded', False)
-                degraded_reasons = transfer.get('degraded_reasons', [])
-
-                # Determine degradation type for display
-                is_async = any('ASYNC' in r for r in degraded_reasons)
-
-                print(f"\n  State Analysis:")
-                if degraded:
-                    if is_async:
-                        print(f"  {icon} {transfer['state']} (DEGRADED — ASYNC) — diagnostic only")
-                    else:
-                        print(f"  {icon} {transfer['state']} (DEGRADED) — diagnostic only")
-                    print(f"     {transfer['description']}")
-                    print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
-                    print(f"     Note: State interpretable but not trigger-grade due to:")
-                    for reason in degraded_reasons:
-                        print(f"       - {reason}")
-                else:
-                    print(f"  {icon} {transfer['state']} ({transfer['confidence']} confidence)")
-                    print(f"     {transfer['description']}")
-                    print(f"     193-304: {transfer['slope_193_304']:+.1f}%/h  193-211: {transfer['slope_193_211']:+.1f}%/h")
-                    print(f"     Interpretation: {transfer['interpretation']}")
-
-            print(f"\n  ─────────────────────────────────────────────────────────────")
-            print(f"  Note: Diagnostics remain interpretable even when robustness")
-            print(f"        vetoes prevent actionable alerts (\"vetoed ≠ blind\").")
-
-        # Event Narrative Box (A&A Science Highlight style)
-        narrative = generate_event_narrative(xray, coupling)
+        # Event narrative
+        narrative = fmt.generate_event_narrative(xray, coupling)
         if narrative:
             print(narrative)
 
-    # STEREO-A advance warning (3.9 days ahead)
-    if stereo:
-        meta = stereo.get('_stereo_metadata', {})
-        ts = stereo.get('_timestamp', 'unknown')
-        sep = meta.get('separation_deg', 51)
-        days = meta.get('advance_warning_days', 3.9)
+    # STEREO-A section
+    for line in fmt.format_stereo_section(stereo, coupling):
+        print(line)
 
-        print(f"\n  STEREO-A EUVI ({sep:.0f}° ahead → ~{days:.1f} days warning)")
-        print(f"  {'-'*40}")
-        print(f"  Image time: {ts}")
+    # NOAA alerts
+    for line in fmt.format_alerts_section(alerts):
+        print(line)
 
-        for pair, data in stereo.items():
-            if pair.startswith('_'):
-                continue
-            euvi_wl = data.get('euvi_wavelengths', '')
-            print(f"  {pair} Å: {data['delta_mi']:.3f} bits  (EUVI {euvi_wl})")
-
-        # Compare with current SDO if available
-        if coupling:
-            print(f"\n  Comparison (STEREO-A vs SDO/AIA):")
-            for pair in ['193-211', '193-304']:
-                if pair in stereo and pair in coupling:
-                    stereo_mi = stereo[pair]['delta_mi']
-                    sdo_mi = coupling[pair]['delta_mi']
-                    diff_pct = (stereo_mi - sdo_mi) / sdo_mi * 100 if sdo_mi else 0
-                    arrow = "↑" if diff_pct > 10 else "↓" if diff_pct < -10 else "≈"
-                    print(f"    {pair}: STEREO {stereo_mi:.3f} vs SDO {sdo_mi:.3f} ({arrow} {diff_pct:+.0f}%)")
-
-    # Active alerts
-    if alerts:
-        print(f"\n  NOAA ALERTS (last 24h)")
-        print(f"  {'-'*40}")
-        for alert in alerts[:3]:
-            print(f"  [{alert['type']}] {alert['message'][:60]}...")
-
-    print(f"\n{'='*70}\n")
+    # Footer
+    for line in fmt.format_footer():
+        print(line)
 
 
 def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: bool = False, store_db: bool = True):
