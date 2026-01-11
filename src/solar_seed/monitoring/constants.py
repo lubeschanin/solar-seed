@@ -219,8 +219,9 @@ def classify_phase_experimental(
     trend_304 = pairs_data.get('193-304', {}).get('slope_pct_per_hour', 0)
 
     # Maximum absolute z-score across pairs
-    max_z = max(abs(pairs_data.get(p, {}).get('residual', 0))
-                for p in pairs_data if not p.startswith('_'))
+    z_values = [abs(pairs_data.get(p, {}).get('residual', 0))
+                for p in pairs_data if not p.startswith('_')]
+    max_z = max(z_values) if z_values else 0
 
     # Count negative anomalies (potential destabilization)
     neg_anomalies = sum(1 for p, d in pairs_data.items()
