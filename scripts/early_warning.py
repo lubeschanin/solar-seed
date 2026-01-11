@@ -855,6 +855,14 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
             'anomaly_statuses': anomaly_statuses,
         }
 
+        # Copy break flags to pair results for UI display
+        for pair_key, bd in break_detections.items():
+            if pair_key in results:
+                results[pair_key]['is_break'] = bd.get('is_break', False)
+                results[pair_key]['break_vetoed'] = bd.get('vetoed')
+                if 'confirmed_4k' in bd:
+                    results[pair_key]['confirmed_4k'] = bd['confirmed_4k']
+
         return results
 
     except Exception as e:

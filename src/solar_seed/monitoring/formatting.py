@@ -252,9 +252,14 @@ class StatusFormatter:
             sign = "+" if residual > 0 else ""
             anomaly_text = Text(f"{anomaly_level} ({sign}{residual:.1f}σ)", style=anomaly_style)
 
-            # Break indicator overrides
+            # Break indicator overrides with 4K confirmation status
             if data.get('is_break'):
-                anomaly_text = Text("🚨 BREAK", style="bold red")
+                if data.get('confirmed_4k') is True:
+                    anomaly_text = Text("🚨 BREAK [4K✓]", style="bold red")
+                elif data.get('confirmed_4k') is False:
+                    anomaly_text = Text("BREAK [4K✗]", style="yellow")
+                else:
+                    anomaly_text = Text("🚨 BREAK", style="bold red")
             elif data.get('break_vetoed'):
                 anomaly_text = Text("VETOED", style="dim")
 
