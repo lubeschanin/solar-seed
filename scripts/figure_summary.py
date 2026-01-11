@@ -21,6 +21,10 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 import json
 
+# Add src to path for library imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from solar_seed.utils import parse_iso_timestamp
+
 # Check for matplotlib
 try:
     import matplotlib.pyplot as plt
@@ -78,20 +82,6 @@ def load_data_from_db(db_path: str, hours: int = 6) -> dict:
     }
 
 
-def parse_timestamp(ts: str) -> datetime:
-    """Parse timestamp string to datetime."""
-    if not ts:
-        return None
-    ts = ts.replace('Z', '+00:00')
-    try:
-        dt = datetime.fromisoformat(ts)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except:
-        return None
-
-
 def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
     """Create the 4-panel summary figure."""
 
@@ -121,7 +111,7 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
     ax1 = axes[0]
 
     if data['goes']:
-        times = [parse_timestamp(g['timestamp']) for g in data['goes']]
+        times = [parse_iso_timestamp(g['timestamp']) for g in data['goes']]
         flux = [g['flux'] for g in data['goes']]
 
         ax1.semilogy(times, flux, color=colors['goes'], linewidth=1.5, label='GOES XRS')
@@ -139,7 +129,7 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
         # Mark flares
         for g in data['goes']:
             if g['flare_class'] and g['flare_class'] in ['M', 'X']:
-                t = parse_timestamp(g['timestamp'])
+                t = parse_iso_timestamp(g['timestamp'])
                 ax1.axvline(x=t, color=colors['flare'], alpha=0.3, linewidth=2)
 
     ax1.set_ylabel('GOES Flux\n(W/m²)', fontsize=10)
@@ -153,9 +143,9 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
     ax2 = axes[1]
 
     # Separate by pair
-    coupling_193_211 = [(parse_timestamp(c['timestamp']), c['delta_mi'], c['status'], c.get('residual', 0))
+    coupling_193_211 = [(parse_iso_timestamp(c['timestamp']), c['delta_mi'], c['status'], c.get('residual', 0))
                         for c in data['coupling'] if c['pair'] == '193-211']
-    coupling_193_304 = [(parse_timestamp(c['timestamp']), c['delta_mi'], c['status'])
+    coupling_193_304 = [(parse_iso_timestamp(c['timestamp']), c['delta_mi'], c['status'])
                         for c in data['coupling'] if c['pair'] == '193-304']
 
     if coupling_193_211:
@@ -194,7 +184,7 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
     ax3 = axes[2]
 
     if data['wind']:
-        times_bz = [parse_timestamp(w['timestamp']) for w in data['wind']]
+        times_bz = [parse_iso_timestamp(w['timestamp']) for w in data['wind']]
         bz = [w['bz'] for w in data['wind']]
 
         # Fill regions
@@ -230,7 +220,7 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
     # Coupling breaks
     for c in data['coupling']:
         if c['status'] in ['ALERT', 'WARNING']:
-            t = parse_timestamp(c['timestamp'])
+            t = parse_iso_timestamp(c['timestamp'])
             color = colors['alert'] if c['status'] == 'ALERT' else colors['diagnostic']
             label = 'Actionable' if c['status'] == 'ALERT' else 'Diagnostic'
             ax4.scatter([t], [event_y['break']], color=color, s=60,
@@ -240,7 +230,7 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
     # Flares
     for g in data['goes']:
         if g['flare_class'] and g['flux'] >= 1e-6:  # C-class and above
-            t = parse_timestamp(g['timestamp'])
+            t = parse_iso_timestamp(g['timestamp'])
             size = 40 + (np.log10(g['flux']) + 6) * 30  # Scale by flux
             ax4.scatter([t], [event_y['flare']], color=colors['flare'], s=size,
                        marker='*', edgecolors='black', linewidths=0.5)
@@ -248,7 +238,7 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
     # Strong southward Bz
     for w in data['wind']:
         if w['bz'] and w['bz'] < -5:
-            t = parse_timestamp(w['timestamp'])
+            t = parse_iso_timestamp(w['timestamp'])
             ax4.scatter([t], [event_y['wind']], color=colors['bz_south'], s=40,
                        marker='d', alpha=0.7)
 
@@ -264,7 +254,7 @@ def create_summary_figure(data: dict, output_path: str = None, hours: int = 6):
 
     # Add date to xlabel
     if data['goes']:
-        first_time = parse_timestamp(data['goes'][0]['timestamp'])
+        first_time = parse_iso_timestamp(data['goes'][0]['timestamp'])
         date_str = first_time.strftime('%Y-%m-%d')
         ax4.set_xlabel(f'Time (UTC) — {date_str}', fontsize=10)
 

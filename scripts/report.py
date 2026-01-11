@@ -24,6 +24,7 @@ import json
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from solar_seed.monitoring import MonitoringDB
+from solar_seed.utils import parse_iso_timestamp
 
 
 class ReportGenerator:
@@ -138,16 +139,7 @@ class ReportGenerator:
 
     def _parse_timestamp(self, ts: str) -> datetime:
         """Parse timestamp string to timezone-aware datetime."""
-        if not ts:
-            return None
-        ts = ts.replace('Z', '+00:00')
-        try:
-            dt = datetime.fromisoformat(ts)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        except:
-            return None
+        return parse_iso_timestamp(ts)
 
     def _group_flares_into_episodes(self, flares: list, gap_minutes: int = 90) -> list:
         """
