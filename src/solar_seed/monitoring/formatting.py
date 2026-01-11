@@ -188,10 +188,17 @@ class StatusFormatter:
         if not coupling:
             return
 
-        # Quality info
+        # Quality info with warning details
         quality = coupling.get('_quality', {})
         n_warn = quality.get('n_warnings', 0)
-        quality_text = "[green]✓ GOOD[/]" if n_warn == 0 else f"[yellow]⚠ {n_warn} warning(s)[/]"
+        warnings = quality.get('warnings', [])
+
+        if n_warn == 0:
+            quality_text = "[green]✓ GOOD[/]"
+        else:
+            # Show first warning reason
+            warn_summary = warnings[0][:40] if warnings else "unknown"
+            quality_text = f"[yellow]⚠ {warn_summary}[/]"
 
         # Classify phase using BOTH classifiers in parallel
         goes_flux = xray.get('flux') if xray else None
