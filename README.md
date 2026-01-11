@@ -217,8 +217,8 @@ git clone https://github.com/lubeschanin/solar-seed.git
 cd solar-seed
 uv sync
 
-# For real solar data
-uv pip install sunpy aiapy
+# For real solar data (SDO/AIA, STEREO)
+uv sync --extra sunpy
 ```
 
 ## Quick Start (Interactive CLI)
