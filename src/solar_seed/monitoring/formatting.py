@@ -39,25 +39,38 @@ class StatusFormatter:
         'DATA_ERROR': Style(color="bright_black"),
     }
 
-    # Phase styles (interpretive)
+    # Phase styles (interpretive) - refined semantic palette
+    # 🟢 Quiet states: BASELINE, ELEVATED-QUIET
+    # 🟣 Transitional: POST-EVENT
+    # 🟡 Decaying: RECOVERY
+    # ⚠️ Alert: PRE-FLARE
+    # 🔴 Active: ACTIVE
     PHASE_STYLES = {
+        # Quiet states (green shades)
         Phase.BASELINE: Style(color="green"),
-        Phase.PRE_FLARE: Style(color="red", bold=True),
-        Phase.FLARE: Style(color="bright_red", bold=True),
-        Phase.RECOVERY: Style(color="yellow"),
-        Phase.POST_FLARE_REORG: Style(color="cyan"),
-        Phase.ELEVATED: Style(color="bright_yellow", bold=True),
+        Phase.ELEVATED_QUIET: Style(color="bright_green"),
+
+        # Transitional states
         Phase.POST_EVENT: Style(color="magenta", bold=True),
+        Phase.RECOVERY: Style(color="yellow"),
+
+        # Alert states
+        Phase.PRE_FLARE: Style(color="red", bold=True),
+        Phase.ACTIVE: Style(color="bright_red", bold=True),
     }
 
     PHASE_ICONS = {
+        # Quiet states
         Phase.BASELINE: '🟢',
-        Phase.PRE_FLARE: '⚠️',
-        Phase.FLARE: '🔴',
-        Phase.RECOVERY: '🟡',
-        Phase.POST_FLARE_REORG: '🔵',
-        Phase.ELEVATED: '🟠',
-        Phase.POST_EVENT: '🟣',
+        Phase.ELEVATED_QUIET: '🟢',  # Still green - structurally active but stable
+
+        # Transitional states
+        Phase.POST_EVENT: '🟣',       # Purple - reorganizing
+        Phase.RECOVERY: '🟡',         # Yellow - decaying
+
+        # Alert states
+        Phase.PRE_FLARE: '⚠️',        # Warning - destabilization
+        Phase.ACTIVE: '🔴',           # Red - ongoing energy release
     }
 
     TREND_ICONS = {
