@@ -766,6 +766,118 @@ class MonitoringDB:
 
         return stats
 
+    # =========================================================================
+    # DIVERGENCE VALIDATION
+    # =========================================================================
+
+    def validate_divergences_against_flares(self, window_hours: int = 24) -> dict:
+        """
+        Retrospectively validate divergences against GOES flare history.
+
+        Classification:
+        - POST_EVENT: Flare within window_hours BEFORE divergence
+        - PRECURSOR: Flare within window_hours AFTER divergence (predictive!)
+        - BETWEEN_EVENTS: Flares both before and after
+        - ISOLATED: No flares in either window
+
+        Returns:
+            dict with validation statistics and updated records
+        """
+        cursor = self.conn.cursor()
+
+        # Get all unvalidated divergences
+        cursor.execute("""
+            SELECT id, timestamp, divergence_type
+            FROM phase_divergence
+            WHERE validated IS NULL OR validated = 0
+            ORDER BY timestamp
+        """)
+        divergences = cursor.fetchall()
+
+        stats = {
+            'total_checked': 0,
+            'post_event': 0,
+            'precursor': 0,
+            'between_events': 0,
+            'isolated': 0,
+            'updated_ids': []
+        }
+
+        for div in divergences:
+            div_id, div_time, current_type = div
+
+            # Find flares BEFORE this divergence (within window)
+            cursor.execute("""
+                SELECT timestamp, flare_class, magnitude
+                FROM goes_xray
+                WHERE flux >= 1e-6
+                AND timestamp < ?
+                AND timestamp >= datetime(?, ?)
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (div_time, div_time, f'-{window_hours} hours'))
+            flare_before = cursor.fetchone()
+
+            # Find flares AFTER this divergence (within window)
+            cursor.execute("""
+                SELECT timestamp, flare_class, magnitude
+                FROM goes_xray
+                WHERE flux >= 1e-6
+                AND timestamp > ?
+                AND timestamp <= datetime(?, ?)
+                ORDER BY timestamp ASC
+                LIMIT 1
+            """, (div_time, div_time, f'+{window_hours} hours'))
+            flare_after = cursor.fetchone()
+
+            # Classify
+            has_before = flare_before is not None
+            has_after = flare_after is not None
+
+            if has_before and has_after:
+                new_type = 'BETWEEN_EVENTS'
+                stats['between_events'] += 1
+            elif has_before and not has_after:
+                new_type = 'POST_EVENT'
+                stats['post_event'] += 1
+            elif has_after and not has_before:
+                new_type = 'PRECURSOR'
+                stats['precursor'] += 1
+            else:
+                new_type = 'ISOLATED'
+                stats['isolated'] += 1
+
+            # Update record
+            flare_class = None
+            flare_time = None
+            if flare_after:
+                flare_class = f"{flare_after[1]}{flare_after[2]:.1f}"
+                flare_time = flare_after[0]
+                flare_within = 1
+            elif flare_before:
+                flare_class = f"{flare_before[1]}{flare_before[2]:.1f}"
+                flare_time = flare_before[0]
+                flare_within = 0
+            else:
+                flare_within = 0
+
+            cursor.execute("""
+                UPDATE phase_divergence
+                SET divergence_type = ?,
+                    validated = 1,
+                    validation_type = 'auto_goes',
+                    flare_within_24h = ?,
+                    flare_class = ?,
+                    flare_time = ?
+                WHERE id = ?
+            """, (new_type, flare_within, flare_class, flare_time, div_id))
+
+            stats['total_checked'] += 1
+            stats['updated_ids'].append(div_id)
+
+        self.conn.commit()
+        return stats
+
 
 # =============================================================================
 # CLI for database management
