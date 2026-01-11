@@ -272,19 +272,25 @@ class TestMigration:
     def test_import_from_json(self, db, tmp_path):
         """Import from JSON history file."""
         import json
+        from datetime import datetime, timezone, timedelta
+
+        # Use dynamic timestamps relative to now (within last hour)
+        now = datetime.now(timezone.utc)
+        ts1 = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        ts2 = (now - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%S")
 
         # Create sample JSON history
         json_file = tmp_path / "history.json"
         history = [
             {
-                "timestamp": "2026-01-10T12:00:00",
+                "timestamp": ts1,
                 "coupling": {
                     "193-211": {"delta_mi": 0.59, "status": "NORMAL", "trend": "STABLE"},
                     "193-304": {"delta_mi": 0.07, "status": "NORMAL", "trend": "STABLE"}
                 }
             },
             {
-                "timestamp": "2026-01-10T12:10:00",
+                "timestamp": ts2,
                 "coupling": {
                     "193-211": {"delta_mi": 0.55, "status": "WARNING", "trend": "DECLINING"}
                 }
