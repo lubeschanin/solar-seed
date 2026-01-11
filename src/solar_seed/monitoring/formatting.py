@@ -309,8 +309,9 @@ class StatusFormatter:
         if is_divergent:
             status_line = Text()
             status_line.append("\nStatus: ", style="dim")
-            status_line.append("⚠️ DIVERGENT", style="bold yellow")
-            status_line.append(f" ({comparison['divergence_note']})", style="yellow")
+            status_line.append("⚠️ DIVERGENT\n", style="bold yellow")
+            status_line.append("Interpretation: ", style="dim")
+            status_line.append("Energy (GOES) and structure (ΔMI) are temporarily decoupled", style="yellow italic")
             border_style = "yellow"
         else:
             status_line = Text()
