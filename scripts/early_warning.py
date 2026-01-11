@@ -854,24 +854,86 @@ app = typer.Typer(
 console = Console()
 
 
+def _select_location_interactive() -> str:
+    """Interactive location selection with Rich."""
+    from rich.prompt import Prompt
+    from solar_seed.monitoring.relevance import LOCATIONS
+
+    console.print("\n[bold cyan]📍 Select your location:[/]\n")
+
+    # Show numbered list
+    locations = list(LOCATIONS.keys())
+    for i, loc in enumerate(locations, 1):
+        lat, lon, tz = LOCATIONS[loc]
+        console.print(f"  [{i}] {loc.title():12} ({lat:.1f}°, {lon:.1f}°) - {tz}")
+
+    console.print(f"  [7] Custom coordinates")
+    console.print()
+
+    choice = Prompt.ask("Enter number", default="1")
+
+    try:
+        idx = int(choice)
+        if 1 <= idx <= len(locations):
+            return locations[idx - 1]
+        elif idx == 7:
+            lat = Prompt.ask("Latitude", default="52.5")
+            lon = Prompt.ask("Longitude", default="13.4")
+            return f"{lat},{lon}"
+    except ValueError:
+        pass
+
+    # Try as location name or coords
+    if choice.lower() in LOCATIONS:
+        return choice.lower()
+    return choice
+
+
+def _get_saved_location() -> str | None:
+    """Get saved location from config."""
+    config_path = Path.home() / ".config" / "solar-seed" / "location.txt"
+    if config_path.exists():
+        return config_path.read_text().strip()
+    return None
+
+
+def _save_location(location: str):
+    """Save location to config."""
+    config_path = Path.home() / ".config" / "solar-seed" / "location.txt"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(location)
+
+
 @app.command()
 def check(
     coupling: bool = typer.Option(False, "--coupling", "-c", help="Include SDO/AIA coupling analysis"),
     stereo: bool = typer.Option(False, "--stereo", "-s", help="Include STEREO-A EUVI analysis (~3.9 days ahead)"),
     minimal: bool = typer.Option(False, "--minimal", "-m", help="Minimal alert view (only actionable info)"),
-    location: str = typer.Option(None, "--location", "-l", help="Your location (berlin, london, tokyo, or lat,lon)"),
+    location: str = typer.Option(None, "--location", "-l", help="Location (berlin, tokyo, etc. or 'select')"),
     no_db: bool = typer.Option(False, "--no-db", help="Disable database storage"),
 ):
     """
     🔍 Single status check of all data sources.
 
     Use --minimal for operator view (only 193-211 + GOES).
-    Use --location to see personal relevance (day/night, aurora).
-    Use without --minimal for full scientific dashboard.
+    Use -l select for interactive location picker.
+    Use -l berlin (or tokyo, london, etc.) for direct selection.
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn
 
     store_db = not no_db
+
+    # Handle location selection
+    if location == "select":
+        location = _select_location_interactive()
+        # Ask to save
+        from rich.prompt import Confirm
+        if Confirm.ask("Save as default location?", default=True):
+            _save_location(location)
+            console.print(f"[dim]Saved to ~/.config/solar-seed/location.txt[/]\n")
+    elif location is None:
+        # Try to use saved location
+        location = _get_saved_location()
 
     # Minimal mode always requires coupling
     if minimal:
@@ -1009,6 +1071,64 @@ def correlations():
 
     accuracy = db.get_prediction_accuracy()
     console.print(f"\n[bold]Prediction Accuracy:[/] {accuracy['overall']}")
+
+
+@app.command()
+def location(
+    set_location: str = typer.Argument(None, help="Set location (berlin, tokyo, or lat,lon)"),
+    show: bool = typer.Option(False, "--show", "-s", help="Show current sun status"),
+):
+    """
+    📍 Set or show your default location.
+
+    Examples:
+      location           # Interactive selection
+      location berlin    # Set to Berlin
+      location 52.5,13.4 # Set custom coordinates
+      location -s        # Show sun status for saved location
+    """
+    from solar_seed.monitoring.relevance import LOCATIONS, get_sun_status, get_daylight_window_utc
+
+    if set_location is None and not show:
+        # Interactive selection
+        set_location = _select_location_interactive()
+        _save_location(set_location)
+        console.print(f"\n[green]✓ Location saved:[/] {set_location}")
+
+    elif set_location:
+        # Direct set
+        _save_location(set_location)
+        console.print(f"[green]✓ Location saved:[/] {set_location}")
+
+    # Show status
+    saved = _get_saved_location()
+    if saved:
+        console.print(f"\n[bold]Current location:[/] {saved}")
+
+        # Parse and show sun status
+        if ',' in saved:
+            lat, lon = map(float, saved.split(','))
+            loc_name = f"{lat:.1f}°, {lon:.1f}°"
+        elif saved.lower() in LOCATIONS:
+            lat, lon, _ = LOCATIONS[saved.lower()]
+            loc_name = saved.title()
+        else:
+            console.print("[yellow]Unknown location format[/]")
+            return
+
+        sun = get_sun_status(lat, lon)
+        sunrise, sunset = get_daylight_window_utc(lat, lon)
+
+        if sun.is_visible:
+            console.print(f"[yellow]☀️ Sun is VISIBLE[/] (altitude: {sun.altitude_deg:.0f}°)")
+            console.print(f"[dim]→ You are on the day side - radio/GPS effects would affect you[/]")
+        else:
+            console.print(f"[cyan]🌙 Sun is BELOW HORIZON[/] (altitude: {sun.altitude_deg:.0f}°)")
+            console.print(f"[dim]→ You are on the night side - only geomagnetic effects apply[/]")
+
+        console.print(f"\n[dim]Daylight window: {sunrise}-{sunset} UTC[/]")
+    else:
+        console.print("[yellow]No location saved. Use 'location <name>' to set one.[/]")
 
 
 # Import box for tables
