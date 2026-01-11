@@ -533,12 +533,19 @@ class StatusFormatter:
         self.console.print(Panel(table, title="📢 NOAA ALERTS (last 24h)", border_style="yellow"))
 
     def generate_event_narrative(self, xray: dict, coupling: dict) -> str | None:
-        """Generate event narrative (returns string for compatibility)."""
+        """
+        Generate event narrative based on GOES + ΔMI state.
+
+        Narratives are physically consistent:
+        - ACTIVE: Ongoing energy release (GOES elevated)
+        - TRANSFER: Corona relaxing, chromosphere loading (energy flow down)
+        - POST-EVENT: Elevated but reorganizing/relaxing
+        - ELEVATED-QUIET: Structurally active but stable
+        """
         if not xray or not coupling:
             return None
 
         flux = xray.get('flux', 0)
-        flare_class = xray.get('flare_class', 'A0')
 
         mi_211 = coupling.get('193-211', {})
         mi_304 = coupling.get('193-304', {})
@@ -547,22 +554,31 @@ class StatusFormatter:
         r_304 = mi_304.get('residual', 0)
         slope_211 = mi_211.get('slope_pct_per_hour', 0)
         slope_304 = mi_304.get('slope_pct_per_hour', 0)
+        max_r = max(abs(r_211), abs(r_304))
 
-        # Determine if narrative is needed
+        # 1. Active flares (GOES-driven)
         if flux >= 1e-5:
-            phase = "M/X-CLASS ACTIVE"
-        elif flux >= 1e-6:
-            phase = "C-CLASS ACTIVE"
-        elif flux >= 5e-7:
-            phase = "DECAY PHASE" if slope_211 < -2 or slope_304 > 2 else "ELEVATED"
-        elif r_304 > 3 and slope_304 > 0:
-            phase = "POST-FLARE DECAY"
-        elif abs(r_211) > 2 or abs(r_304) > 2:
-            phase = "ANOMALOUS"
-        else:
-            return None
+            return "M/X-CLASS ACTIVE"
+        if flux >= 1e-6:
+            return "C-CLASS ACTIVE"
 
-        return phase  # Return phase name; caller will print panel
+        # 2. TRANSFER_STATE: Corona relaxing fast + chromosphere elevated
+        #    Physical: energy flowing from corona down to chromosphere
+        if r_304 >= 5.0 and slope_211 <= -8.0:
+            return "POST-EVENT TRANSFER"
+
+        # 3. POST-EVENT: Strongly elevated, check if relaxing or reorganizing
+        if max_r >= 5.0:
+            if slope_304 < 0 and slope_211 < 0:
+                return "POST-EVENT RELAXATION"
+            return "POST-EVENT REORGANIZATION"
+
+        # 4. ELEVATED-QUIET: Moderately elevated but stable
+        if max_r >= 2.0:
+            return "ELEVATED-QUIET"
+
+        # 5. Quiet baseline - no narrative needed
+        return None
 
     def print_event_narrative(self, xray: dict, coupling: dict):
         """Print event narrative panel."""
