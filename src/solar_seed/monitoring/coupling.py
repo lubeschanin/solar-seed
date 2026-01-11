@@ -51,6 +51,44 @@ class CouplingMonitor:
         with open(self.history_file, 'w') as f:
             json.dump(self.history, f)
 
+    def is_persistent_break(self, pair: str, current_is_break: bool, min_frames: int = 2) -> bool:
+        """
+        Check if a break persists for min_frames consecutive readings.
+
+        Anti-spike filter: Only confirm break if it persists across multiple
+        frames. At 10-min cadence, min_frames=2 means 20 minutes persistence.
+
+        Args:
+            pair: Channel pair (e.g. '193-211')
+            current_is_break: Whether current frame shows a break
+            min_frames: Minimum consecutive frames required (default: 2)
+
+        Returns:
+            True if break is persistent, False if likely spike/artifact
+        """
+        if not current_is_break:
+            return False
+
+        # Check history for previous break detections
+        # Note: break_detected is stored in coupling_measurements when we add it
+        pair_history = [
+            h for h in self.history[-min_frames:]
+            if pair in h.get('coupling', {})
+        ]
+
+        if len(pair_history) < min_frames - 1:
+            # Not enough history, can't confirm persistence
+            return False
+
+        # Check if previous frames also had breaks
+        # A break is indicated by deviation_pct < -25% (ALERT threshold)
+        previous_breaks = sum(
+            1 for h in pair_history[-(min_frames-1):]
+            if h.get('coupling', {}).get(pair, {}).get('deviation_pct', 0) < self.ALERT_THRESHOLD
+        )
+
+        return previous_breaks >= min_frames - 1
+
     def compute_residual(self, pair: str, delta_mi: float) -> dict:
         """Compute residual r(t) = (ΔMI - baseline) / std."""
         if pair not in self.BASELINES:

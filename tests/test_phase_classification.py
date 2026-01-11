@@ -340,7 +340,7 @@ class TestClassifyDivergenceType:
             goes_trend_rising=False,
             recent_flare_hours=None
         )
-        assert result == DivergenceType.UNCONFIRMED
+        assert result == DivergenceType.STRUCTURAL_EVENT
 
     def test_unconfirmed_old_flare(self):
         """GOES quiet with old flare (>24h) = UNCONFIRMED."""
@@ -350,7 +350,7 @@ class TestClassifyDivergenceType:
             goes_trend_rising=False,
             recent_flare_hours=30  # >24h ago
         )
-        assert result == DivergenceType.UNCONFIRMED
+        assert result == DivergenceType.STRUCTURAL_EVENT
 
 
 # =============================================================================
@@ -394,6 +394,7 @@ class TestPhaseClassificationEdgeCases:
         """Verify all divergence type constants are defined."""
         assert DivergenceType.PRECURSOR == 'PRECURSOR'
         assert DivergenceType.POST_EVENT == 'POST_EVENT'
-        assert DivergenceType.UNCONFIRMED == 'UNCONFIRMED'
+        assert DivergenceType.STRUCTURAL_EVENT == 'STRUCTURAL_EVENT'
+        assert DivergenceType.UNCONFIRMED == DivergenceType.STRUCTURAL_EVENT  # Legacy alias
         assert DivergenceType.TRUE_POSITIVE == 'TRUE_POSITIVE'
         assert DivergenceType.FALSE_POSITIVE == 'FALSE_POSITIVE'

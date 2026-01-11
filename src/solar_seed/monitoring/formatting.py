@@ -254,14 +254,17 @@ class StatusFormatter:
 
             # Break indicator overrides with 4K confirmation status
             if data.get('is_break'):
+                # Direction: negative = decoupling, positive = hypercoupling
+                direction = "↓decoupling" if residual < 0 else "↑spike"
                 if data.get('confirmed_4k') is True:
-                    anomaly_text = Text("🚨 BREAK [4K✓]", style="bold red")
+                    anomaly_text = Text(f"🚨 BREAK {direction} [4K✓]", style="bold red")
                 elif data.get('confirmed_4k') is False:
-                    anomaly_text = Text("BREAK [4K✗]", style="yellow")
+                    anomaly_text = Text(f"BREAK {direction} [4K✗]", style="yellow")
                 else:
-                    anomaly_text = Text("🚨 BREAK", style="bold red")
+                    anomaly_text = Text(f"🚨 BREAK {direction}", style="bold red")
             elif data.get('break_vetoed'):
-                anomaly_text = Text("VETOED", style="dim")
+                veto_reason = data.get('break_vetoed', 'check failed')
+                anomaly_text = Text(f"VETOED ({veto_reason})", style="dim")
 
             table.add_row(
                 f"{pair} Å",

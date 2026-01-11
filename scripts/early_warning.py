@@ -664,6 +664,16 @@ def _analyze_pair(wl1: int, wl2: int, channels: dict, monitor, validate_breaks: 
             output['robustness_check'] = robust
             if robust.get('is_robust'):
                 print(f"     ✓ Break is ROBUST under binning (Δ={robust['change_pct']:.1f}%)")
+
+                # Persistence check: anti-spike filter (2+ consecutive frames)
+                is_persistent = monitor.is_persistent_break(pair_key, True, min_frames=2)
+                if is_persistent:
+                    print(f"     ✓ Break is PERSISTENT (2+ frames)")
+                else:
+                    print(f"     ⚠ Break NOT persistent (single frame - possible spike)")
+                    break_check['is_break'] = False
+                    break_check['vetoed'] = 'spike'
+                    output['break_detection'] = break_check
             else:
                 change = robust.get('change_pct', 0)
                 print(f"     ⚠ Break is UNRELIABLE (binning Δ={change:.1f}% > 20%)")

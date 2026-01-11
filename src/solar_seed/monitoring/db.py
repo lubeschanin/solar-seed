@@ -364,7 +364,7 @@ class MonitoringDB:
         This data enables empirical validation of which classifier is more predictive.
 
         Args:
-            divergence_type: PRECURSOR, POST_EVENT, or UNCONFIRMED
+            divergence_type: PRECURSOR, POST_EVENT, or STRUCTURAL_EVENT
             goes_rising: Whether GOES was trending up at time of divergence
         """
         cursor = self.conn.cursor()

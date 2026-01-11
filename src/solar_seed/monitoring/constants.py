@@ -100,8 +100,10 @@ class DivergenceType:
     # ΔMI sees anomaly AFTER GOES returns to quiet → structural relaxation
     POST_EVENT = 'POST_EVENT'
 
-    # ΔMI anomaly with no GOES activity within validation window → needs review
-    UNCONFIRMED = 'UNCONFIRMED'
+    # ΔMI anomaly with no GOES activity within validation window
+    # Renamed from UNCONFIRMED: these are real structural events, not "unconfirmed"
+    STRUCTURAL_EVENT = 'STRUCTURAL_EVENT'
+    UNCONFIRMED = STRUCTURAL_EVENT  # Legacy alias
 
     # Validated outcomes (set retrospectively)
     TRUE_POSITIVE = 'TRUE_POSITIVE'   # PRECURSOR followed by flare
@@ -143,13 +145,13 @@ def classify_divergence_type(
             return DivergenceType.POST_EVENT
 
         # Otherwise, we don't know yet - needs validation
-        return DivergenceType.UNCONFIRMED
+        return DivergenceType.STRUCTURAL_EVENT
 
     # GOES active, ΔMI sees quiet (unusual - GOES leading)
     if phase_goes in [Phase.ACTIVE, Phase.RECOVERY]:
         return DivergenceType.POST_EVENT
 
-    return DivergenceType.UNCONFIRMED
+    return DivergenceType.STRUCTURAL_EVENT
 
 
 # =============================================================================
