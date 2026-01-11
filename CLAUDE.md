@@ -338,11 +338,22 @@ GOES X-ray + DSCOVR           → Minutes to real-time
 - `EXTREME`: > 7σ
 
 **Phase (Interpretive, rule-based):**
-- `BASELINE`: Quiet conditions
-- `PRE-FLARE`: Destabilization (neg z + rising GOES)
-- `FLARE`: Active flare (M/X class)
-- `RECOVERY`: Post-peak decay
-- `POST-FLARE REORG`: Chromosphere coupling elevated + corona stable
+
+| Phase | Icon | Meaning | Trigger |
+|-------|------|---------|---------|
+| `BASELINE` | 🟢 | Thermal & structural quiet | GOES quiet, \|z\| < 3 |
+| `ELEVATED-QUIET` | 🟢 | Structurally active but stable | \|z\| > 3, stable trends |
+| `POST-EVENT` | 🟣 | Non-flaring but reorganizing | GOES quiet, \|z\| > 5 |
+| `RECOVERY` | 🟡 | Decaying activity | GOES falling |
+| `PRE-FLARE` | ⚠️ | Destabilization detected | Negative z + GOES rising |
+| `ACTIVE` | 🔴 | Ongoing energy release | GOES M/X-class |
+
+**Parallel Classification:**
+The system runs two classifiers in parallel for empirical validation:
+- **GOES-only**: Traditional flux-based (current operational standard)
+- **ΔMI-integrated**: Experimental coupling-based (may detect events GOES misses)
+
+Divergences are logged to `phase_divergence` table for correlation analysis.
 
 **Personal Relevance (--location):**
 - Day side: Radio/GPS effects affect you NOW (~8 min latency)
@@ -435,9 +446,14 @@ registration shift 1.2px, time sync 12s, stable under 2×2 binning (−3%).
 
 ### SQLite Database (`monitoring.db`)
 
-Tables: `goes_xray`, `solar_wind`, `coupling_measurements`, `flare_events`, `predictions`, `noaa_alerts`
+Tables: `goes_xray`, `solar_wind`, `coupling_measurements`, `flare_events`, `predictions`, `noaa_alerts`, `phase_divergence`
 
 Location: `results/early_warning/monitoring.db`
+
+**Divergence Analysis:**
+```bash
+uv run python -m solar_seed.monitoring.db --divergence 7  # Last 7 days
+```
 
 ## Development Guidelines
 
