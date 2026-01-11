@@ -173,14 +173,17 @@ def classify_phase_experimental(
     # Key hypothesis: we see magnetic restructuring that GOES doesn't
     if goes_flux and goes_flux < 1e-6:  # GOES says quiet (B-class)
         if max_z > 5:
-            # Check if recovering (dominant trend is falling)
+            # Identify trigger pair (which channel drives the anomaly)
+            trigger_pair = "193-211" if abs(z_211) >= abs(z_304) else "193-304"
             dominant_trend = trend_211 if abs(z_211) >= abs(z_304) else trend_304
+
+            # Check if recovering (dominant trend is falling)
             if dominant_trend < -3:  # Falling >3%/h = recovering toward baseline
-                return Phase.POST_EVENT, f"Recovering (coupling {max_z:.1f}σ, falling {dominant_trend:+.1f}%/h)"
+                return Phase.POST_EVENT, f"Relaxing ({trigger_pair} at {max_z:.1f}σ, {dominant_trend:+.1f}%/h)"
             else:
-                return Phase.POST_EVENT, f"Reorganizing (GOES quiet, coupling {max_z:.1f}σ)"
+                return Phase.POST_EVENT, f"Reorganizing ({trigger_pair} at {max_z:.1f}σ)"
         if z_304 > 4 and trend_304 > 0:
-            return Phase.POST_EVENT, f"Chromosphere restructuring (+{z_304:.1f}σ)"
+            return Phase.POST_EVENT, f"Chromosphere restructuring (193-304 at +{z_304:.1f}σ)"
 
     # Rule 4: ELEVATED-QUIET - structurally active but stable
     # ΔMI elevated but not destabilizing (no negative trend, no GOES rise)
