@@ -858,14 +858,22 @@ console = Console()
 def check(
     coupling: bool = typer.Option(False, "--coupling", "-c", help="Include SDO/AIA coupling analysis"),
     stereo: bool = typer.Option(False, "--stereo", "-s", help="Include STEREO-A EUVI analysis (~3.9 days ahead)"),
+    minimal: bool = typer.Option(False, "--minimal", "-m", help="Minimal alert view (only actionable info)"),
     no_db: bool = typer.Option(False, "--no-db", help="Disable database storage"),
 ):
     """
     🔍 Single status check of all data sources.
+
+    Use --minimal for operator view (only 193-211 + GOES).
+    Use without --minimal for full scientific dashboard.
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn
 
     store_db = not no_db
+
+    # Minimal mode always requires coupling
+    if minimal:
+        coupling = True
 
     with Progress(
         SpinnerColumn(),
@@ -876,11 +884,15 @@ def check(
         progress.add_task("Fetching GOES X-ray...", total=None)
         xray = get_goes_xray()
 
-        progress.add_task("Fetching solar wind...", total=None)
-        solar_wind = get_dscovr_solar_wind()
+        if not minimal:
+            progress.add_task("Fetching solar wind...", total=None)
+            solar_wind = get_dscovr_solar_wind()
 
-        progress.add_task("Fetching NOAA alerts...", total=None)
-        alerts = get_noaa_alerts()
+            progress.add_task("Fetching NOAA alerts...", total=None)
+            alerts = get_noaa_alerts()
+        else:
+            solar_wind = None
+            alerts = None
 
         if store_db:
             store_goes_reading(xray)
@@ -897,11 +909,16 @@ def check(
                 store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling_data)
 
         stereo_data = None
-        if stereo:
+        if stereo and not minimal:
             progress.add_task("Fetching STEREO-A data...", total=None)
             stereo_data = run_stereo_coupling_analysis()
 
-    print_status_report(xray, solar_wind, alerts, coupling_data, stereo_data)
+    # Output mode
+    if minimal:
+        fmt = StatusFormatter()
+        fmt.print_minimal_alert(coupling_data, xray, next_check_min=10)
+    else:
+        print_status_report(xray, solar_wind, alerts, coupling_data, stereo_data)
 
     if store_db:
         fmt = StatusFormatter()

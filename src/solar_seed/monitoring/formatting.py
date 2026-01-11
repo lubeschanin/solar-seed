@@ -438,3 +438,121 @@ class StatusFormatter:
         if db_path:
             self.console.print(f"[dim]  💾 Data stored in: {db_path}[/]")
         self.console.print()
+
+    # =========================================================================
+    # MINIMAL ALERT MODE
+    # =========================================================================
+
+    def print_minimal_alert(self, coupling: dict, xray: dict = None, next_check_min: int = 10):
+        """
+        Print minimal early warning display.
+
+        Only shows what's actionable:
+        - 193-211 ΔMI (value + deviation from baseline)
+        - 193-211 Trend
+        - GOES status (if relevant)
+        - Clear status indicator
+
+        This is for operators/decision-makers, not scientists.
+        """
+        # Extract 193-211 data
+        pair_data = coupling.get('193-211', {}) if coupling else {}
+        delta_mi = pair_data.get('delta_mi', 0)
+        residual = pair_data.get('residual', 0)
+        slope = pair_data.get('slope_pct_per_hour', 0)
+        trend = pair_data.get('trend', 'NO_DATA')
+
+        # Baseline reference (from paper: 0.59 ± 0.12)
+        baseline = 0.59
+        baseline_std = 0.12
+        deviation_pct = ((delta_mi - baseline) / baseline * 100) if baseline else 0
+
+        # Determine status
+        is_break = pair_data.get('is_break', False)
+        is_accelerating_down = slope < -5 and trend in ['DECLINING', 'ACCELERATING_DOWN']
+
+        # GOES context
+        goes_flux = xray.get('flux', 0) if xray else 0
+        goes_class = xray.get('flare_class', '') if xray else ''
+        goes_rising = xray.get('rising', False) if xray else False
+
+        # Status classification
+        if is_break or (residual < -2 and is_accelerating_down):
+            status = "BREAK DETECTED"
+            status_icon = "🔴"
+            status_style = "bold red"
+            border_style = "red"
+        elif residual < -1.5 or (slope < -3 and goes_rising):
+            status = "CAUTION"
+            status_icon = "🟡"
+            status_style = "bold yellow"
+            border_style = "yellow"
+        else:
+            status = "CLEAR"
+            status_icon = "🟢"
+            status_style = "bold green"
+            border_style = "green"
+
+        # Build content
+        content = Text()
+
+        # Status line
+        content.append("STATUS:  ", style="dim")
+        content.append(f"{status_icon} {status}\n\n", style=status_style)
+
+        # 193-211 line - focus on whether it's concerning (below baseline)
+        if deviation_pct >= -15:
+            mi_style = "green"
+            mi_note = "nominal" if deviation_pct >= 0 else f"{deviation_pct:.0f}%"
+        elif deviation_pct >= -30:
+            mi_style = "yellow"
+            mi_note = f"{deviation_pct:.0f}% below baseline"
+        else:
+            mi_style = "red"
+            mi_note = f"{deviation_pct:.0f}% below baseline"
+
+        content.append("193-211:  ", style="dim")
+        content.append(f"{delta_mi:.2f} bits", style=mi_style)
+        content.append(f"  ({mi_note})\n", style="dim")
+
+        # Trend line
+        trend_icons = {
+            'ACCELERATING_DOWN': '↓↓ accelerating down',
+            'DECLINING': '↓ declining',
+            'STABLE': '→ stable',
+            'RISING': '↑ rising',
+            'ACCELERATING_UP': '↑↑ accelerating up',
+        }
+        trend_text = trend_icons.get(trend, f'→ {slope:+.1f}%/h')
+        trend_style = "red" if 'DOWN' in trend or slope < -3 else "green" if trend == 'STABLE' else "yellow"
+
+        content.append("Trend:    ", style="dim")
+        content.append(f"{trend_text}\n", style=trend_style)
+
+        # GOES line (only if relevant)
+        if status != "CLEAR" or goes_flux > 1e-6:
+            content.append("\n")
+            content.append("GOES:     ", style="dim")
+            goes_style = "red" if goes_rising else "green"
+            rising_text = " (rising)" if goes_rising else ""
+            content.append(f"{goes_class}{rising_text}\n", style=goes_style)
+
+        # Action line (only for non-CLEAR)
+        if status == "BREAK DETECTED":
+            content.append("\n")
+            content.append("→ Monitor for flare in 0.5-2h", style="bold yellow")
+        elif status == "CAUTION":
+            content.append("\n")
+            content.append("→ Watch for further decline", style="yellow")
+
+        # Next check
+        content.append(f"\n\nNext check: {next_check_min} min", style="dim")
+
+        # Print panel
+        self.console.print(Panel(
+            content,
+            title="[bold]☀️ SOLAR EARLY WARNING[/]",
+            border_style=border_style,
+            box=box.ROUNDED,
+            padding=(0, 2),
+        ))
