@@ -84,6 +84,75 @@ class Phase:
 
 
 # =============================================================================
+# DIVERGENCE TYPOLOGY
+# =============================================================================
+# When GOES-only and ΔMI-integrated classifiers disagree, we categorize the
+# divergence type for later validation against actual outcomes.
+#
+# Purpose: Empirically determine which divergences are predictive vs artifacts.
+
+class DivergenceType:
+    """Classification of phase divergence events for validation."""
+
+    # ΔMI sees anomaly BEFORE GOES rises → potential early warning
+    PRECURSOR = 'PRECURSOR'
+
+    # ΔMI sees anomaly AFTER GOES returns to quiet → structural relaxation
+    POST_EVENT = 'POST_EVENT'
+
+    # ΔMI anomaly with no GOES activity within validation window → needs review
+    UNCONFIRMED = 'UNCONFIRMED'
+
+    # Validated outcomes (set retrospectively)
+    TRUE_POSITIVE = 'TRUE_POSITIVE'   # PRECURSOR followed by flare
+    TRUE_NEGATIVE = 'TRUE_NEGATIVE'   # No divergence, no flare
+    FALSE_POSITIVE = 'FALSE_POSITIVE' # PRECURSOR not followed by flare
+    FALSE_NEGATIVE = 'FALSE_NEGATIVE' # Flare without prior PRECURSOR
+
+
+def classify_divergence_type(
+    phase_goes: str,
+    phase_experimental: str,
+    goes_trend_rising: bool = False,
+    recent_flare_hours: float = None,
+) -> str:
+    """
+    Classify a divergence event for later validation.
+
+    Args:
+        phase_goes: Phase from GOES-only classifier
+        phase_experimental: Phase from ΔMI-integrated classifier
+        goes_trend_rising: Whether GOES flux is trending upward
+        recent_flare_hours: Hours since last significant flare (None if unknown)
+
+    Returns:
+        DivergenceType classification
+    """
+    # No divergence
+    if phase_goes == phase_experimental:
+        return None
+
+    # GOES quiet, ΔMI sees something
+    if phase_goes == Phase.BASELINE:
+        # If GOES is rising, this could be a precursor
+        if goes_trend_rising:
+            return DivergenceType.PRECURSOR
+
+        # If recent flare, this is post-event relaxation
+        if recent_flare_hours is not None and recent_flare_hours < 24:
+            return DivergenceType.POST_EVENT
+
+        # Otherwise, we don't know yet - needs validation
+        return DivergenceType.UNCONFIRMED
+
+    # GOES active, ΔMI sees quiet (unusual - GOES leading)
+    if phase_goes in [Phase.ACTIVE, Phase.RECOVERY]:
+        return DivergenceType.POST_EVENT
+
+    return DivergenceType.UNCONFIRMED
+
+
+# =============================================================================
 # PHASE CLASSIFICATION: GOES-ONLY (Current Standard)
 # =============================================================================
 

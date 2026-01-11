@@ -87,6 +87,7 @@ from solar_seed.monitoring import (
     classify_break_type,
     classify_anomaly_status,
     classify_phase_parallel,
+    classify_divergence_type,
     StatusFormatter,
 )
 from solar_seed.data_sources import (
@@ -395,6 +396,11 @@ def check_and_log_divergence(timestamp: str, coupling: dict, xray: dict, db: Mon
     Check for phase classifier divergence and log to database.
 
     This enables empirical validation: do divergences predict flares?
+
+    Divergence types:
+    - PRECURSOR: ΔMI anomaly before GOES rises (potential early warning)
+    - POST_EVENT: ΔMI anomaly after GOES quiet (structural relaxation)
+    - UNCONFIRMED: Needs validation against subsequent events
     """
     # Extract GOES info
     goes_flux = xray.get('flux') if xray else None
@@ -424,9 +430,30 @@ def check_and_log_divergence(timestamp: str, coupling: dict, xray: dict, db: Mon
             max_z = z
             trigger_pair = pair
 
-    # Log divergence event
+    # Classify divergence type
     phase_goes, reason_goes = comparison['current']
     phase_exp, reason_exp = comparison['experimental']
+
+    # Check for recent flare activity (query last 24h from DB)
+    recent_flare_hours = None
+    try:
+        recent_flares = db.get_recent_flares(hours=24, min_class='C')
+        if recent_flares:
+            # Hours since most recent flare
+            from datetime import datetime, timezone
+            latest = recent_flares[0]
+            flare_time = datetime.fromisoformat(latest['start_time'].replace('Z', '+00:00'))
+            now = datetime.now(timezone.utc)
+            recent_flare_hours = (now - flare_time).total_seconds() / 3600
+    except Exception:
+        pass  # DB query failed, proceed without flare context
+
+    div_type = classify_divergence_type(
+        phase_goes=phase_goes,
+        phase_experimental=phase_exp,
+        goes_trend_rising=goes_rising,
+        recent_flare_hours=recent_flare_hours,
+    )
 
     db.insert_phase_divergence(
         timestamp=timestamp,
@@ -434,8 +461,10 @@ def check_and_log_divergence(timestamp: str, coupling: dict, xray: dict, db: Mon
         phase_experimental=phase_exp,
         reason_goes=reason_goes,
         reason_experimental=reason_exp,
+        divergence_type=div_type,
         goes_flux=goes_flux,
         goes_class=goes_class,
+        goes_rising=goes_rising,
         max_z_score=max_z,
         trigger_pair=trigger_pair,
         notes=comparison['divergence_note'],

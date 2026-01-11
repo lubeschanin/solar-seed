@@ -160,10 +160,14 @@ class MonitoringDB:
                 phase_experimental TEXT NOT NULL,
                 reason_goes TEXT,
                 reason_experimental TEXT,
+                divergence_type TEXT,
                 goes_flux REAL,
                 goes_class TEXT,
+                goes_rising INTEGER,
                 max_z_score REAL,
                 trigger_pair TEXT,
+                validated INTEGER DEFAULT NULL,
+                validation_type TEXT DEFAULT NULL,
                 flare_within_24h INTEGER DEFAULT NULL,
                 flare_class TEXT DEFAULT NULL,
                 flare_time DATETIME DEFAULT NULL,
@@ -171,6 +175,24 @@ class MonitoringDB:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Add new columns to existing table (migration for existing DBs)
+        try:
+            cursor.execute("ALTER TABLE phase_divergence ADD COLUMN divergence_type TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            cursor.execute("ALTER TABLE phase_divergence ADD COLUMN goes_rising INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE phase_divergence ADD COLUMN validated INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE phase_divergence ADD COLUMN validation_type TEXT")
+        except sqlite3.OperationalError:
+            pass
 
         # Create indices for fast queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_goes_timestamp ON goes_xray(timestamp)")
@@ -327,8 +349,10 @@ class MonitoringDB:
         phase_experimental: str,
         reason_goes: str = None,
         reason_experimental: str = None,
+        divergence_type: str = None,
         goes_flux: float = None,
         goes_class: str = None,
+        goes_rising: bool = None,
         max_z_score: float = None,
         trigger_pair: str = None,
         notes: str = None,
@@ -338,18 +362,23 @@ class MonitoringDB:
 
         Called when GOES-only and ΔMI-integrated classifiers disagree.
         This data enables empirical validation of which classifier is more predictive.
+
+        Args:
+            divergence_type: PRECURSOR, POST_EVENT, or UNCONFIRMED
+            goes_rising: Whether GOES was trending up at time of divergence
         """
         cursor = self.conn.cursor()
         try:
             cursor.execute("""
                 INSERT INTO phase_divergence
                 (timestamp, phase_goes, phase_experimental, reason_goes,
-                 reason_experimental, goes_flux, goes_class, max_z_score,
-                 trigger_pair, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reason_experimental, divergence_type, goes_flux, goes_class,
+                 goes_rising, max_z_score, trigger_pair, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (timestamp, phase_goes, phase_experimental, reason_goes,
-                  reason_experimental, goes_flux, goes_class, max_z_score,
-                  trigger_pair, notes))
+                  reason_experimental, divergence_type, goes_flux, goes_class,
+                  1 if goes_rising else 0 if goes_rising is not None else None,
+                  max_z_score, trigger_pair, notes))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -471,7 +500,20 @@ class MonitoringDB:
         """, (f'-{days} days',))
         overall = dict(cursor.fetchone())
 
-        # By divergence type (which phases disagreed)
+        # By divergence type (PRECURSOR, POST_EVENT, UNCONFIRMED)
+        cursor.execute("""
+            SELECT
+                COALESCE(divergence_type, 'UNKNOWN') as divergence_type,
+                COUNT(*) as count,
+                SUM(CASE WHEN flare_within_24h = 1 THEN 1 ELSE 0 END) as followed_by_flare
+            FROM phase_divergence
+            WHERE timestamp >= datetime('now', ?)
+            GROUP BY divergence_type
+            ORDER BY count DESC
+        """, (f'-{days} days',))
+        by_divergence_type = [dict(row) for row in cursor.fetchall()]
+
+        # By phase pair (which phases disagreed)
         cursor.execute("""
             SELECT
                 phase_goes,
@@ -483,11 +525,12 @@ class MonitoringDB:
             GROUP BY phase_goes, phase_experimental
             ORDER BY count DESC
         """, (f'-{days} days',))
-        by_type = [dict(row) for row in cursor.fetchall()]
+        by_phase_pair = [dict(row) for row in cursor.fetchall()]
 
         return {
             'overall': overall,
-            'by_type': by_type,
+            'by_divergence_type': by_divergence_type,
+            'by_phase_pair': by_phase_pair,
             'days_analyzed': days,
         }
 
@@ -779,8 +822,17 @@ def main():
             print(f"  Days with divergence:  {overall['days_with_divergence']}")
             print(f"  Followed by flare:     {overall['followed_by_flare']}")
             print(f"  No flare after:        {overall['no_flare']}")
+
             print("\n  By divergence type:")
-            for dt in div_stats['by_type']:
+            for dt in div_stats['by_divergence_type']:
+                hit_rate = (dt['followed_by_flare'] / dt['count'] * 100
+                            if dt['count'] > 0 else 0)
+                dtype = dt['divergence_type']
+                marker = "⚡" if dtype == "PRECURSOR" else "🔄" if dtype == "POST_EVENT" else "❓"
+                print(f"    {marker} {dtype:12} ({dt['count']:3}x, {hit_rate:.0f}% flare hit rate)")
+
+            print("\n  By phase pair:")
+            for dt in div_stats['by_phase_pair']:
                 hit_rate = (dt['followed_by_flare'] / dt['count'] * 100
                             if dt['count'] > 0 else 0)
                 print(f"    {dt['phase_goes']:12} → {dt['phase_experimental']:15} "

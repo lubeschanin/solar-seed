@@ -24,11 +24,13 @@ from .constants import (
     MIN_ROI_STD,
     AnomalyLevel,
     Phase,
+    DivergenceType,
     get_anomaly_level,
     classify_phase,
     classify_phase_goes_only,
     classify_phase_experimental,
     classify_phase_parallel,
+    classify_divergence_type,
 )
 from .validation import validate_roi_variance, validate_mi_measurement
 from .detection import (
@@ -58,12 +60,14 @@ __all__ = [
     'MIN_MI_THRESHOLD',
     'MIN_ROI_STD',
     'AnomalyLevel',      # Statistical: NORMAL/ELEVATED/STRONG/EXTREME
-    'Phase',             # Interpretive: BASELINE/PRE-FLARE/FLARE/RECOVERY/POST-FLARE REORG
+    'Phase',             # Interpretive: BASELINE/ELEVATED-QUIET/POST-EVENT/RECOVERY/PRE-FLARE/ACTIVE
+    'DivergenceType',    # PRECURSOR/POST_EVENT/UNCONFIRMED + validation outcomes
     'get_anomaly_level',
     'classify_phase',
     'classify_phase_goes_only',       # Current: GOES-only classification
     'classify_phase_experimental',    # Experimental: ΔMI-integrated
     'classify_phase_parallel',        # Run both and compare
+    'classify_divergence_type',       # Categorize divergences for validation
     # Validation
     'validate_roi_variance',
     'validate_mi_measurement',
