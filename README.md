@@ -246,8 +246,10 @@ This opens a user-friendly menu:
   [3]  Rotation Analysis (segment-based, scalable)
   [4]  Flare Analysis (X9.0 Event)
   [5]  Render Sun Images (download + visualize)
-  [6]  Status: Check running analysis
-  [7]  View Results
+  [6]  Early Warning System (real-time monitoring)
+  [7]  Reports (daily/weekly summary, precursor stats)
+  [8]  Status: Check running analysis
+  [9]  View Results
   [q]  Quit
 ```
 
