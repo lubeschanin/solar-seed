@@ -331,6 +331,60 @@ class TestCouplingMonitor:
         transfer = monitor.detect_transfer_state()
         assert transfer is None
 
+    def test_persistence_no_history(self, monitor):
+        """No history = not persistent."""
+        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
+        assert result is False
+
+    def test_persistence_single_frame(self, monitor):
+        """Single previous frame with break = not persistent (need 2)."""
+        # Add one reading with z_mad > 2.0 (break detected)
+        monitor.add_reading(
+            "2026-01-01T10:00:00",
+            {'193-211': {'delta_mi': 0.5, 'z_mad': 5.0}}  # Break
+        )
+        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
+        # Need 1 previous break (min_frames-1=1), have 1 → persistent
+        assert result is True
+
+    def test_persistence_previous_no_break(self, monitor):
+        """Previous frame had no break = not persistent."""
+        # Add reading WITHOUT break (z_mad < 2.0)
+        monitor.add_reading(
+            "2026-01-01T10:00:00",
+            {'193-211': {'delta_mi': 0.5, 'z_mad': 1.0}}  # No break
+        )
+        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
+        assert result is False
+
+    def test_persistence_vetoed_still_counts(self, monitor):
+        """Vetoed break (is_break=False but z_mad>2) should still count for persistence."""
+        # Add reading where break was DETECTED but VETOED
+        # This tests the fix: we check z_mad, not is_break
+        monitor.add_reading(
+            "2026-01-01T10:00:00",
+            {'193-211': {'delta_mi': 0.5, 'z_mad': 10.0, 'is_break': False, 'break_vetoed': 'spike'}}
+        )
+        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
+        # z_mad > 2.0 → counts as break for persistence
+        assert result is True
+
+    def test_persistence_three_frames(self, monitor):
+        """Three frames required: need 2 previous breaks."""
+        # Add two readings with breaks
+        monitor.add_reading("2026-01-01T10:00:00", {'193-211': {'z_mad': 5.0}})
+        monitor.add_reading("2026-01-01T10:10:00", {'193-211': {'z_mad': 6.0}})
+
+        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=3)
+        # Need 2 previous breaks (min_frames-1=2), have 2 → persistent
+        assert result is True
+
+    def test_persistence_not_current_break(self, monitor):
+        """If current is not a break, return False immediately."""
+        monitor.add_reading("2026-01-01T10:00:00", {'193-211': {'z_mad': 5.0}})
+        result = monitor.is_persistent_break('193-211', current_is_break=False, min_frames=2)
+        assert result is False
+
 
 class TestAlertThresholds:
     """Test that alert thresholds match paper findings."""
