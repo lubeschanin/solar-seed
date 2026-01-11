@@ -298,6 +298,55 @@ uv run python -m solar_seed.visualize --output figures/
 uv run python scripts/stereo_sync_native.py
 ```
 
+## Early Warning System
+
+Real-time space weather monitoring with ΔMI coupling analysis:
+
+```bash
+# Single status check (GOES X-ray + solar wind)
+uv run python scripts/early_warning.py check
+
+# Include coupling analysis
+uv run python scripts/early_warning.py check --coupling
+
+# Include STEREO-A advance warning (~3.9 days ahead)
+uv run python scripts/early_warning.py check --coupling --stereo
+
+# Continuous monitoring (5-minute interval)
+uv run python scripts/early_warning.py monitor --coupling --interval 300
+
+# Database statistics
+uv run python scripts/early_warning.py stats
+
+# Coupling-flare correlations
+uv run python scripts/early_warning.py correlations
+```
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `check` | 🔍 Single status check of all data sources |
+| `monitor` | 📡 Continuous monitoring with periodic updates |
+| `stats` | 📊 Show database statistics |
+| `correlations` | 📈 Show coupling-flare correlations |
+
+**Options:**
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--coupling` | `-c` | Include SDO/AIA coupling analysis |
+| `--stereo` | `-s` | Include STEREO-A EUVI (~3.9 days ahead) |
+| `--interval` | `-i` | Monitoring interval in seconds (default: 60) |
+| `--no-db` | | Disable database storage |
+
+**Data Sources:**
+- GOES X-ray flux (NOAA SWPC) — flare classification
+- DSCOVR solar wind plasma & magnetic field (L1 point)
+- SDO/AIA multichannel coupling — pre-flare detection
+- STEREO-A EUVI (51° ahead) — 2-4 day advance warning
+- NOAA Space Weather Alerts
+
 ## Control Tests
 
 | Test | Purpose | Result |
@@ -359,6 +408,7 @@ figures/
 └── figure9_state_space.png
 
 scripts/
+├── early_warning.py            # Real-time space weather CLI (Typer + Rich)
 ├── figure9_state_space.py      # State-space visualization
 ├── stereo_prototype.py         # STEREO-A/EUVI cross-validation
 ├── stereo_sync_native.py       # Native resolution STEREO analysis
@@ -383,7 +433,18 @@ src/solar_seed/
 ├── flare_analysis.py    # X9.0 flare event analysis
 ├── final_analysis.py    # Timescale + activity + rotation
 ├── visualize.py         # Publication figures
-└── data_loader.py       # Data loading utilities
+├── data_loader.py       # Data loading utilities
+├── monitoring/          # Early warning system components
+│   ├── db.py            # SQLite monitoring database
+│   ├── coupling.py      # CouplingMonitor with baselines
+│   ├── detection.py     # Break detection & classification
+│   ├── formatting.py    # Rich terminal output
+│   ├── validation.py    # Data quality gates
+│   └── constants.py     # Thresholds (MIN_MI, MIN_ROI_STD)
+└── data_sources/        # Data loading modules
+    ├── aia.py           # SDO/AIA full-res via VSO
+    ├── synoptic.py      # AIA synoptic (1k, direct JSOC)
+    └── stereo.py        # STEREO-A/EUVI loader
 ```
 
 ## Limitations
