@@ -1,0 +1,126 @@
+{
+  "event": {
+    "name": "Double Prominence Eruption",
+    "timestamp": "2013-09-13T19:16:15",
+    "description": "Two substantial prominences broke away from the Sun",
+    "source": "STEREO-A EUVI / NASA SOHO Pick of the Week",
+    "significance": "Prominences are cooler plasma (0.05 MK) in magnetic loops"
+  },
+  "analysis_time": "2026-01-10T16:09:22.037758",
+  "channels_loaded": [
+    304,
+    171,
+    193,
+    211,
+    335,
+    94,
+    131
+  ],
+  "coupling": {
+    "304-171": {
+      "delta_mi": 0.01980781369697482,
+      "mi_original": 0.025845257627143514,
+      "local_structure": 0.01980781369697482
+    },
+    "304-193": {
+      "delta_mi": 0.06714612261527364,
+      "mi_original": 0.09506773327227291,
+      "local_structure": 0.06714612261527364
+    },
+    "304-211": {
+      "delta_mi": 0.046168119132781626,
+      "mi_original": 0.08445865443127198,
+      "local_structure": 0.046168119132781626
+    },
+    "304-335": {
+      "delta_mi": 0.03448062466699764,
+      "mi_original": 0.04416123478086664,
+      "local_structure": 0.03448062466699764
+    },
+    "304-94": {
+      "delta_mi": 0.010046886054840443,
+      "mi_original": 0.011189070039304583,
+      "local_structure": 0.010046886054840443
+    },
+    "304-131": {
+      "delta_mi": 0.07619851122059118,
+      "mi_original": 0.09296592258585856,
+      "local_structure": 0.07619851122059118
+    },
+    "171-193": {
+      "delta_mi": 0.16725502906625866,
+      "mi_original": 0.3334277942149315,
+      "local_structure": 0.16725502906625866
+    },
+    "171-211": {
+      "delta_mi": 0.09231226022687622,
+      "mi_original": 0.2330182879205216,
+      "local_structure": 0.09231226022687622
+    },
+    "171-335": {
+      "delta_mi": 0.06906313631019279,
+      "mi_original": 0.0832151674007573,
+      "local_structure": 0.06906313631019279
+    },
+    "171-94": {
+      "delta_mi": 0.05171121457234129,
+      "mi_original": 0.07836190372007801,
+      "local_structure": 0.05171121457234129
+    },
+    "171-131": {
+      "delta_mi": 0.09009504965610615,
+      "mi_original": 0.09851915594686389,
+      "local_structure": 0.09009504965610615
+    },
+    "193-211": {
+      "delta_mi": 0.746197482502911,
+      "mi_original": 1.2086911252416792,
+      "local_structure": 0.746197482502911
+    },
+    "193-335": {
+      "delta_mi": 0.022787678414367463,
+      "mi_original": 0.10837202081906705,
+      "local_structure": 0.022787678414367463
+    },
+    "193-94": {
+      "delta_mi": 0.05641120777922781,
+      "mi_original": 0.09649983997948519,
+      "local_structure": 0.05641120777922781
+    },
+    "193-131": {
+      "delta_mi": 0.15065313651913215,
+      "mi_original": 0.22149071103547957,
+      "local_structure": 0.15065313651913215
+    },
+    "211-335": {
+      "delta_mi": 0.2760642492469563,
+      "mi_original": 0.2947021898979436,
+      "local_structure": 0.2760642492469563
+    },
+    "211-94": {
+      "delta_mi": 0.03779824356127204,
+      "mi_original": 0.06949611731702321,
+      "local_structure": 0.03779824356127204
+    },
+    "211-131": {
+      "delta_mi": 0.18533956387002082,
+      "mi_original": 0.27882403677632794,
+      "local_structure": 0.18533956387002082
+    },
+    "335-94": {
+      "delta_mi": 0.04205586890053714,
+      "mi_original": 0.048853845674604934,
+      "local_structure": 0.04205586890053714
+    },
+    "335-131": {
+      "delta_mi": 0.10795098708870232,
+      "mi_original": 0.13575612809455317,
+      "local_structure": 0.10795098708870232
+    },
+    "94-131": {
+      "delta_mi": 0.04834291400644286,
+      "mi_original": 0.05369706538825403,
+      "local_structure": 0.04834291400644286
+    }
+  }
+}

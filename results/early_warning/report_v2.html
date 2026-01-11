@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset='utf-8'>
+<title>Solar Early Warning Report</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
+h1 { color: #2c3e50; border-bottom: 2px solid #e67e22; padding-bottom: 10px; }
+h2 { color: #34495e; margin-top: 30px; }
+table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+th { background-color: #3498db; color: white; }
+tr:nth-child(even) { background-color: #f9f9f9; }
+tr:hover { background-color: #f5f5f5; }
+.metric-good { color: #27ae60; font-weight: bold; }
+.metric-bad { color: #e74c3c; font-weight: bold; }
+.alert { background-color: #ffebee; }
+.warning { background-color: #fff3e0; }
+</style>
+</head><body>
+<h1>Solar Early Warning Report</h1>
+<p>Generated: 2026-01-10 21:05:21 UTC</p>
+<p>Period: 2026-01-03 to 2026-01-10 (7 days)</p>
+<h2>Summary</h2>
+<table>
+<tr><th>Metric</th><th>Value</th></tr>
+<tr><td>GOES Measurements</td><td>28</td></tr>
+<tr><td>Coupling Measurements</td><td>58</td></tr>
+<tr><td>Channel Pairs Monitored</td><td>2</td></tr>
+<tr><td>Total Alerts</td><td>0</td></tr>
+<tr><td>Total Warnings</td><td>1</td></tr>
+</table>
+<h2>Flare Activity</h2>
+<table>
+<tr><th>Class</th><th>Count</th></tr>
+</table>
+<h2>Coupling Analysis by Channel Pair</h2>
+<table>
+<tr><th>Pair</th><th>Measurements</th><th>Avg ΔMI</th><th>Min</th><th>Max</th><th>Alerts</th><th>Warnings</th></tr>
+<tr><td>193-211</td><td>29</td><td>0.832</td><td>0.488</td><td>1.022</td><td>0</td><td>1</td></tr>
+<tr><td>193-304</td><td>29</td><td>0.144</td><td>0.099</td><td>0.201</td><td>0</td><td>0</td></tr>
+</table>
+<h2>Precursor Detection Statistics</h2>
+<p>Detection window: 0.5 - 6.0 hours after break</p>
+<h3>Break Classification</h3>
+<table>
+<tr><td>Category</td><td>Count</td><td>Definition</td></tr>
+<tr><td>Break Candidates</td><td>1</td><td>ΔMI < median − 2×MAD</td></tr>
+<tr><td>Diagnostic Anomalies</td><td>1</td><td>Candidate, vetoed or sub-threshold</td></tr>
+<tr><td>Actionable Alerts</td><td>0</td><td>Validated + trigger enabled</td></tr>
+</table>
+<h3>Performance Metrics (Actionable Alerts only)</h3>
+<table>
+<tr><th>Metric</th><th>Value</th></tr>
+<tr><td>Total Flares (C+)</td><td>8</td></tr>
+<tr><td>True Positives (TP)</td><td>0</td></tr>
+<tr><td>False Positives (FP)</td><td>0</td></tr>
+<tr><td>False Negatives (FN)</td><td>8</td></tr>
+<tr><td>Precision</td><td>N/A</td></tr>
+<tr><td class='metric-good'>Recall (structural)</td><td>0.0%</td></tr>
+<tr><td>F1 Score</td><td>N/A</td></tr>
+</table>
+<blockquote>Note: Low recall is expected. This system detects structural reconfiguration precursors, not all flares. Only magnetically-mediated events with observable coupling signatures are in scope.</blockquote>
+<h3>Flare Scope Classification</h3>
+<table>
+<tr><th>Time</th><th>Class</th><th>Scope</th></tr>
+<tr><td>2026-01-10T19:47:00Z</td><td>C1</td><td>NO PRECURSOR (out of scope)</td></tr>
+<tr><td>2026-01-10T19:58:00Z</td><td>C1</td><td>NO PRECURSOR (out of scope)</td></tr>
+<tr><td>2026-01-10T20:09:00Z</td><td>C2</td><td>NO PRECURSOR (out of scope)</td></tr>
+<tr><td>2026-01-10T20:20:00Z</td><td>C3</td><td>NO PRECURSOR (out of scope)</td></tr>
+<tr><td>2026-01-10T20:31:00Z</td><td>C1</td><td>NO PRECURSOR (out of scope)</td></tr>
+<tr><td>2026-01-10T20:41:00Z</td><td>C1</td><td>NO PRECURSOR (out of scope)</td></tr>
+<tr><td>2026-01-10T20:44:00Z</td><td>C1</td><td>NO PRECURSOR (out of scope)</td></tr>
+<tr><td>2026-01-10T20:51:00Z</td><td>C1</td><td>NO PRECURSOR (out of scope)</td></tr>
+</table>
+<p>Summary: 0 in-scope, 8 out-of-scope</p>
+<h2>Daily Breakdown</h2>
+<table>
+<tr><th>Date</th><th>Measurements</th><th>Avg ΔMI</th><th>Alerts</th><th>Warnings</th></tr>
+<tr><td>2026-01-10</td><td>58</td><td>0.488</td><td>0</td><td>1</td></tr>
+</table>
+<h2>Recent Events (Last 24h)</h2>
+<table>
+<tr><th>Time</th><th>Type</th><th>Details</th></tr>
+<tr><td>2026-01-10T20:51:00Z</td><td>FLARE C1</td><td>flux=1.07e-06 W/m²</td></tr>
+<tr><td>2026-01-10T20:44:00Z</td><td>FLARE C1</td><td>flux=1.30e-06 W/m²</td></tr>
+<tr><td>2026-01-10T20:41:00Z</td><td>FLARE C1</td><td>flux=1.43e-06 W/m²</td></tr>
+<tr><td>2026-01-10T20:31:00Z</td><td>FLARE C1</td><td>flux=1.87e-06 W/m²</td></tr>
+<tr><td>2026-01-10T20:20:00Z</td><td>FLARE C3</td><td>flux=2.98e-06 W/m²</td></tr>
+<tr><td>2026-01-10T20:09:00Z</td><td>FLARE C2</td><td>flux=2.24e-06 W/m²</td></tr>
+<tr class='warning'><td>2026-01-10T20:02:02</td><td>DIAGNOSTIC (VETOED)</td><td>193-211: ΔMI=0.488, dev=-0.2%</td></tr>
+<tr><td>2026-01-10T19:58:00Z</td><td>FLARE C1</td><td>flux=1.34e-06 W/m²</td></tr>
+<tr><td>2026-01-10T19:47:00Z</td><td>FLARE C1</td><td>flux=1.54e-06 W/m²</td></tr>
+</table>
+<h2>Interpretation Guide</h2>
+<h3>Break Classification</h3>
+<li><strong>Break Candidate</strong>: ΔMI dropped below median − 2×MAD threshold</li>
+<li><strong>Diagnostic Anomaly</strong>: Candidate that failed validation or below trigger threshold (vetoed ≠ blind)</li>
+<li><strong>Actionable Alert</strong>: Fully validated break with trigger enabled</li>
+<h3>Performance Metrics</h3>
+<li><strong>Precision</strong>: Of actionable alerts, what fraction preceded a flare? (Higher = fewer false alarms)</li>
+<li><strong>Recall (structural)</strong>: Of flares with structural precursors, what fraction were detected? (Low values expected)</li>
+<li><strong>F1 Score</strong>: Harmonic mean of Precision and Recall</li>
+<li><strong>Lead Time</strong>: Time between alert and flare onset (meaningful only for N≥3)</li>
+<h3>Important Notes</h3>
+<li>This is a <strong>structural precursor detector</strong>, not a flare detector</li>
+<li>Low recall is expected: only flares with magnetically-mediated coupling signatures are in scope</li>
+<li>Diagnostic anomalies remain interpretable even when alerts are vetoed</li>
+</body></html>
