@@ -150,6 +150,28 @@ class MonitoringDB:
             )
         """)
 
+        # Phase classifier divergence events
+        # Tracks when GOES-only and ΔMI-integrated classifiers disagree
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS phase_divergence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME NOT NULL,
+                phase_goes TEXT NOT NULL,
+                phase_experimental TEXT NOT NULL,
+                reason_goes TEXT,
+                reason_experimental TEXT,
+                goes_flux REAL,
+                goes_class TEXT,
+                max_z_score REAL,
+                trigger_pair TEXT,
+                flare_within_24h INTEGER DEFAULT NULL,
+                flare_class TEXT DEFAULT NULL,
+                flare_time DATETIME DEFAULT NULL,
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Create indices for fast queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_goes_timestamp ON goes_xray(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_wind_timestamp ON solar_wind(timestamp)")
@@ -159,6 +181,8 @@ class MonitoringDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_time ON flare_events(start_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_class ON flare_events(class)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_time ON predictions(prediction_time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_timestamp ON phase_divergence(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_phases ON phase_divergence(phase_goes, phase_experimental)")
 
         self.conn.commit()
 
@@ -296,6 +320,42 @@ class MonitoringDB:
             print(f"Error inserting NOAA alert: {e}")
             return -1
 
+    def insert_phase_divergence(
+        self,
+        timestamp: str,
+        phase_goes: str,
+        phase_experimental: str,
+        reason_goes: str = None,
+        reason_experimental: str = None,
+        goes_flux: float = None,
+        goes_class: str = None,
+        max_z_score: float = None,
+        trigger_pair: str = None,
+        notes: str = None,
+    ) -> int:
+        """
+        Insert a phase divergence event.
+
+        Called when GOES-only and ΔMI-integrated classifiers disagree.
+        This data enables empirical validation of which classifier is more predictive.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO phase_divergence
+                (timestamp, phase_goes, phase_experimental, reason_goes,
+                 reason_experimental, goes_flux, goes_class, max_z_score,
+                 trigger_pair, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, phase_goes, phase_experimental, reason_goes,
+                  reason_experimental, goes_flux, goes_class, max_z_score,
+                  trigger_pair, notes))
+            self.conn.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as e:
+            print(f"Error inserting phase divergence: {e}")
+            return -1
+
     # =========================================================================
     # QUERY METHODS
     # =========================================================================
@@ -380,6 +440,116 @@ class MonitoringDB:
             ORDER BY f.start_time DESC, hours_before_flare ASC
         """, (f'-{hours_before} hours',))
         return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_divergences(self, hours: int = 24) -> list[dict]:
+        """Get recent phase divergence events."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM phase_divergence
+            WHERE timestamp >= datetime('now', ?)
+            ORDER BY timestamp DESC
+        """, (f'-{hours} hours',))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_divergence_statistics(self, days: int = 7) -> dict:
+        """
+        Calculate divergence statistics for classifier comparison.
+
+        Returns counts of divergence types and correlation with flares.
+        """
+        cursor = self.conn.cursor()
+
+        # Overall counts
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_divergences,
+                COUNT(DISTINCT date(timestamp)) as days_with_divergence,
+                SUM(CASE WHEN flare_within_24h = 1 THEN 1 ELSE 0 END) as followed_by_flare,
+                SUM(CASE WHEN flare_within_24h = 0 THEN 1 ELSE 0 END) as no_flare
+            FROM phase_divergence
+            WHERE timestamp >= datetime('now', ?)
+        """, (f'-{days} days',))
+        overall = dict(cursor.fetchone())
+
+        # By divergence type (which phases disagreed)
+        cursor.execute("""
+            SELECT
+                phase_goes,
+                phase_experimental,
+                COUNT(*) as count,
+                SUM(CASE WHEN flare_within_24h = 1 THEN 1 ELSE 0 END) as followed_by_flare
+            FROM phase_divergence
+            WHERE timestamp >= datetime('now', ?)
+            GROUP BY phase_goes, phase_experimental
+            ORDER BY count DESC
+        """, (f'-{days} days',))
+        by_type = [dict(row) for row in cursor.fetchall()]
+
+        return {
+            'overall': overall,
+            'by_type': by_type,
+            'days_analyzed': days,
+        }
+
+    def get_divergences_before_flares(self, hours_before: int = 24) -> list[dict]:
+        """
+        Find divergence events that occurred before flares.
+
+        This is the KEY analysis: do divergences predict flares?
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT
+                d.id as divergence_id,
+                d.timestamp as divergence_time,
+                d.phase_goes,
+                d.phase_experimental,
+                d.max_z_score,
+                d.goes_class as goes_at_divergence,
+                f.id as flare_id,
+                f.class as flare_class,
+                f.magnitude as flare_magnitude,
+                f.start_time as flare_time,
+                (julianday(f.start_time) - julianday(d.timestamp)) * 24 as hours_before_flare
+            FROM phase_divergence d
+            JOIN flare_events f
+                ON f.start_time BETWEEN d.timestamp
+                                    AND datetime(d.timestamp, ?)
+            WHERE f.class IN ('C', 'M', 'X')
+            ORDER BY d.timestamp DESC
+        """, (f'+{hours_before} hours',))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_divergence_with_flare(self, divergence_id: int, flare_class: str,
+                                      flare_time: str) -> bool:
+        """Update a divergence record with subsequent flare info."""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                UPDATE phase_divergence
+                SET flare_within_24h = 1, flare_class = ?, flare_time = ?
+                WHERE id = ?
+            """, (flare_class, flare_time, divergence_id))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Error updating divergence: {e}")
+            return False
+
+    def mark_divergence_no_flare(self, divergence_id: int) -> bool:
+        """Mark a divergence as having no subsequent flare (for validation)."""
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                UPDATE phase_divergence
+                SET flare_within_24h = 0
+                WHERE id = ?
+            """, (divergence_id,))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Error updating divergence: {e}")
+            return False
 
     def get_prediction_accuracy(self) -> dict:
         """Calculate prediction accuracy statistics."""
@@ -532,7 +702,7 @@ class MonitoringDB:
 
         stats = {}
         tables = ['goes_xray', 'solar_wind', 'coupling_measurements',
-                  'flare_events', 'predictions', 'noaa_alerts']
+                  'flare_events', 'predictions', 'noaa_alerts', 'phase_divergence']
 
         for table in tables:
             cursor.execute(f"SELECT COUNT(*) FROM {table}")
@@ -567,6 +737,8 @@ def main():
     parser.add_argument('--import-json', type=str, help='Import from JSON history file')
     parser.add_argument('--accuracy', action='store_true', help='Show prediction accuracy')
     parser.add_argument('--alerts', type=int, default=0, help='Show alert rate for N days')
+    parser.add_argument('--divergence', type=int, default=0,
+                        help='Show phase divergence analysis for N days')
     args = parser.parse_args()
 
     with MonitoringDB() as db:
@@ -597,6 +769,22 @@ def main():
             print("  " + "-" * 40)
             for day in rates:
                 print(f"  {day['date']}: {day['alerts']} alerts, {day['warnings']} warnings")
+
+        if args.divergence > 0:
+            div_stats = db.get_divergence_statistics(days=args.divergence)
+            print(f"\n  Phase Divergence Analysis (last {args.divergence} days):")
+            print("  " + "-" * 50)
+            overall = div_stats['overall']
+            print(f"  Total divergences:     {overall['total_divergences']}")
+            print(f"  Days with divergence:  {overall['days_with_divergence']}")
+            print(f"  Followed by flare:     {overall['followed_by_flare']}")
+            print(f"  No flare after:        {overall['no_flare']}")
+            print("\n  By divergence type:")
+            for dt in div_stats['by_type']:
+                hit_rate = (dt['followed_by_flare'] / dt['count'] * 100
+                            if dt['count'] > 0 else 0)
+                print(f"    {dt['phase_goes']:12} → {dt['phase_experimental']:15} "
+                      f"({dt['count']:3}x, {hit_rate:.0f}% flare hit rate)")
 
 
 if __name__ == "__main__":

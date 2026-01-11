@@ -62,29 +62,63 @@ class Phase:
     FLARE = 'FLARE'                           # Active flare (high GOES flux)
     RECOVERY = 'RECOVERY'                     # Post-peak decay
     POST_FLARE_REORG = 'POST-FLARE REORG'     # Chromosphere coupling high + corona stable
+    ELEVATED = 'ELEVATED'                     # ΔMI anomaly (experimental only)
+    POST_EVENT = 'POST-EVENT'                 # GOES quiet but ΔMI elevated (experimental)
 
 
-def classify_phase(
+# =============================================================================
+# PHASE CLASSIFICATION: GOES-ONLY (Current Standard)
+# =============================================================================
+
+def classify_phase_goes_only(
+    goes_flux: float = None,
+    goes_rising: bool = None,
+    goes_class: str = None,
+) -> tuple[str, str]:
+    """
+    Classify phase using ONLY GOES X-ray data (traditional approach).
+
+    This is the current operational standard - simple flux thresholds.
+
+    Returns:
+        (phase, reason) tuple
+    """
+    if goes_flux is None:
+        return Phase.BASELINE, "No GOES data"
+
+    # M/X-class = definitely active
+    if goes_flux >= 1e-5:
+        return Phase.FLARE, f"M/X-class active ({goes_class})"
+
+    # C-class + rising = flare in progress
+    if goes_flux >= 5e-6 and goes_rising:
+        return Phase.FLARE, f"C-class flare ({goes_class})"
+
+    # C-class falling = recovery
+    if goes_flux >= 1e-6 and not goes_rising:
+        return Phase.RECOVERY, f"Post-flare decay ({goes_class})"
+
+    # B-class or below = quiet
+    return Phase.BASELINE, f"Quiet ({goes_class or 'B-class'})"
+
+
+# =============================================================================
+# PHASE CLASSIFICATION: EXPERIMENTAL (ΔMI-integrated)
+# =============================================================================
+
+def classify_phase_experimental(
     pairs_data: dict,
     goes_flux: float = None,
     goes_rising: bool = None,
     goes_class: str = None,
 ) -> tuple[str, str]:
     """
-    Classify current phase based on multiple indicators.
+    Experimental phase classification integrating ΔMI coupling residuals.
 
-    Rules:
-    - FLARE: GOES >= M-class (1e-5) or C5+ during rise
-    - PRE-FLARE: Multiple pairs with negative z AND GOES rising
-    - POST-FLARE REORG: 193-304 elevated/strong positive z AND 193-211 stable
-    - RECOVERY: GOES falling after elevated activity
-    - BASELINE: Otherwise
-
-    Args:
-        pairs_data: Dict of pair -> {residual, delta_mi, trend, ...}
-        goes_flux: Current GOES X-ray flux (W/m²)
-        goes_rising: Whether GOES is trending upward
-        goes_class: Flare class string (e.g., "M2.5", "C3.0")
+    This approach hypothesizes that:
+    - Coupling breaks precede flares by 0.5-2h
+    - Post-event reorganization is visible in ΔMI even when GOES is quiet
+    - Coupling anomalies may be early warning indicators
 
     Returns:
         (phase, reason) tuple
@@ -95,31 +129,86 @@ def classify_phase(
     trend_211 = pairs_data.get('193-211', {}).get('slope_pct_per_hour', 0)
     trend_304 = pairs_data.get('193-304', {}).get('slope_pct_per_hour', 0)
 
+    # Maximum absolute z-score across pairs
+    max_z = max(abs(pairs_data.get(p, {}).get('residual', 0))
+                for p in pairs_data if not p.startswith('_'))
+
     # Count negative anomalies (potential destabilization)
     neg_anomalies = sum(1 for p, d in pairs_data.items()
                         if not p.startswith('_') and d.get('residual', 0) < -2)
 
-    # Rule 1: FLARE - high GOES activity
-    if goes_flux and goes_flux >= 1e-5:  # M-class
+    # Rule 1: FLARE - high GOES activity (same as GOES-only)
+    if goes_flux and goes_flux >= 1e-5:
         return Phase.FLARE, f"M/X-class active ({goes_class})"
-    if goes_flux and goes_flux >= 5e-6 and goes_rising:  # C5+ and rising
-        return Phase.FLARE, f"C-class flare in progress ({goes_class})"
+    if goes_flux and goes_flux >= 5e-6 and goes_rising:
+        return Phase.FLARE, f"C-class flare ({goes_class})"
 
-    # Rule 2: PRE-FLARE - destabilization signature
+    # Rule 2: PRE-FLARE - destabilization signature (ΔMI specific)
     if neg_anomalies >= 1 and goes_rising:
-        return Phase.PRE_FLARE, f"{neg_anomalies} pair(s) destabilizing + GOES rising"
-    if z_211 < -2 and trend_211 < -3:  # Strong negative trend in coronal core
-        return Phase.PRE_FLARE, f"Coronal decoupling (z={z_211:.1f}σ, {trend_211:+.1f}%/h)"
+        return Phase.PRE_FLARE, f"{neg_anomalies} pair(s) destabilizing + GOES ↑"
+    if z_211 < -2 and trend_211 < -3:
+        return Phase.PRE_FLARE, f"Coronal decoupling ({z_211:.1f}σ, {trend_211:+.1f}%/h)"
 
-    # Rule 3: POST-FLARE REORGANIZATION
-    # Chromosphere-corona link strengthening while coronal core stable
-    if z_304 > 4 and abs(z_211) < 3 and trend_304 > 0:
-        return Phase.POST_FLARE_REORG, f"Chromosphere coupling elevated (+{z_304:.1f}σ)"
+    # Rule 3: POST-EVENT - GOES quiet but ΔMI still anomalous
+    # This is a KEY experimental hypothesis: we see something GOES doesn't
+    if goes_flux and goes_flux < 1e-6:  # GOES says quiet (B-class)
+        if max_z > 5:
+            return Phase.POST_EVENT, f"GOES quiet, coupling {max_z:.1f}σ"
+        if z_304 > 4 and trend_304 > 0:
+            return Phase.POST_FLARE_REORG, f"Chromosphere restructuring (+{z_304:.1f}σ)"
 
-    # Rule 4: RECOVERY - decaying from elevated
+    # Rule 4: ELEVATED - significant ΔMI anomaly even without GOES confirmation
+    if max_z > 4:
+        direction = "+" if z_211 > 0 else ""
+        return Phase.ELEVATED, f"max(|r|) = {max_z:.1f}σ ({direction}{z_211:.1f}σ @ 193-211)"
+
+    # Rule 5: RECOVERY
     if goes_flux and 1e-6 < goes_flux < 5e-6 and not goes_rising:
-        if goes_class and goes_class[0] in ['B', 'C']:
-            return Phase.RECOVERY, f"Post-flare decay ({goes_class})"
+        return Phase.RECOVERY, f"Post-flare decay ({goes_class})"
 
-    # Rule 5: BASELINE - normal conditions
+    # Rule 6: BASELINE
     return Phase.BASELINE, "Quiet conditions"
+
+
+def classify_phase_parallel(
+    pairs_data: dict,
+    goes_flux: float = None,
+    goes_rising: bool = None,
+    goes_class: str = None,
+) -> dict:
+    """
+    Run both phase classifiers in parallel and report divergence.
+
+    Returns dict with:
+        - current: (phase, reason) from GOES-only
+        - experimental: (phase, reason) from ΔMI-integrated
+        - is_divergent: bool
+        - divergence_note: str explaining the divergence
+    """
+    current = classify_phase_goes_only(goes_flux, goes_rising, goes_class)
+    experimental = classify_phase_experimental(pairs_data, goes_flux, goes_rising, goes_class)
+
+    is_divergent = current[0] != experimental[0]
+
+    if is_divergent:
+        divergence_note = f"GOES says {current[0]}, ΔMI says {experimental[0]}"
+    else:
+        divergence_note = "Both classifiers agree"
+
+    return {
+        'current': current,
+        'experimental': experimental,
+        'is_divergent': is_divergent,
+        'divergence_note': divergence_note,
+    }
+
+
+# Legacy alias for backward compatibility
+def classify_phase(
+    pairs_data: dict,
+    goes_flux: float = None,
+    goes_rising: bool = None,
+    goes_class: str = None,
+) -> tuple[str, str]:
+    """Legacy function - returns experimental classification."""
+    return classify_phase_experimental(pairs_data, goes_flux, goes_rising, goes_class)

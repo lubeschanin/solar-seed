@@ -26,6 +26,9 @@ from .constants import (
     Phase,
     get_anomaly_level,
     classify_phase,
+    classify_phase_goes_only,
+    classify_phase_experimental,
+    classify_phase_parallel,
 )
 from .validation import validate_roi_variance, validate_mi_measurement
 from .detection import (
@@ -58,6 +61,9 @@ __all__ = [
     'Phase',             # Interpretive: BASELINE/PRE-FLARE/FLARE/RECOVERY/POST-FLARE REORG
     'get_anomaly_level',
     'classify_phase',
+    'classify_phase_goes_only',       # Current: GOES-only classification
+    'classify_phase_experimental',    # Experimental: ΔMI-integrated
+    'classify_phase_parallel',        # Run both and compare
     # Validation
     'validate_roi_variance',
     'validate_mi_measurement',

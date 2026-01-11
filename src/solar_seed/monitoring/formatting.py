@@ -15,7 +15,10 @@ from rich.columns import Columns
 from rich.style import Style
 from rich import box
 
-from .constants import AnomalyLevel, Phase, get_anomaly_level, classify_phase
+from .constants import (
+    AnomalyLevel, Phase, get_anomaly_level,
+    classify_phase, classify_phase_parallel,
+)
 from .relevance import assess_personal_relevance, get_subsolar_point, LOCATIONS
 
 
@@ -43,6 +46,8 @@ class StatusFormatter:
         Phase.FLARE: Style(color="bright_red", bold=True),
         Phase.RECOVERY: Style(color="yellow"),
         Phase.POST_FLARE_REORG: Style(color="cyan"),
+        Phase.ELEVATED: Style(color="bright_yellow", bold=True),
+        Phase.POST_EVENT: Style(color="magenta", bold=True),
     }
 
     PHASE_ICONS = {
@@ -51,6 +56,8 @@ class StatusFormatter:
         Phase.FLARE: '🔴',
         Phase.RECOVERY: '🟡',
         Phase.POST_FLARE_REORG: '🔵',
+        Phase.ELEVATED: '🟠',
+        Phase.POST_EVENT: '🟣',
     }
 
     TREND_ICONS = {
@@ -173,13 +180,13 @@ class StatusFormatter:
         n_warn = quality.get('n_warnings', 0)
         quality_text = "[green]✓ GOOD[/]" if n_warn == 0 else f"[yellow]⚠ {n_warn} warning(s)[/]"
 
-        # Classify phase based on all pair data
+        # Classify phase using BOTH classifiers in parallel
         goes_flux = xray.get('flux') if xray else None
         goes_rising = xray.get('rising', False) if xray else None
         goes_class = xray.get('flare_class') if xray else None
 
         pairs_data = {k: v for k, v in coupling.items() if not k.startswith('_')}
-        phase, phase_reason = classify_phase(pairs_data, goes_flux, goes_rising, goes_class)
+        phase_comparison = classify_phase_parallel(pairs_data, goes_flux, goes_rising, goes_class)
 
         # Build coupling table with Anomaly column
         table = Table(
@@ -242,14 +249,75 @@ class StatusFormatter:
         panel = Panel(table, title="📊 ΔMI COUPLING MONITOR", border_style="magenta", subtitle="[dim]Pre-Flare Detection[/]")
         self.console.print(panel)
 
-        # Print phase panel (interpretive)
-        self._print_phase(phase, phase_reason)
+        # Print parallel phase comparison panel
+        self._print_phase_comparison(phase_comparison)
 
         # Show alerts if any
         self._print_alerts(coupling, AnomalyStatus, BreakType)
 
+    def _print_phase_comparison(self, comparison: dict):
+        """Print parallel phase comparison panel showing both classifiers."""
+        current_phase, current_reason = comparison['current']
+        exp_phase, exp_reason = comparison['experimental']
+        is_divergent = comparison['is_divergent']
+
+        # Build side-by-side content using columns
+        # Left panel: CURRENT (GOES-only)
+        current_icon = self.PHASE_ICONS.get(current_phase, '❓')
+        current_style = self.PHASE_STYLES.get(current_phase, Style())
+
+        left_text = Text()
+        left_text.append("CURRENT (GOES-only)\n", style="bold dim")
+        left_text.append("─" * 28 + "\n", style="dim")
+        left_text.append(f"{current_icon} ", style="bold")
+        left_text.append(f"{current_phase}\n", style=current_style)
+        left_text.append(f"{current_reason}\n\n", style="dim")
+        left_text.append("Rule: GOES flux thresholds", style="dim italic")
+
+        # Right panel: EXPERIMENTAL (ΔMI-integrated)
+        exp_icon = self.PHASE_ICONS.get(exp_phase, '❓')
+        exp_style = self.PHASE_STYLES.get(exp_phase, Style())
+
+        right_text = Text()
+        right_text.append("EXPERIMENTAL (ΔMI-integrated)\n", style="bold dim")
+        right_text.append("─" * 28 + "\n", style="dim")
+        right_text.append(f"{exp_icon} ", style="bold")
+        right_text.append(f"{exp_phase}\n", style=exp_style)
+        right_text.append(f"{exp_reason}\n\n", style="dim")
+        right_text.append("Rule: max(|r|) + GOES", style="dim italic")
+
+        # Create two panels side by side
+        left_panel = Panel(left_text, border_style="blue", box=box.ROUNDED, width=35)
+        right_panel = Panel(right_text, border_style="magenta", box=box.ROUNDED, width=35)
+
+        columns = Columns([left_panel, right_panel], padding=(0, 2))
+
+        # Divergence status line
+        if is_divergent:
+            status_line = Text()
+            status_line.append("\nStatus: ", style="dim")
+            status_line.append("⚠️ DIVERGENT", style="bold yellow")
+            status_line.append(f" ({comparison['divergence_note']})", style="yellow")
+            border_style = "yellow"
+        else:
+            status_line = Text()
+            status_line.append("\nStatus: ", style="dim")
+            status_line.append("✓ CONSISTENT", style="green")
+            border_style = "green"
+
+        # Combine columns and status
+        from rich.console import Group
+        content = Group(columns, status_line)
+
+        self.console.print(Panel(
+            content,
+            title="🎯 PHASE COMPARISON",
+            border_style=border_style,
+            subtitle="[dim]Parallel classifier validation[/]",
+        ))
+
     def _print_phase(self, phase: str, reason: str):
-        """Print interpretive phase panel."""
+        """Print single interpretive phase panel (legacy)."""
         phase_style = self.PHASE_STYLES.get(phase, Style())
         phase_icon = self.PHASE_ICONS.get(phase, '❓')
 

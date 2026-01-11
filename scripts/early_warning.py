@@ -86,6 +86,7 @@ from solar_seed.monitoring import (
     compute_robustness_check,
     classify_break_type,
     classify_anomaly_status,
+    classify_phase_parallel,
     StatusFormatter,
 )
 from solar_seed.data_sources import (
@@ -360,7 +361,7 @@ def store_solar_wind_reading(solar_wind: dict, risk: str, risk_level: int):
         )
 
 
-def store_coupling_reading(timestamp: str, coupling: dict):
+def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
     """Store coupling measurements in database."""
     if not coupling:
         return
@@ -384,6 +385,61 @@ def store_coupling_reading(timestamp: str, coupling: dict):
             confidence=data.get('confidence'),
             n_points=data.get('n_points')
         )
+
+    # Check and log phase divergence
+    check_and_log_divergence(timestamp, coupling, xray, db)
+
+
+def check_and_log_divergence(timestamp: str, coupling: dict, xray: dict, db: MonitoringDB):
+    """
+    Check for phase classifier divergence and log to database.
+
+    This enables empirical validation: do divergences predict flares?
+    """
+    # Extract GOES info
+    goes_flux = xray.get('flux') if xray else None
+    goes_rising = xray.get('rising', False) if xray else None
+    goes_class = xray.get('flare_class') if xray else None
+
+    # Build pairs data for phase classification
+    pairs_data = {k: v for k, v in coupling.items() if not k.startswith('_')}
+
+    # Skip if no pairs data
+    if not pairs_data:
+        return
+
+    # Run parallel classification
+    comparison = classify_phase_parallel(pairs_data, goes_flux, goes_rising, goes_class)
+
+    # Only log if divergent
+    if not comparison['is_divergent']:
+        return
+
+    # Find max z-score and trigger pair
+    max_z = 0
+    trigger_pair = None
+    for pair, data in pairs_data.items():
+        z = abs(data.get('residual', 0))
+        if z > max_z:
+            max_z = z
+            trigger_pair = pair
+
+    # Log divergence event
+    phase_goes, reason_goes = comparison['current']
+    phase_exp, reason_exp = comparison['experimental']
+
+    db.insert_phase_divergence(
+        timestamp=timestamp,
+        phase_goes=phase_goes,
+        phase_experimental=phase_exp,
+        reason_goes=reason_goes,
+        reason_experimental=reason_exp,
+        goes_flux=goes_flux,
+        goes_class=goes_class,
+        max_z_score=max_z,
+        trigger_pair=trigger_pair,
+        notes=comparison['divergence_note'],
+    )
 
 
 def run_stereo_coupling_analysis() -> dict | None:
@@ -806,10 +862,10 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: b
             if not _shutdown_requested:
                 coupling = run_coupling_analysis(xray=xray)
                 last_coupling = time.time()
-                # Store coupling
+                # Store coupling and check for divergence
                 if store_db and coupling:
                     now = datetime.now(timezone.utc)
-                    store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling)
+                    store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling, xray)
 
         if _shutdown_requested:
             break
@@ -970,7 +1026,7 @@ def check(
             coupling_data = run_coupling_analysis(xray=xray)
             if store_db and coupling_data:
                 now = datetime.now(timezone.utc)
-                store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling_data)
+                store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling_data, xray)
 
         stereo_data = None
         if stereo and not minimal:
