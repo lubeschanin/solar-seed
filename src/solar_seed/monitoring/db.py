@@ -470,6 +470,110 @@ class MonitoringDB:
         """, (f'-{hours_before} hours',))
         return [dict(row) for row in cursor.fetchall()]
 
+    def extract_flare_events_from_goes(self, min_class: str = 'C', gap_minutes: int = 30) -> int:
+        """
+        Extract discrete flare events from GOES X-ray measurements.
+
+        Identifies periods of elevated flux, groups consecutive readings,
+        and stores as flare_events.
+
+        Args:
+            min_class: Minimum flare class to extract ('C', 'M', or 'X')
+            gap_minutes: Max gap between readings to consider same event
+
+        Returns:
+            Number of flare events extracted
+        """
+        from datetime import datetime, timedelta
+
+        # Flux thresholds by class
+        thresholds = {'C': 1e-6, 'M': 1e-5, 'X': 1e-4}
+        min_flux = thresholds.get(min_class, 1e-6)
+
+        cursor = self.conn.cursor()
+
+        # Get all GOES readings above threshold, ordered by time
+        cursor.execute("""
+            SELECT timestamp, flux, flare_class
+            FROM goes_xray
+            WHERE flux >= ?
+            ORDER BY timestamp
+        """, (min_flux,))
+
+        readings = cursor.fetchall()
+        if not readings:
+            return 0
+
+        # Group into events based on time gaps
+        events = []
+        current_event = []
+
+        for i, row in enumerate(readings):
+            ts = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
+
+            if not current_event:
+                current_event = [(ts, row['flux'], row['flare_class'])]
+            else:
+                last_ts = current_event[-1][0]
+                gap = (ts - last_ts).total_seconds() / 60
+
+                if gap <= gap_minutes:
+                    current_event.append((ts, row['flux'], row['flare_class']))
+                else:
+                    # Save current event and start new one
+                    events.append(current_event)
+                    current_event = [(ts, row['flux'], row['flare_class'])]
+
+        # Don't forget last event
+        if current_event:
+            events.append(current_event)
+
+        # Extract event properties and insert
+        inserted = 0
+        for event in events:
+            if len(event) < 1:
+                continue
+
+            # Find peak
+            peak_idx = max(range(len(event)), key=lambda i: event[i][1])
+            peak_ts, peak_flux, peak_class = event[peak_idx]
+
+            start_ts = event[0][0]
+            end_ts = event[-1][0]
+
+            # Parse class and magnitude
+            flare_class = peak_class[0] if peak_class else 'C'
+            try:
+                magnitude = float(peak_class[1:]) if len(peak_class) > 1 else 1.0
+            except ValueError:
+                magnitude = 1.0
+
+            # Check if already exists (within 5 minutes of peak)
+            cursor.execute("""
+                SELECT id FROM flare_events
+                WHERE peak_time BETWEEN datetime(?, '-5 minutes') AND datetime(?, '+5 minutes')
+            """, (peak_ts.isoformat(), peak_ts.isoformat()))
+
+            if cursor.fetchone():
+                continue  # Already exists
+
+            # Insert
+            cursor.execute("""
+                INSERT INTO flare_events (start_time, peak_time, end_time, class, magnitude, peak_flux, source)
+                VALUES (?, ?, ?, ?, ?, ?, 'auto_extracted')
+            """, (
+                start_ts.isoformat(),
+                peak_ts.isoformat(),
+                end_ts.isoformat(),
+                flare_class,
+                magnitude,
+                peak_flux
+            ))
+            inserted += 1
+
+        self.conn.commit()
+        return inserted
+
     def get_recent_divergences(self, hours: int = 24) -> list[dict]:
         """Get recent phase divergence events."""
         cursor = self.conn.cursor()
