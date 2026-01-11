@@ -81,10 +81,12 @@ class CouplingMonitor:
             return False
 
         # Check if previous frames also had breaks
-        # A break is indicated by deviation_pct < -25% (ALERT threshold)
+        # Use z_mad > 2.0 (break DETECTION threshold), not is_break (which may be vetoed)
+        # This avoids catch-22 where vetoed breaks prevent future confirmations
+        BREAK_THRESHOLD = 2.0
         previous_breaks = sum(
             1 for h in pair_history[-(min_frames-1):]
-            if h.get('coupling', {}).get(pair, {}).get('deviation_pct', 0) < self.ALERT_THRESHOLD
+            if abs(h.get('coupling', {}).get(pair, {}).get('z_mad', 0)) > BREAK_THRESHOLD
         )
 
         return previous_breaks >= min_frames - 1
