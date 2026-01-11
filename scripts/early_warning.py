@@ -1281,6 +1281,64 @@ def extract_flares(
     console.print(f"\n[dim]Total flare events in database: {total}[/]")
 
 
+@app.command(name="import-flares")
+def import_flares(
+    start: str = typer.Option("2024-01-01", "--start", "-s", help="Start date (YYYY-MM-DD)"),
+    end: str = typer.Option("2024-12-31", "--end", "-e", help="End date (YYYY-MM-DD)"),
+    min_class: str = typer.Option("M", "--min-class", "-c", help="Minimum flare class (C, M, or X)"),
+):
+    """
+    📥 Import historical flares from NASA DONKI archive.
+
+    Downloads M/X-class flare data for correlation analysis with coupling measurements.
+    """
+    from rich.table import Table
+
+    db = get_monitoring_db()
+
+    console.print(f"[bold]Importing flares from NASA DONKI ({start} to {end}, >= {min_class}-class)...[/]\n")
+
+    count = db.import_flares_from_donki(start_date=start, end_date=end, min_class=min_class)
+
+    if count == 0:
+        console.print("[yellow]No new flares imported.[/]")
+    else:
+        console.print(f"[green]✓ Imported {count} flares[/]\n")
+
+    # Show summary by class
+    cursor = db.conn.cursor()
+    cursor.execute("""
+        SELECT class, COUNT(*) as count,
+               MIN(start_time) as first,
+               MAX(start_time) as last
+        FROM flare_events
+        GROUP BY class
+        ORDER BY class DESC
+    """)
+    stats = cursor.fetchall()
+
+    table = Table(title="📊 Flare Database Summary", box=box.ROUNDED)
+    table.add_column("Class")
+    table.add_column("Count", justify="right")
+    table.add_column("Date Range")
+
+    for row in stats:
+        first = row['first'][:10] if row['first'] else '?'
+        last = row['last'][:10] if row['last'] else '?'
+        table.add_row(
+            f"{row['class']}-class",
+            str(row['count']),
+            f"{first} → {last}"
+        )
+
+    console.print(table)
+
+    # Total
+    cursor.execute("SELECT COUNT(*) FROM flare_events")
+    total = cursor.fetchone()[0]
+    console.print(f"\n[dim]Total flare events: {total}[/]")
+
+
 @app.command(name="validate-divergences")
 def validate_divergences(
     window: int = typer.Option(24, "--window", "-w", help="Hours window for flare matching"),

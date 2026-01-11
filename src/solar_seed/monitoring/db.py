@@ -576,6 +576,93 @@ class MonitoringDB:
         self.conn.commit()
         return inserted
 
+    def import_flares_from_donki(self, start_date: str, end_date: str, min_class: str = 'M') -> int:
+        """
+        Import historical flares from NASA DONKI API.
+
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            min_class: Minimum flare class ('C', 'M', or 'X')
+
+        Returns:
+            Number of flares imported
+        """
+        import urllib.request
+        import json
+        from datetime import datetime
+
+        url = f"https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/FLR?startDate={start_date}&endDate={end_date}"
+
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                data = json.loads(response.read().decode())
+        except Exception as e:
+            print(f"Error fetching DONKI data: {e}")
+            return 0
+
+        # Filter by class
+        class_order = {'C': 1, 'M': 2, 'X': 3}
+        min_order = class_order.get(min_class, 2)
+
+        cursor = self.conn.cursor()
+        imported = 0
+
+        for flare in data:
+            class_type = flare.get('classType', '')
+            if not class_type:
+                continue
+
+            flare_class = class_type[0]
+            if class_order.get(flare_class, 0) < min_order:
+                continue
+
+            # Parse magnitude
+            try:
+                magnitude = float(class_type[1:])
+            except ValueError:
+                magnitude = 1.0
+
+            # Parse times
+            begin_time = flare.get('beginTime', '')
+            peak_time = flare.get('peakTime', '')
+            end_time = flare.get('endTime', '')
+
+            if not begin_time:
+                continue
+
+            # Normalize timestamps (DONKI uses 'Z' suffix sometimes)
+            begin_time = begin_time.replace('Z', '+00:00')
+            if not '+' in begin_time and not begin_time.endswith('Z'):
+                begin_time += '+00:00'
+
+            # Check if already exists
+            cursor.execute("""
+                SELECT id FROM flare_events
+                WHERE class = ? AND magnitude = ?
+                AND peak_time LIKE ?
+            """, (flare_class, magnitude, f"{begin_time[:10]}%"))
+
+            if cursor.fetchone():
+                continue
+
+            # Insert
+            cursor.execute("""
+                INSERT INTO flare_events (start_time, peak_time, end_time, class, magnitude, source, location)
+                VALUES (?, ?, ?, ?, ?, 'DONKI', ?)
+            """, (
+                begin_time,
+                peak_time.replace('Z', '+00:00') if peak_time else begin_time,
+                end_time.replace('Z', '+00:00') if end_time else None,
+                flare_class,
+                magnitude,
+                flare.get('sourceLocation', '')
+            ))
+            imported += 1
+
+        self.conn.commit()
+        return imported
+
     def get_recent_divergences(self, hours: int = 24) -> list[dict]:
         """Get recent phase divergence events."""
         cursor = self.conn.cursor()
