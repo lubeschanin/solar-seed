@@ -438,17 +438,96 @@ class StatusFormatter:
         )
         self.console.print(panel)
 
+    # NOAA Space Weather Message Codes
+    # https://www.swpc.noaa.gov/products/space-weather-message-codes
+    NOAA_CODES = {
+        # Kp Warnings
+        'WARK04': 'Kp=4 Geomag Warning',
+        'WARK05': 'Kp=5 Geomag Warning',
+        'WARK06': 'Kp=6 Geomag Warning',
+        'WARK07': 'Kp=7 Geomag Warning',
+        'WARK08': 'Kp=8 Geomag Warning',
+        'WARK09': 'Kp=9 Geomag Warning',
+        # Kp Alerts
+        'ALTK04': 'Kp=4 Geomag Alert',
+        'ALTK05': 'Kp=5 Geomag Alert',
+        'ALTK06': 'Kp=6 Geomag Alert',
+        'ALTK07': 'Kp=7 Geomag Alert',
+        'ALTK08': 'Kp=8 Geomag Alert',
+        'ALTK09': 'Kp=9 Geomag Alert',
+        # Solar events
+        'ALTTP2': 'Type II Radio Burst',
+        'ALTTP4': 'Type IV Radio Burst',
+        'ALTXMF': 'X-ray M-Flare',
+        'ALTXFL': 'X-ray X-Flare',
+        'ALTEF3': '10 MeV Proton Event',
+        'ALTPX1': '100 MeV Proton Event',
+        # Sudden impulse
+        'WARSUD': 'Sudden Impulse Warning',
+        'SUMSUD': 'Sudden Impulse Summary',
+        # Polar cap
+        'WARPC0': 'Polar Cap Absorption',
+        # Watches
+        'WATA20': 'Geomag A≥20 Watch',
+        'WATA30': 'Geomag A≥30 Watch',
+        'WATA50': 'Geomag A≥50 Watch',
+        # Summaries
+        'SUMX': 'X-ray Flare Summary',
+        'SUMPX1': 'Proton Event Summary',
+    }
+
+    def _decode_noaa_code(self, code: str) -> str:
+        """Decode NOAA alert code to English description."""
+        if code in self.NOAA_CODES:
+            return self.NOAA_CODES[code]
+        # Pattern matching for unknown codes
+        if code.startswith('WARK'):
+            return f"Kp={code[4:]} Warning"
+        if code.startswith('ALTK'):
+            return f"Kp={code[4:]} Alert"
+        if code.startswith('WAR'):
+            return 'Warning'
+        if code.startswith('ALT'):
+            return 'Alert'
+        if code.startswith('SUM'):
+            return 'Summary'
+        return code
+
+    def _extract_noaa_code(self, message: str) -> str | None:
+        """Extract full NOAA code (e.g. WARK04) from message text."""
+        import re
+        # Pattern: Space Weather Message Code: XXXXX
+        match = re.search(r'Code:\s*(\w+)', message)
+        if match:
+            return match.group(1)
+        # Alternative: look for known prefixes at word boundaries
+        prefixes = ['WAR', 'ALT', 'SUM', 'WAT']
+        for prefix in prefixes:
+            match = re.search(rf'\b({prefix}\w{{2,5}})\b', message)
+            if match:
+                return match.group(1)
+        return None
+
     def print_alerts_section(self, alerts: list):
-        """Print NOAA alerts."""
+        """Print NOAA alerts with decoded message codes."""
         if not alerts:
             return
 
         table = Table(box=None, show_header=False)
-        table.add_column("Type", style="bold yellow")
-        table.add_column("Message")
+        table.add_column("Code", style="bold yellow", width=10)
+        table.add_column("Meaning", style="cyan", width=22)
+        table.add_column("Issued", style="dim", width=18)
 
         for alert in alerts[:3]:
-            table.add_row(f"[{alert['type']}]", alert['message'][:60] + "...")
+            product_id = alert['type']
+            message = alert.get('message', '')
+            issued = alert.get('issued', '')[:16]  # Date + time only
+
+            # Extract full NOAA code from message (e.g. WARK04)
+            full_code = self._extract_noaa_code(message) or product_id
+            meaning = self._decode_noaa_code(full_code)
+
+            table.add_row(full_code, meaning, issued)
 
         self.console.print(Panel(table, title="📢 NOAA ALERTS (last 24h)", border_style="yellow"))
 
