@@ -39,6 +39,12 @@ from .detection import (
     classify_anomaly_status,
 )
 from .formatting import StatusFormatter
+from .relevance import (
+    assess_personal_relevance,
+    get_sun_status,
+    get_subsolar_point,
+    LOCATIONS,
+)
 
 __all__ = [
     # Database
@@ -66,4 +72,9 @@ __all__ = [
     'classify_anomaly_status',
     # Formatting
     'StatusFormatter',
+    # Personal Relevance
+    'assess_personal_relevance',
+    'get_sun_status',
+    'get_subsolar_point',
+    'LOCATIONS',
 ]

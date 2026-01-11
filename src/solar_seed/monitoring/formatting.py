@@ -16,6 +16,7 @@ from rich.style import Style
 from rich import box
 
 from .constants import AnomalyLevel, Phase, get_anomaly_level, classify_phase
+from .relevance import assess_personal_relevance, get_subsolar_point, LOCATIONS
 
 
 console = Console()
@@ -555,4 +556,86 @@ class StatusFormatter:
             border_style=border_style,
             box=box.ROUNDED,
             padding=(0, 2),
+        ))
+
+    def print_personal_relevance(self, location: str = 'berlin', kp_index: float = None):
+        """
+        Print personal relevance panel showing user's exposure to solar events.
+
+        Args:
+            location: Location name (from LOCATIONS dict) or 'lat,lon' string
+            kp_index: Current Kp index for aurora prediction
+        """
+        # Parse location
+        if ',' in location:
+            try:
+                lat, lon = map(float, location.split(','))
+                loc_name = f"{lat:.1f}°N, {lon:.1f}°E"
+                tz_name = "UTC"
+            except ValueError:
+                lat, lon = 52.52, 13.405  # Default to Berlin
+                loc_name = "Berlin"
+                tz_name = "Europe/Berlin"
+        elif location.lower() in LOCATIONS:
+            lat, lon, tz_name = LOCATIONS[location.lower()]
+            loc_name = location.title()
+        else:
+            lat, lon, tz_name = 52.52, 13.405, "Europe/Berlin"
+            loc_name = "Berlin"
+
+        rel = assess_personal_relevance(lat, lon, loc_name, tz_name, kp_index)
+
+        content = Text()
+
+        # Location line
+        content.append("Location:     ", style="dim")
+        content.append(f"{rel.location_name} ({rel.latitude:.1f}°, {rel.longitude:.1f}°)\n")
+
+        # Local time
+        content.append("Local Time:   ", style="dim")
+        content.append(f"{rel.local_time}\n")
+
+        # Sun status
+        content.append("Sun Status:   ", style="dim")
+        sun = rel.sun_status
+        if sun.is_visible:
+            content.append(f"☀️ VISIBLE (alt: {sun.altitude_deg:.0f}°)\n", style="bold yellow")
+        elif sun.status == 'CIVIL_TWILIGHT':
+            content.append(f"🌅 TWILIGHT (alt: {sun.altitude_deg:.0f}°)\n", style="yellow")
+        else:
+            content.append(f"🌙 BELOW HORIZON (alt: {sun.altitude_deg:.0f}°)\n", style="cyan")
+
+        content.append("\n")
+
+        # Current flare risk
+        content.append("Current Flare Risk:\n", style="bold")
+
+        if sun.is_visible:
+            content.append("→ Radio/GPS disruption would affect you ", style="dim")
+            content.append("NOW\n", style="bold red")
+        else:
+            content.append("→ Immediate radio effects: ", style="dim")
+            content.append("NOT relevant for you\n", style="green")
+            content.append("→ Geomagnetic storm: ", style="dim")
+            content.append("May affect you in 15-48h\n", style="yellow")
+            if rel.aurora_possible:
+                content.append("→ Aurora possible tonight ", style="dim")
+                kp_note = f"if Kp ≥ 7" if kp_index is None else f"(Kp={kp_index:.0f})"
+                content.append(f"{kp_note}\n", style="cyan")
+
+        content.append("\n")
+
+        # Daylight window
+        sunrise, sunset = rel.daylight_window_utc
+        content.append(f"Your daylight window: ", style="dim")
+        content.append(f"{sunrise}-{sunset} UTC\n", style="bold")
+
+        # Border color based on exposure
+        border_style = "yellow" if sun.is_visible else "cyan"
+
+        self.console.print(Panel(
+            content,
+            title="👤 PERSONAL RELEVANCE",
+            border_style=border_style,
+            box=box.ROUNDED,
         ))

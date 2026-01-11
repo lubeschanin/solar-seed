@@ -859,12 +859,14 @@ def check(
     coupling: bool = typer.Option(False, "--coupling", "-c", help="Include SDO/AIA coupling analysis"),
     stereo: bool = typer.Option(False, "--stereo", "-s", help="Include STEREO-A EUVI analysis (~3.9 days ahead)"),
     minimal: bool = typer.Option(False, "--minimal", "-m", help="Minimal alert view (only actionable info)"),
+    location: str = typer.Option(None, "--location", "-l", help="Your location (berlin, london, tokyo, or lat,lon)"),
     no_db: bool = typer.Option(False, "--no-db", help="Disable database storage"),
 ):
     """
     🔍 Single status check of all data sources.
 
     Use --minimal for operator view (only 193-211 + GOES).
+    Use --location to see personal relevance (day/night, aurora).
     Use without --minimal for full scientific dashboard.
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -914,14 +916,17 @@ def check(
             stereo_data = run_stereo_coupling_analysis()
 
     # Output mode
+    fmt = StatusFormatter()
     if minimal:
-        fmt = StatusFormatter()
         fmt.print_minimal_alert(coupling_data, xray, next_check_min=10)
     else:
         print_status_report(xray, solar_wind, alerts, coupling_data, stereo_data)
 
+    # Personal relevance panel
+    if location:
+        fmt.print_personal_relevance(location)
+
     if store_db:
-        fmt = StatusFormatter()
         fmt.print_footer(str(get_monitoring_db().db_path))
 
 
