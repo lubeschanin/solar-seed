@@ -771,6 +771,45 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
                 quality_warnings.extend(pair_output['quality_warnings'])
                 artifact_warnings.extend(pair_output['artifact_warnings'])
 
+        # 4K Confirmation: If break detected with 1k, verify with full-res
+        breaks_to_confirm = [
+            (pair, bd) for pair, bd in break_detections.items()
+            if bd.get('is_break') and not bd.get('vetoed') and not results.get(pair, {}).get('data_error')
+        ]
+
+        if breaks_to_confirm and data_source == 'synoptic':
+            print(f"  🔬 {len(breaks_to_confirm)} break(s) detected - loading 4K for confirmation...")
+            channels_4k, _, _ = load_aia_latest([193, 211, 304], max_age_minutes=30)
+
+            if channels_4k and len(channels_4k) >= 2:
+                print(f"    ✓ 4K data loaded ({list(channels_4k.keys())})")
+
+                for pair_key, bd in breaks_to_confirm:
+                    wl1, wl2 = map(int, pair_key.split('-'))
+                    if wl1 in channels_4k and wl2 in channels_4k:
+                        # Compute MI on 4K
+                        res1_4k, _, _ = subtract_radial_geometry(channels_4k[wl1])
+                        res2_4k, _, _ = subtract_radial_geometry(channels_4k[wl2])
+                        shuffle_4k = sector_ring_shuffle_test(res1_4k, res2_4k, n_rings=10, n_sectors=12)
+                        delta_mi_4k = shuffle_4k.mi_original - shuffle_4k.mi_sector_shuffled
+
+                        delta_mi_1k = results[pair_key]['delta_mi']
+                        diff_pct = abs(delta_mi_4k - delta_mi_1k) / delta_mi_1k * 100 if delta_mi_1k else 0
+
+                        if diff_pct < 15:  # <15% difference = confirmed
+                            print(f"    ✓ {pair_key}: 4K CONFIRMS (1k={delta_mi_1k:.3f}, 4k={delta_mi_4k:.3f}, Δ={diff_pct:.1f}%)")
+                            results[pair_key]['confirmed_4k'] = True
+                            results[pair_key]['delta_mi_4k'] = delta_mi_4k
+                            break_detections[pair_key]['confirmed_4k'] = True
+                        else:
+                            print(f"    ⚠ {pair_key}: 4K DISAGREES (1k={delta_mi_1k:.3f}, 4k={delta_mi_4k:.3f}, Δ={diff_pct:.1f}%)")
+                            results[pair_key]['confirmed_4k'] = False
+                            results[pair_key]['delta_mi_4k'] = delta_mi_4k
+                            break_detections[pair_key]['confirmed_4k'] = False
+                            break_detections[pair_key]['vetoed'] = '4k_mismatch'
+            else:
+                print(f"    ⚠ Could not load 4K data for confirmation")
+
         # Save to history
         monitor.add_reading(timestamp, results)
 
