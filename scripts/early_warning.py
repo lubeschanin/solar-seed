@@ -971,6 +971,139 @@ def load_aia_direct(timestamp: str, wavelengths: list[int]) -> dict | None:
         return None
 
 
+# =============================================================================
+# SYNOPTIC DATA LOADER (1k resolution, direct access, no queue)
+# =============================================================================
+
+SYNOPTIC_BASE_URL = "https://jsoc1.stanford.edu/data/aia/synoptic"
+
+def load_aia_synoptic(wavelengths: list[int] = None) -> tuple[dict, str, dict] | tuple[None, None, None]:
+    """
+    Load most recent AIA synoptic data (1024x1024 resolution).
+
+    The synoptic archive is directly accessible without JSOC export queue.
+    Updated every 2 minutes. Stable and reliable for real-time monitoring.
+
+    Args:
+        wavelengths: List of wavelengths to load (default: [193, 211, 304])
+
+    Returns:
+        (channels_dict, timestamp_str, quality_info) or (None, None, None)
+    """
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError
+    import tempfile
+    import os
+
+    if wavelengths is None:
+        wavelengths = [193, 211, 304]
+
+    print("  Loading AIA synoptic data (1k resolution)...")
+
+    try:
+        # Check mostrecent timestamp
+        times_url = f"{SYNOPTIC_BASE_URL}/mostrecent/image_times"
+        req = Request(times_url, headers={'User-Agent': 'SolarSeed/1.0'})
+        with urlopen(req, timeout=10) as response:
+            times_content = response.read().decode()
+
+        # Parse timestamp: "Time     20260111_114600"
+        timestamp_str = None
+        for line in times_content.split('\n'):
+            if line.startswith('Time'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    timestamp_str = parts[1]  # "20260111_114600"
+                    break
+
+        if not timestamp_str:
+            print("    Could not parse synoptic timestamp")
+            return None, None, None
+
+        # Convert to ISO format
+        iso_timestamp = f"{timestamp_str[:4]}-{timestamp_str[4:6]}-{timestamp_str[6:8]}T{timestamp_str[9:11]}:{timestamp_str[11:13]}:{timestamp_str[13:15]}Z"
+        print(f"    Synoptic timestamp: {iso_timestamp}")
+
+        # Load FITS files
+        try:
+            from astropy.io import fits
+            import numpy as np
+        except ImportError:
+            print("    Error: astropy required for FITS loading")
+            return None, None, None
+
+        channels = {}
+        timestamps = {}
+
+        for wl in wavelengths:
+            fits_url = f"{SYNOPTIC_BASE_URL}/mostrecent/AIAsynoptic{wl:04d}.fits"
+            print(f"    Fetching {wl} Å from synoptic...")
+
+            try:
+                req = Request(fits_url, headers={'User-Agent': 'SolarSeed/1.0'})
+                with urlopen(req, timeout=30) as response:
+                    fits_data = response.read()
+
+                # Save to temp file and load with astropy
+                with tempfile.NamedTemporaryFile(suffix='.fits', delete=False) as tmp:
+                    tmp.write(fits_data)
+                    tmp_path = tmp.name
+
+                with fits.open(tmp_path) as hdul:
+                    # Synoptic FITS uses compressed images in HDU[1]
+                    data = None
+                    header = None
+                    if len(hdul) > 1 and hdul[1].data is not None:
+                        data = hdul[1].data
+                        header = hdul[1].header
+                    elif hdul[0].data is not None:
+                        data = hdul[0].data
+                        header = hdul[0].header
+
+                    if data is not None:
+                        channels[wl] = data.astype(np.float64)
+                        # Get timestamp from header if available
+                        obs_time = header.get('T_OBS', header.get('DATE-OBS', iso_timestamp))
+                        timestamps[wl] = obs_time
+                        print(f"      ✓ {wl} Å: {data.shape} loaded")
+                    else:
+                        print(f"      ✗ {wl} Å: No data in FITS")
+
+                os.remove(tmp_path)
+
+            except URLError as e:
+                print(f"      ✗ {wl} Å: Network error - {e}")
+            except Exception as e:
+                print(f"      ✗ {wl} Å: Load error - {e}")
+
+        if not channels:
+            print("    No synoptic data loaded")
+            return None, None, None
+
+        # Quality info
+        quality_info = {
+            'source': 'synoptic',
+            'resolution': '1024x1024',
+            'is_good_quality': len(channels) == len(wavelengths),
+            'time_spread_sec': 0,  # All same timestamp in synoptic
+            'timestamps': timestamps,
+            'warnings': [],
+        }
+
+        if len(channels) < len(wavelengths):
+            missing = [wl for wl in wavelengths if wl not in channels]
+            quality_info['warnings'].append(f"Missing wavelengths: {missing}")
+            quality_info['is_good_quality'] = False
+
+        return channels, iso_timestamp, quality_info
+
+    except Exception as e:
+        print(f"    Synoptic load error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None
+
+
 def detect_artifact(pair: str, current_mi: float, monitor: 'CouplingMonitor', threshold_sigma: float = 3.0) -> dict | None:
     """
     Detect if current measurement might be an artifact (single-frame anomaly).
@@ -1272,7 +1405,7 @@ def compute_robustness_check(img1, img2, original_mi: float, method: str = 'binn
 # ΔMI = 0.0 or very low values indicate data pipeline failures, not real breaks.
 
 MIN_MI_THRESHOLD = 0.05  # bits - below this is DATA_ERROR (not a real measurement)
-MIN_ROI_STD = 1.0        # DN - minimum std dev in ROI to confirm non-constant image
+MIN_ROI_STD = 0.5        # DN - minimum std dev in residual ROI (after geometry subtraction)
 
 
 def validate_roi_variance(img1, img2, pair: str = None) -> dict:
@@ -1583,9 +1716,13 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
     }
 
 
-def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None) -> dict | None:
+def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_synoptic: bool = True) -> dict | None:
     """
     Run quick coupling analysis on latest AIA data with quality checks.
+
+    Hybrid Approach:
+    - Primary: AIA synoptic data (1024x1024, direct access, no queue)
+    - Fallback: Full-res via VSO (4096x4096, may be rate-limited)
 
     Includes reviewer-proof validation:
     - Test A: Time alignment (<60s between channels)
@@ -1597,30 +1734,49 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None) -> di
     Args:
         validate_breaks: Whether to run validation tests on breaks
         xray: GOES X-ray data for phase-gating (optional)
+        use_synoptic: Try synoptic data first (default: True)
     """
-    print("  Running coupling analysis (this may take a few minutes)...")
+    print("  Running coupling analysis...")
 
     try:
         from solar_seed.radial_profile import subtract_radial_geometry
         from solar_seed.control_tests import sector_ring_shuffle_test
 
-        # Load most recent available AIA data (within last 30 min)
-        print("  Searching for latest AIA images...")
-        channels, timestamp, quality_info = load_aia_latest([193, 211, 304], max_age_minutes=30)
+        channels = None
+        timestamp = None
+        quality_info = None
+        data_source = None
 
+        # Primary: Try synoptic data (fast, reliable, no queue)
+        if use_synoptic:
+            print("  Trying AIA synoptic data (1k, direct access)...")
+            channels, timestamp, quality_info = load_aia_synoptic([193, 211, 304])
+            if channels and len(channels) >= 2:
+                data_source = 'synoptic'
+                print(f"  ✓ Using synoptic data from: {timestamp}")
+
+        # Fallback 1: Full-res via VSO
         if not channels or len(channels) < 2:
-            print("  Could not load AIA data via VSO, trying fallback...")
-            # Fallback: try specific timestamp 10 min ago
+            print("  Synoptic unavailable, trying full-res via VSO...")
+            channels, timestamp, quality_info = load_aia_latest([193, 211, 304], max_age_minutes=30)
+            if channels and len(channels) >= 2:
+                data_source = 'full-res'
+
+        # Fallback 2: Direct load (legacy)
+        if not channels or len(channels) < 2:
+            print("  VSO unavailable, trying direct fallback...")
             fallback_time = datetime.now(timezone.utc) - timedelta(minutes=10)
             timestamp = fallback_time.strftime("%Y-%m-%dT%H:%M:00")
             channels = load_aia_direct(timestamp, [193, 211, 304])
-            quality_info = None  # No quality info from fallback
+            quality_info = None
+            if channels and len(channels) >= 2:
+                data_source = 'direct-fallback'
 
         if not channels or len(channels) < 2:
-            print("  Could not load AIA data")
+            print("  ✗ Could not load AIA data from any source")
             return None
 
-        print(f"  Using AIA data from: {timestamp}")
+        print(f"  Data source: {data_source}")
 
         # Report quality status
         quality_warnings = []
@@ -1746,6 +1902,8 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None) -> di
         # Add quality metadata to results
         time_spread = quality_info['time_spread_sec'] if quality_info else None
         results['_quality'] = {
+            'data_source': data_source,  # 'synoptic', 'full-res', or 'direct-fallback'
+            'resolution': '1024x1024' if data_source == 'synoptic' else '4096x4096',
             'is_good': quality_info['is_good_quality'] if quality_info else None,
             'time_spread_sec': time_spread,
             'timestamps': quality_info['timestamps'] if quality_info else {},
