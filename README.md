@@ -360,11 +360,22 @@ uv run python scripts/early_warning.py correlations
 - `EXTREME`: > 7σ
 
 **Phase (Interpretive):**
-- `BASELINE`: Quiet conditions
-- `PRE-FLARE`: Destabilization detected
-- `FLARE`: Active flare (M/X class)
-- `RECOVERY`: Post-peak decay
-- `POST-FLARE REORG`: Chromosphere coupling elevated
+
+| Phase | Icon | Meaning | Trigger |
+|-------|------|---------|---------|
+| `BASELINE` | 🟢 | Thermal & structural quiet | GOES quiet, \|z\| < 3 |
+| `ELEVATED-QUIET` | 🟢 | Structurally active but stable | \|z\| > 3, stable trends |
+| `POST-EVENT` | 🟣 | Non-flaring but reorganizing | GOES quiet, \|z\| > 5 |
+| `RECOVERY` | 🟡 | Decaying activity | GOES falling |
+| `PRE-FLARE` | ⚠️ | Destabilization detected | Negative z + GOES rising |
+| `ACTIVE` | 🔴 | Ongoing energy release | GOES M/X-class |
+
+**Parallel Classification:**
+The system runs two classifiers in parallel for empirical validation:
+- **GOES-only**: Traditional flux-based (current operational standard)
+- **ΔMI-integrated**: Experimental coupling-based (may detect events GOES misses)
+
+Divergences are logged to the database for correlation analysis with subsequent flares.
 
 **Personal Relevance:**
 - Day side: Radio/GPS effects affect you NOW (~8 min latency)
