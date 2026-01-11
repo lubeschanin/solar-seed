@@ -31,7 +31,6 @@ env/
 # uv.lock tracked for reproducibility
 
 # Claude Code
-CLAUDE.md
 
 # IDE
 .idea/
