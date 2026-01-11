@@ -778,6 +778,19 @@ def run_stereo_coupling_analysis() -> dict | None:
                 res1, _, _ = subtract_radial_geometry(channels[wl1])
                 res2, _, _ = subtract_radial_geometry(channels[wl2])
 
+                # Validate ROI variance before MI calculation
+                roi_check = validate_roi_variance(res1, res2, pair_name)
+                if not roi_check['is_valid']:
+                    print(f"  ⚠ DATA_ERROR in {pair_name}: {roi_check['error_reason']}")
+                    results[pair_name] = {
+                        'delta_mi': 0.0,
+                        'data_error': True,
+                        'error_type': roi_check['error_type'],
+                        'error_reason': roi_check['error_reason'],
+                        'source': 'STEREO-A',
+                    }
+                    continue
+
                 shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
                 delta_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
 
@@ -1085,6 +1098,10 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
         A Coupling Break occurs when:
         ΔMI(t) < median(last 60 min) - k × MAD(last 60 min)
 
+    Data Quality Gate (runs FIRST):
+        If current_mi < MIN_MI_THRESHOLD or is NaN/Inf, return DATA_ERROR.
+        Invalid values are excluded from statistics to prevent contamination.
+
     Args:
         pair: Channel pair name
         current_mi: Current ΔMI value
@@ -1095,13 +1112,26 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
     Returns:
         dict with break detection result and metadata
     """
+    # === DATA QUALITY GATE (runs before any statistics) ===
+    mi_validation = validate_mi_measurement(current_mi, pair)
+    if not mi_validation['is_valid']:
+        return {
+            'is_break': False,
+            'data_error': True,
+            'error_type': mi_validation['error_type'],
+            'error_reason': mi_validation['error_reason'],
+            'current_mi': current_mi,
+            'reason': f"DATA_ERROR: {mi_validation['error_reason']}",
+        }
+
     pair_history = [h for h in monitor.history if pair in h.get('coupling', {})]
 
-    # Filter to window
+    # Filter to window AND exclude invalid values from statistics
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(minutes=window_minutes)
 
     window_values = []
+    excluded_count = 0
     for h in pair_history:
         try:
             ts = datetime.fromisoformat(h['timestamp'].replace('Z', '+00:00'))
@@ -1110,7 +1140,12 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
             if ts >= window_start:
                 val = h['coupling'][pair].get('delta_mi')
                 if val is not None:
-                    window_values.append(val)
+                    # Validate historical value too (don't let bad data contaminate stats)
+                    val_check = validate_mi_measurement(val, pair)
+                    if val_check['is_valid']:
+                        window_values.append(val)
+                    else:
+                        excluded_count += 1
         except:
             continue
 
@@ -1231,15 +1266,109 @@ def compute_robustness_check(img1, img2, original_mi: float, method: str = 'binn
         }
 
 
+# Data Quality Gate
+# =================
+# Physical minimum thresholds to detect data errors BEFORE break detection.
+# ΔMI = 0.0 or very low values indicate data pipeline failures, not real breaks.
+
+MIN_MI_THRESHOLD = 0.05  # bits - below this is DATA_ERROR (not a real measurement)
+MIN_ROI_STD = 1.0        # DN - minimum std dev in ROI to confirm non-constant image
+
+
+def validate_roi_variance(img1, img2, pair: str = None) -> dict:
+    """
+    Validate that ROI images have sufficient variance for meaningful MI.
+
+    A constant (or near-constant) image will produce artificially low MI,
+    which could be misinterpreted as a coupling break.
+
+    Args:
+        img1, img2: Residual images after geometry subtraction
+        pair: Channel pair name for reporting
+
+    Returns:
+        dict with 'is_valid', 'error_type', 'error_reason', 'std1', 'std2'
+    """
+    import numpy as np
+
+    # Compute standard deviation of each image
+    std1 = np.nanstd(img1)
+    std2 = np.nanstd(img2)
+
+    if not np.isfinite(std1) or not np.isfinite(std2):
+        return {
+            'is_valid': False,
+            'error_type': 'INVALID_IMAGE',
+            'error_reason': f'Non-finite std dev: std1={std1}, std2={std2}',
+            'std1': std1,
+            'std2': std2,
+        }
+
+    if std1 < MIN_ROI_STD or std2 < MIN_ROI_STD:
+        low_ch = []
+        if std1 < MIN_ROI_STD:
+            low_ch.append(f'ch1={std1:.2f}')
+        if std2 < MIN_ROI_STD:
+            low_ch.append(f'ch2={std2:.2f}')
+        return {
+            'is_valid': False,
+            'error_type': 'CONSTANT_ROI',
+            'error_reason': f'Near-constant image ({", ".join(low_ch)} DN std < {MIN_ROI_STD})',
+            'std1': std1,
+            'std2': std2,
+        }
+
+    return {
+        'is_valid': True,
+        'error_type': None,
+        'error_reason': None,
+        'std1': std1,
+        'std2': std2,
+    }
+
+
+def validate_mi_measurement(delta_mi: float, pair: str = None) -> dict:
+    """
+    Validate MI measurement before it enters break detection.
+
+    This gate runs BEFORE MAD/baseline calculation to prevent
+    data errors from contaminating statistics.
+
+    Returns:
+        dict with 'is_valid', 'error_type', 'error_reason'
+    """
+    import numpy as np
+
+    # Check for NaN/Inf
+    if not np.isfinite(delta_mi):
+        return {
+            'is_valid': False,
+            'error_type': 'INVALID_VALUE',
+            'error_reason': f'Non-finite value: {delta_mi}',
+        }
+
+    # Check for suspiciously low MI (indicates data pipeline failure)
+    if delta_mi < MIN_MI_THRESHOLD:
+        return {
+            'is_valid': False,
+            'error_type': 'BELOW_THRESHOLD',
+            'error_reason': f'ΔMI={delta_mi:.4f} < {MIN_MI_THRESHOLD} (likely data error)',
+        }
+
+    return {'is_valid': True, 'error_type': None, 'error_reason': None}
+
+
 # Anomaly Status Classification
 # =============================
-# Three-level model separating actionable from diagnostic:
+# Four-level model separating actionable from diagnostic:
+#   DATA_ERROR      - Invalid data: ΔMI < threshold or NaN (skip entirely)
 #   VALIDATED_BREAK - Actionable: z_mad >= k AND all validation tests PASS
 #   ANOMALY_VETOED  - Diagnostic only: z_mad >= k BUT some validation test FAIL
 #   NORMAL          - No anomaly: z_mad < k
 
 class AnomalyStatus:
     """Anomaly status constants."""
+    DATA_ERROR = 'DATA_ERROR'            # Invalid data - do not process
     VALIDATED_BREAK = 'VALIDATED_BREAK'  # Actionable - all tests pass
     ANOMALY_VETOED = 'ANOMALY_VETOED'    # Diagnostic only - some test failed
     NORMAL = 'NORMAL'                     # No anomaly detected
@@ -1357,6 +1486,20 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
     Returns:
         dict with status, is_actionable, break_type, veto_reasons, and diagnostic info
     """
+    # === DATA_ERROR: Invalid measurement (skip entirely) ===
+    if break_detection.get('data_error'):
+        return {
+            'status': AnomalyStatus.DATA_ERROR,
+            'is_actionable': False,
+            'data_error': True,
+            'error_type': break_detection.get('error_type'),
+            'error_reason': break_detection.get('error_reason'),
+            'z_mad': 0,
+            'veto_reasons': [f"DATA_ERROR: {break_detection.get('error_reason', 'unknown')}"],
+            'passed_tests': [],
+            'failed_tests': ['data_quality'],
+        }
+
     # No break detected = NORMAL
     if not break_detection.get('is_break') and not break_detection.get('vetoed'):
         z_mad = break_detection.get('z_mad', 0)
@@ -1514,6 +1657,27 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None) -> di
 
                 res1, _, _ = subtract_radial_geometry(channels[wl1])
                 res2, _, _ = subtract_radial_geometry(channels[wl2])
+
+                # Validate ROI variance before MI calculation
+                roi_check = validate_roi_variance(res1, res2, pair_key)
+                if not roi_check['is_valid']:
+                    print(f"  ⚠ DATA_ERROR in {pair_key}: {roi_check['error_reason']}")
+                    results[pair_key] = {
+                        'delta_mi': 0.0,
+                        'data_error': True,
+                        'error_type': roi_check['error_type'],
+                        'error_reason': roi_check['error_reason'],
+                        'std1': roi_check['std1'],
+                        'std2': roi_check['std2'],
+                        'status': 'DATA_ERROR',
+                    }
+                    break_detections[pair_key] = {
+                        'is_break': False,
+                        'data_error': True,
+                        'error_type': roi_check['error_type'],
+                        'error_reason': roi_check['error_reason'],
+                    }
+                    continue  # Skip this pair - no MI calculation
 
                 shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
                 delta_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
@@ -1935,12 +2099,16 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
         robustness = validation.get('robustness_checks', {})
         anomaly_statuses = validation.get('anomaly_statuses', {})
 
-        # Classify breaks by status WITH phase-gating
+        # Classify breaks by status WITH phase-gating and data quality
         actionable_breaks = []
         diagnostic_breaks = []
+        data_errors = []
         for pair, status in anomaly_statuses.items():
+            # DATA_ERROR: skip entirely, don't count as break
+            if status.get('status') == AnomalyStatus.DATA_ERROR:
+                data_errors.append(pair)
             # Phase-gating: only VALIDATED + is_actionable triggers alert
-            if status.get('is_actionable'):
+            elif status.get('is_actionable'):
                 actionable_breaks.append(pair)
             elif status.get('status') in [AnomalyStatus.VALIDATED_BREAK, AnomalyStatus.ANOMALY_VETOED]:
                 # Either vetoed OR phase-gated (POSTCURSOR/AMBIGUOUS)
@@ -1986,6 +2154,17 @@ def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: di
         elif not diagnostic_breaks:
             # No breaks at all - quiet engine
             pass
+
+        # =================================================================
+        # DATA ERRORS (excluded from statistics)
+        # =================================================================
+        if data_errors:
+            print(f"\n  ⚠ DATA QUALITY ISSUES (excluded from analysis):")
+            for pair in data_errors:
+                status = anomaly_statuses.get(pair, {})
+                error_reason = status.get('error_reason', 'Unknown error')
+                print(f"    {pair}: {error_reason}")
+            print(f"    Note: These measurements are not counted in statistics")
 
         # =================================================================
         # PHYSICS DIAGNOSTICS (contextual) - Vetoed breaks, state analysis

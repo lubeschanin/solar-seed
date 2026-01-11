@@ -149,6 +149,68 @@ class ReportGenerator:
         except:
             return None
 
+    def _group_flares_into_episodes(self, flares: list, gap_minutes: int = 90) -> list:
+        """
+        Group sequential flares into episodes.
+
+        An episode is a continuous period of elevated activity.
+        Episodes are separated by gaps of >= gap_minutes with no C+ flares.
+
+        Args:
+            flares: List of flare dicts with 'timestamp' field
+            gap_minutes: Minimum gap between episodes (default 90 min)
+
+        Returns:
+            List of episodes, each with 'start', 'end', 'flares', 'peak_class'
+        """
+        if not flares:
+            return []
+
+        episodes = []
+        current_episode = None
+
+        for flare in sorted(flares, key=lambda x: x['timestamp']):
+            flare_time = self._parse_timestamp(flare['timestamp'])
+            if not flare_time:
+                continue
+
+            if current_episode is None:
+                # Start new episode
+                current_episode = {
+                    'start': flare_time,
+                    'end': flare_time,
+                    'flares': [flare],
+                    'peak_flux': flare.get('flux', 0),
+                    'peak_class': flare.get('flare_class', 'C1'),
+                }
+            else:
+                # Check if this flare continues the episode or starts a new one
+                gap = (flare_time - current_episode['end']).total_seconds() / 60
+
+                if gap <= gap_minutes:
+                    # Continue episode
+                    current_episode['end'] = flare_time
+                    current_episode['flares'].append(flare)
+                    if flare.get('flux', 0) > current_episode['peak_flux']:
+                        current_episode['peak_flux'] = flare['flux']
+                        current_episode['peak_class'] = flare.get('flare_class', 'C1')
+                else:
+                    # End current episode, start new one
+                    episodes.append(current_episode)
+                    current_episode = {
+                        'start': flare_time,
+                        'end': flare_time,
+                        'flares': [flare],
+                        'peak_flux': flare.get('flux', 0),
+                        'peak_class': flare.get('flare_class', 'C1'),
+                    }
+
+        # Don't forget the last episode
+        if current_episode:
+            episodes.append(current_episode)
+
+        return episodes
+
     def get_precursor_statistics(self) -> dict:
         """
         Calculate precursor detection statistics (Precision/Recall).
@@ -158,14 +220,19 @@ class ReportGenerator:
         - Validated Break: Candidate + all validation tests PASS
         - Actionable Alert: Validated Break AND trigger enabled (status=ALERT)
 
+        Episode Grouping (for fair metrics):
+        - Sequential C+ flares within 90min are grouped as one episode
+        - Metrics are calculated at episode level, not individual flare level
+        - This prevents inflated FN counts from counting the same event multiple times
+
         Note: This is a STRUCTURAL PRECURSOR detector, not a flare detector.
         Low recall is expected because only a subset of flares have
         magnetically-mediated precursor signatures.
 
         Definitions:
-        - True Positive (TP): Actionable Alert AND flare followed within window
-        - False Positive (FP): Actionable Alert BUT no flare followed
-        - False Negative (FN): No Actionable Alert BUT flare occurred
+        - True Positive (TP): Actionable Alert AND episode followed within window
+        - False Positive (FP): Actionable Alert BUT no episode followed
+        - False Negative (FN): No Actionable Alert BUT episode occurred
         """
         stats = {}
 
@@ -208,48 +275,69 @@ class ReportGenerator:
         """)
         stats['total_flares'] = len(flares)
 
-        # Match breaks to flares (window: 0.5 - 6 hours after break)
+        # Group flares into episodes (90-min gap = new episode)
+        episodes = self._group_flares_into_episodes(flares, gap_minutes=90)
+        stats['total_episodes'] = len(episodes)
+
+        # Match breaks to EPISODES (not individual flares)
+        # Window: 0.5 - 6 hours before episode start
         WINDOW_MIN_HOURS = 0.5
         WINDOW_MAX_HOURS = 6.0
 
-        tp = 0  # Break followed by flare
-        fp = 0  # Break not followed by flare
-        matched_flares = set()
+        tp = 0  # Break followed by episode
+        fp = 0  # Break not followed by episode
+        matched_episodes = set()
 
         for brk in breaks:
             break_time = self._parse_timestamp(brk['timestamp'])
             if not break_time:
                 continue
 
-            found_flare = False
-            for flare in flares:
-                flare_time = self._parse_timestamp(flare['timestamp'])
-                if not flare_time:
-                    continue
-
-                delta_hours = (flare_time - break_time).total_seconds() / 3600
+            found_episode = False
+            for i, episode in enumerate(episodes):
+                episode_start = episode['start']
+                delta_hours = (episode_start - break_time).total_seconds() / 3600
 
                 if WINDOW_MIN_HOURS <= delta_hours <= WINDOW_MAX_HOURS:
-                    found_flare = True
-                    matched_flares.add(flare['timestamp'])
+                    found_episode = True
+                    matched_episodes.add(i)
                     break
 
-            if found_flare:
+            if found_episode:
                 tp += 1
             else:
                 fp += 1
 
-        # False negatives: flares without preceding break
-        fn = len(flares) - len(matched_flares)
+        # False negatives: episodes without preceding break
+        fn = len(episodes) - len(matched_episodes)
 
-        # Calculate metrics
+        # Calculate metrics (episode-level, not flare-level)
         stats['true_positives'] = tp
         stats['false_positives'] = fp
         stats['false_negatives'] = fn
 
-        # Flare scope classification (for display)
+        # Episode details (for display)
+        stats['episodes_with_precursor'] = len(matched_episodes)
+        stats['episodes_without_precursor'] = fn
+        stats['episode_details'] = []
+        for i, ep in enumerate(episodes):
+            has_precursor = i in matched_episodes
+            stats['episode_details'].append({
+                'start': ep['start'].isoformat() if hasattr(ep['start'], 'isoformat') else str(ep['start']),
+                'end': ep['end'].isoformat() if hasattr(ep['end'], 'isoformat') else str(ep['end']),
+                'n_flares': len(ep['flares']),
+                'peak_class': ep['peak_class'],
+                'in_scope': has_precursor,
+                'scope_label': 'WITH PRECURSOR' if has_precursor else 'NO PRECURSOR (out of scope)'
+            })
+
+        # Legacy: also keep individual flare details
+        matched_flares = set()
+        for i in matched_episodes:
+            for f in episodes[i]['flares']:
+                matched_flares.add(f['timestamp'])
         stats['flares_with_precursor'] = len(matched_flares)
-        stats['flares_without_precursor'] = fn
+        stats['flares_without_precursor'] = len(flares) - len(matched_flares)
         stats['flare_details'] = []
         for f in flares:
             has_precursor = f['timestamp'] in matched_flares
@@ -497,9 +585,29 @@ class ReportGenerator:
             lines.append(f"> {precursor['detector_note']}")
             lines.append(f"")
 
-        # Flare Scope Classification (if flares exist)
+        # Episode-Level Summary (grouped flares)
+        if precursor.get('episode_details'):
+            lines.append(f"### Episode Summary (Grouped Flares)")
+            lines.append(f"")
+            lines.append(f"Episodes group sequential C+ flares within 90 minutes as a single event.")
+            lines.append(f"")
+            lines.append(f"| Episode | Duration | Flares | Peak | Precursor |")
+            lines.append(f"|---------|----------|--------|------|-----------|")
+            for i, ep in enumerate(precursor['episode_details'][:10], 1):
+                start = ep['start'][:16] if len(ep['start']) > 16 else ep['start']  # Trim seconds
+                n_flares = ep['n_flares']
+                peak = ep['peak_class']
+                has_prec = "YES" if ep['in_scope'] else "NO"
+                lines.append(f"| #{i} | {start} | {n_flares} flare(s) | {peak} | {has_prec} |")
+            if len(precursor['episode_details']) > 10:
+                lines.append(f"| ... | ... | ... | ... | ({len(precursor['episode_details']) - 10} more) |")
+            lines.append(f"")
+            lines.append(f"**Episode totals**: {precursor['total_episodes']} episodes, {precursor['episodes_with_precursor']} with precursor, {precursor['episodes_without_precursor']} without")
+            lines.append(f"")
+
+        # Individual Flare Details (for reference)
         if precursor.get('flare_details'):
-            lines.append(f"### Flare Scope Classification")
+            lines.append(f"### Individual Flare Details")
             lines.append(f"")
             lines.append(f"| Time | Class | Scope |")
             lines.append(f"|------|-------|-------|")
