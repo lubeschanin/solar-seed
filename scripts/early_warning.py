@@ -34,11 +34,15 @@ import sys
 import json
 import time
 import signal
-import argparse
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from urllib.request import urlopen, Request
 from urllib.error import URLError
+from typing import Optional
+
+import typer
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 # Global flag for graceful shutdown
 _shutdown_requested = False
@@ -737,92 +741,26 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
 
 
 def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: dict = None, stereo: dict = None):
-    """Print formatted status report using StatusFormatter."""
+    """Print formatted status report using Rich StatusFormatter."""
     fmt = StatusFormatter()
 
-    # Header
-    for line in fmt.format_header():
-        print(line)
+    fmt.print_header()
+    fmt.print_xray_status(xray)
 
-    # X-ray status
-    for line in fmt.format_xray_status(xray):
-        print(line)
-
-    # Solar wind status
-    for line in fmt.format_solar_wind(solar_wind, assess_geomagnetic_risk):
-        print(line)
+    # Solar wind with risk assessment
+    risk_info = assess_geomagnetic_risk(solar_wind) if solar_wind else None
+    fmt.print_solar_wind(solar_wind, risk_info)
 
     # Coupling analysis
     if coupling:
-        print(f"\n  ΔMI COUPLING MONITOR (Pre-Flare Detection)")
-        print(f"  {'-'*40}")
-
-        # Quality status
-        quality = coupling.get('_quality', {})
-        for line in fmt.format_coupling_quality(quality):
-            print(line)
-
-        # Each channel pair
-        for pair, data in coupling.items():
-            if pair.startswith('_'):
-                continue
-            for line in fmt.format_coupling_pair(pair, data):
-                print(line)
-
-        # Classify breaks
-        validation = coupling.get('_validation', {})
-        breaks = validation.get('break_detections', {})
-        anomaly_statuses = validation.get('anomaly_statuses', {})
-
-        actionable_breaks = []
-        diagnostic_breaks = []
-        data_errors = []
-
-        for pair, status in anomaly_statuses.items():
-            if status.get('status') == AnomalyStatus.DATA_ERROR:
-                data_errors.append(pair)
-            elif status.get('is_actionable'):
-                actionable_breaks.append(pair)
-            elif status.get('status') in [AnomalyStatus.VALIDATED_BREAK, AnomalyStatus.ANOMALY_VETOED]:
-                diagnostic_breaks.append(pair)
-
-        # Legacy break handling
-        for pair, bd in breaks.items():
-            if pair not in anomaly_statuses:
-                if bd.get('is_break') and not bd.get('vetoed'):
-                    actionable_breaks.append(pair)
-                elif bd.get('vetoed'):
-                    diagnostic_breaks.append(pair)
-
-        # Alert engine
-        for line in fmt.format_alert_engine(actionable_breaks, breaks, anomaly_statuses, AnomalyStatus):
-            print(line)
-
-        # Data errors
-        for line in fmt.format_data_errors(data_errors, anomaly_statuses):
-            print(line)
-
-        # Diagnostics
-        transfer = coupling.get('_transfer_state')
-        for line in fmt.format_diagnostics(diagnostic_breaks, breaks, anomaly_statuses, transfer, BreakType):
-            print(line)
-
-        # Event narrative
-        narrative = fmt.generate_event_narrative(xray, coupling)
-        if narrative:
-            print(narrative)
+        fmt.print_coupling_analysis(coupling, AnomalyStatus, BreakType)
+        fmt.print_event_narrative(xray, coupling)
 
     # STEREO-A section
-    for line in fmt.format_stereo_section(stereo, coupling):
-        print(line)
+    fmt.print_stereo_section(stereo, coupling)
 
     # NOAA alerts
-    for line in fmt.format_alerts_section(alerts):
-        print(line)
-
-    # Footer
-    for line in fmt.format_footer():
-        print(line)
+    fmt.print_alerts_section(alerts)
 
 
 def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: bool = False, store_db: bool = True):
@@ -906,105 +844,159 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: b
         print(f"  Database stats: {stats['goes_xray']} X-ray, {stats['solar_wind']} wind, {stats['coupling_measurements']} coupling")
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--monitor', action='store_true',
-                        help='Continuous monitoring mode')
-    parser.add_argument('--interval', type=int, default=60,
-                        help='Monitoring interval in seconds (default: 60)')
-    parser.add_argument('--coupling', action='store_true',
-                        help='Include SDO/AIA coupling analysis')
-    parser.add_argument('--stereo', action='store_true',
-                        help='Include STEREO-A EUVI analysis (~3.9 days ahead)')
-    parser.add_argument('--no-db', action='store_true',
-                        help='Disable database storage')
-    parser.add_argument('--db-stats', action='store_true',
-                        help='Show database statistics and exit')
-    parser.add_argument('--correlations', action='store_true',
-                        help='Show coupling-flare correlations from database')
-    args = parser.parse_args()
+# Typer CLI app
+app = typer.Typer(
+    name="solar-warning",
+    help="☀️ Solar Early Warning System - Multi-layer space weather monitoring",
+    add_completion=False,
+    rich_markup_mode="rich",
+)
+console = Console()
 
-    # Database stats mode
-    if args.db_stats:
-        db = get_monitoring_db()
-        stats = db.get_database_stats()
-        print("\n  Solar Monitoring Database")
-        print("  " + "=" * 50)
-        print(f"  Path: {db.db_path}")
-        print("\n  Table Statistics:")
-        for table, count in stats.items():
-            if isinstance(count, dict):
-                print(f"    {table}: {count}")
-            else:
-                print(f"    {table}: {count} rows")
-        return 0
 
-    # Correlations mode
-    if args.correlations:
-        db = get_monitoring_db()
-        print("\n  Coupling-Flare Correlations")
-        print("  " + "=" * 50)
-        correlations = db.get_coupling_before_flares(hours_before=6)
-        if correlations:
-            for c in correlations[:20]:
-                print(f"  {c['pair']}: ΔMI={c['delta_mi']:.3f}, status={c['status']}")
-                print(f"    → {c['hours_before_flare']:.1f}h before {c['flare_class']}{c['flare_magnitude']:.1f} flare")
-        else:
-            print("  No correlations found. Run monitoring to collect data.")
+@app.command()
+def check(
+    coupling: bool = typer.Option(False, "--coupling", "-c", help="Include SDO/AIA coupling analysis"),
+    stereo: bool = typer.Option(False, "--stereo", "-s", help="Include STEREO-A EUVI analysis (~3.9 days ahead)"),
+    no_db: bool = typer.Option(False, "--no-db", help="Disable database storage"),
+):
+    """
+    🔍 Single status check of all data sources.
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
 
-        accuracy = db.get_prediction_accuracy()
-        print(f"\n  Prediction Accuracy: {accuracy['overall']}")
-        return 0
+    store_db = not no_db
 
-    print("""
-╔═══════════════════════════════════════════════════════════════════════╗
-║          SOLAR EARLY WARNING SYSTEM - Prototype v0.3                  ║
-╚═══════════════════════════════════════════════════════════════════════╝
-
-  Data Sources:
-    - GOES X-ray flux (NOAA SWPC)
-    - DSCOVR solar wind plasma & magnetic field (L1)
-    - NOAA Space Weather Alerts
-    - SDO/AIA coupling analysis (--coupling)
-    - STEREO-A EUVI 51° ahead (--stereo) → ~3.9 days warning
-""")
-
-    store_db = not args.no_db
-
-    if args.monitor:
-        monitor_loop(interval=args.interval, with_coupling=args.coupling,
-                     with_stereo=args.stereo, store_db=store_db)
-    else:
-        # Single check
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("Fetching GOES X-ray...", total=None)
         xray = get_goes_xray()
+
+        progress.add_task("Fetching solar wind...", total=None)
         solar_wind = get_dscovr_solar_wind()
+
+        progress.add_task("Fetching NOAA alerts...", total=None)
         alerts = get_noaa_alerts()
 
-        # Store in database
         if store_db:
             store_goes_reading(xray)
             if solar_wind:
                 risk, risk_level = assess_geomagnetic_risk(solar_wind)
                 store_solar_wind_reading(solar_wind, risk, risk_level)
 
-        coupling = None
-        if args.coupling:
-            coupling = run_coupling_analysis(xray=xray)
-            if store_db and coupling:
+        coupling_data = None
+        if coupling:
+            progress.add_task("Running coupling analysis...", total=None)
+            coupling_data = run_coupling_analysis(xray=xray)
+            if store_db and coupling_data:
                 now = datetime.now(timezone.utc)
-                store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling)
+                store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling_data)
 
-        stereo = None
-        if args.stereo:
-            stereo = run_stereo_coupling_analysis()
+        stereo_data = None
+        if stereo:
+            progress.add_task("Fetching STEREO-A data...", total=None)
+            stereo_data = run_stereo_coupling_analysis()
 
-        print_status_report(xray, solar_wind, alerts, coupling, stereo)
+    print_status_report(xray, solar_wind, alerts, coupling_data, stereo_data)
 
-        if store_db:
-            print(f"  Data stored in: {get_monitoring_db().db_path}")
+    if store_db:
+        fmt = StatusFormatter()
+        fmt.print_footer(str(get_monitoring_db().db_path))
 
-    return 0
+
+@app.command()
+def monitor(
+    interval: int = typer.Option(60, "--interval", "-i", help="Monitoring interval in seconds"),
+    coupling: bool = typer.Option(False, "--coupling", "-c", help="Include coupling analysis"),
+    stereo: bool = typer.Option(False, "--stereo", "-s", help="Include STEREO-A analysis"),
+    no_db: bool = typer.Option(False, "--no-db", help="Disable database storage"),
+):
+    """
+    📡 Continuous monitoring mode with periodic updates.
+    """
+    console.print(f"[bold cyan]Starting continuous monitoring[/] (interval: {interval}s)")
+    console.print(f"[dim]Press Ctrl+C to stop[/]\n")
+
+    monitor_loop(
+        interval=interval,
+        with_coupling=coupling,
+        with_stereo=stereo,
+        store_db=not no_db,
+    )
+
+
+@app.command()
+def stats():
+    """
+    📊 Show database statistics.
+    """
+    from rich.table import Table
+
+    db = get_monitoring_db()
+    db_stats = db.get_database_stats()
+
+    table = Table(title="📊 Solar Monitoring Database", box=box.ROUNDED)
+    table.add_column("Table", style="bold")
+    table.add_column("Count", justify="right")
+
+    for name, count in db_stats.items():
+        if isinstance(count, dict):
+            table.add_row(name, str(count))
+        else:
+            table.add_row(name, f"{count:,} rows")
+
+    console.print(table)
+    console.print(f"[dim]Path: {db.db_path}[/]")
+
+
+@app.command()
+def correlations():
+    """
+    📈 Show coupling-flare correlations from database.
+    """
+    from rich.table import Table
+
+    db = get_monitoring_db()
+    corrs = db.get_coupling_before_flares(hours_before=6)
+
+    if not corrs:
+        console.print("[yellow]No correlations found. Run monitoring to collect data.[/]")
+        return
+
+    table = Table(title="📈 Coupling-Flare Correlations", box=box.ROUNDED)
+    table.add_column("Pair")
+    table.add_column("ΔMI", justify="right")
+    table.add_column("Status")
+    table.add_column("Hours Before")
+    table.add_column("Flare")
+
+    for c in corrs[:20]:
+        table.add_row(
+            c['pair'],
+            f"{c['delta_mi']:.3f}",
+            c['status'],
+            f"{c['hours_before_flare']:.1f}h",
+            f"{c['flare_class']}{c['flare_magnitude']:.1f}",
+        )
+
+    console.print(table)
+
+    accuracy = db.get_prediction_accuracy()
+    console.print(f"\n[bold]Prediction Accuracy:[/] {accuracy['overall']}")
+
+
+# Import box for tables
+from rich import box
+
+
+def main():
+    """Entry point for the CLI."""
+    app()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
