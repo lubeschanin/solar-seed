@@ -548,11 +548,13 @@ class MonitoringDB:
             except ValueError:
                 magnitude = 1.0
 
-            # Check if already exists (within 5 minutes of peak)
+            # Check if already exists (exact peak time match)
+            # Use string comparison since SQLite datetime() doesn't handle ISO8601 with TZ well
+            peak_str = peak_ts.isoformat()
             cursor.execute("""
                 SELECT id FROM flare_events
-                WHERE peak_time BETWEEN datetime(?, '-5 minutes') AND datetime(?, '+5 minutes')
-            """, (peak_ts.isoformat(), peak_ts.isoformat()))
+                WHERE peak_time = ?
+            """, (peak_str,))
 
             if cursor.fetchone():
                 continue  # Already exists

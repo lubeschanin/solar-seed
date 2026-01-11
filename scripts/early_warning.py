@@ -1215,6 +1215,72 @@ def correlations():
     console.print(f"\n[bold]Prediction Accuracy:[/] {accuracy['overall']}")
 
 
+@app.command(name="extract-flares")
+def extract_flares(
+    min_class: str = typer.Option("C", "--min-class", "-c", help="Minimum flare class (C, M, or X)"),
+    gap: int = typer.Option(30, "--gap", "-g", help="Max gap in minutes between readings for same event"),
+):
+    """
+    🔥 Extract flare events from GOES X-ray data.
+
+    Groups consecutive elevated flux readings into discrete flare events.
+    Stores in flare_events table for correlation analysis.
+    """
+    from rich.table import Table
+
+    db = get_monitoring_db()
+
+    console.print(f"[bold]Extracting flare events (>= {min_class}-class, gap={gap}min)...[/]\n")
+
+    count = db.extract_flare_events_from_goes(min_class=min_class, gap_minutes=gap)
+
+    if count == 0:
+        console.print("[yellow]No new flare events found.[/]")
+    else:
+        console.print(f"[green]✓ Extracted {count} new flare events[/]\n")
+
+    # Show all flare events
+    cursor = db.conn.cursor()
+    cursor.execute("""
+        SELECT start_time, peak_time, class, magnitude, peak_flux
+        FROM flare_events
+        ORDER BY peak_time DESC
+        LIMIT 20
+    """)
+    events = cursor.fetchall()
+
+    if events:
+        table = Table(title="🔥 Flare Events", box=box.ROUNDED)
+        table.add_column("Peak Time")
+        table.add_column("Class", justify="center")
+        table.add_column("Peak Flux", justify="right")
+        table.add_column("Duration")
+
+        for e in events:
+            start = e['start_time']
+            peak = e['peak_time']
+            flare_class = f"{e['class']}{e['magnitude']:.1f}"
+            flux = f"{e['peak_flux']:.2e}" if e['peak_flux'] else "?"
+
+            # Calculate duration if we have timestamps
+            try:
+                from datetime import datetime
+                start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
+                peak_dt = datetime.fromisoformat(peak.replace('Z', '+00:00'))
+                duration = "—"  # Would need end_time for proper duration
+            except:
+                duration = "—"
+
+            table.add_row(peak[:16].replace('T', ' '), flare_class, flux, duration)
+
+        console.print(table)
+
+    # Show total count
+    cursor.execute("SELECT COUNT(*) FROM flare_events")
+    total = cursor.fetchone()[0]
+    console.print(f"\n[dim]Total flare events in database: {total}[/]")
+
+
 @app.command(name="validate-divergences")
 def validate_divergences(
     window: int = typer.Option(24, "--window", "-w", help="Hours window for flare matching"),
