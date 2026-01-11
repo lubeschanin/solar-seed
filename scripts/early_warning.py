@@ -1158,6 +1158,74 @@ def correlations():
     console.print(f"\n[bold]Prediction Accuracy:[/] {accuracy['overall']}")
 
 
+@app.command(name="validate-divergences")
+def validate_divergences(
+    window: int = typer.Option(24, "--window", "-w", help="Hours window for flare matching"),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-validate all (not just unvalidated)"),
+):
+    """
+    🔬 Validate divergences against GOES flare history.
+
+    Retrospectively classifies divergences as:
+    - POST_EVENT: Flare occurred BEFORE divergence (structural aftermath)
+    - PRECURSOR: Flare occurred AFTER divergence (predictive signal!)
+    - BETWEEN_EVENTS: Flares both before and after
+    - ISOLATED: No flares in window (noise or missed event)
+    """
+    from rich.table import Table
+
+    db = get_monitoring_db()
+
+    if force:
+        # Reset validation status
+        db.conn.execute("UPDATE phase_divergence SET validated = 0")
+        db.conn.commit()
+        console.print("[yellow]Reset validation status for all divergences[/]\n")
+
+    console.print(f"[bold]Validating divergences against GOES flares (±{window}h window)...[/]\n")
+
+    result = db.validate_divergences_against_flares(window_hours=window)
+
+    # Summary table
+    table = Table(title="🔬 Divergence Validation Results", box=box.ROUNDED)
+    table.add_column("Classification", style="bold")
+    table.add_column("Count", justify="right")
+    table.add_column("Meaning")
+
+    table.add_row(
+        "POST_EVENT",
+        str(result['post_event']),
+        "[dim]Flare before divergence (structural aftermath)[/]"
+    )
+    table.add_row(
+        "[bold yellow]PRECURSOR[/]",
+        f"[bold yellow]{result['precursor']}[/]",
+        "[yellow]Flare AFTER divergence (predictive signal!)[/]"
+    )
+    table.add_row(
+        "BETWEEN_EVENTS",
+        str(result['between_events']),
+        "[dim]Flares both before and after[/]"
+    )
+    table.add_row(
+        "ISOLATED",
+        str(result['isolated']),
+        "[dim]No flares in window[/]"
+    )
+
+    console.print(table)
+    console.print(f"\n[green]✓ Validated {result['total_checked']} divergences[/]")
+
+    # Show updated stats
+    stats = db.get_divergence_statistics()
+    console.print(f"\n[bold]Updated Statistics:[/]")
+    console.print(f"  Total divergences: {stats['overall']['total_divergences']}")
+
+    if result['precursor'] > 0:
+        console.print(f"\n[bold green]🎯 {result['precursor']} PRECURSOR events found![/]")
+        console.print("[green]These divergences preceded flares - potential early warning signals.[/]")
+
+
 @app.command()
 def location(
     set_location: str = typer.Argument(None, help="Set location (berlin, tokyo, or lat,lon)"),
