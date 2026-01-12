@@ -144,8 +144,19 @@ class MonitoringDB:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 alert_id TEXT UNIQUE,
                 issue_time DATETIME NOT NULL,
-                alert_type TEXT,
+                message_code TEXT,
+                alert_type TEXT CHECK(alert_type IN ('WARNING', 'ALERT', 'WATCH', 'SUMMARY', 'FORECAST')),
+                kp_observed REAL,
+                kp_predicted REAL,
+                kp_max_24h REAL,
+                valid_from DATETIME,
+                valid_to DATETIME,
+                g_scale INTEGER CHECK(g_scale BETWEEN 0 AND 5),
+                s_scale INTEGER CHECK(s_scale BETWEEN 0 AND 5),
+                r_scale INTEGER CHECK(r_scale BETWEEN 0 AND 5),
+                source_region TEXT,
                 message TEXT,
+                raw_json TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -281,15 +292,29 @@ class MonitoringDB:
             return -1
 
     def insert_noaa_alert(self, alert_id: str, issue_time: str,
-                          alert_type: str = None, message: str = None) -> int:
-        """Insert NOAA alert."""
+                          message_code: str = None, alert_type: str = None,
+                          kp_observed: float = None, kp_predicted: float = None,
+                          kp_max_24h: float = None,
+                          valid_from: str = None, valid_to: str = None,
+                          g_scale: int = None, s_scale: int = None, r_scale: int = None,
+                          source_region: str = None, message: str = None,
+                          raw_json: str = None) -> int:
+        """Insert NOAA Space Weather alert with Kp and scale tracking."""
         cursor = self.conn.cursor()
         try:
             cursor.execute("""
                 INSERT OR IGNORE INTO noaa_alerts
-                (alert_id, issue_time, alert_type, message)
-                VALUES (?, ?, ?, ?)
-            """, (alert_id, issue_time, alert_type, message))
+                (alert_id, issue_time, message_code, alert_type,
+                 kp_observed, kp_predicted, kp_max_24h,
+                 valid_from, valid_to,
+                 g_scale, s_scale, r_scale,
+                 source_region, message, raw_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (alert_id, issue_time, message_code, alert_type,
+                  kp_observed, kp_predicted, kp_max_24h,
+                  valid_from, valid_to,
+                  g_scale, s_scale, r_scale,
+                  source_region, message, raw_json))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:

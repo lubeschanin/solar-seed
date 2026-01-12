@@ -134,18 +134,45 @@ class MonitoringDB:
                 verified BOOLEAN DEFAULT FALSE,
                 lead_time_hours REAL,
                 notes TEXT,
+                pipeline_version TEXT DEFAULT 'v0.4',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
-        # NOAA alerts
+        # Many-to-many: Prediction ↔ Flare matches (for proper evaluation)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS prediction_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                prediction_id INTEGER NOT NULL REFERENCES predictions(id),
+                flare_event_id INTEGER NOT NULL REFERENCES flare_events(id),
+                match_type TEXT CHECK(match_type IN ('hit', 'near_miss', 'post_event', 'ambiguous')),
+                time_to_peak_min REAL,
+                distance_score REAL,
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(prediction_id, flare_event_id)
+            )
+        """)
+
+        # NOAA Space Weather Alerts (enhanced for Kp tracking)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS noaa_alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 alert_id TEXT UNIQUE,
                 issue_time DATETIME NOT NULL,
-                alert_type TEXT,
+                message_code TEXT,
+                alert_type TEXT CHECK(alert_type IN ('WARNING', 'ALERT', 'WATCH', 'SUMMARY', 'FORECAST')),
+                kp_observed REAL,
+                kp_predicted REAL,
+                kp_max_24h REAL,
+                valid_from DATETIME,
+                valid_to DATETIME,
+                g_scale INTEGER CHECK(g_scale BETWEEN 0 AND 5),
+                s_scale INTEGER CHECK(s_scale BETWEEN 0 AND 5),
+                r_scale INTEGER CHECK(r_scale BETWEEN 0 AND 5),
+                source_region TEXT,
                 message TEXT,
+                raw_json TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -194,17 +221,83 @@ class MonitoringDB:
         except sqlite3.OperationalError:
             pass
 
+        # Add new columns to coupling_measurements
+        for col, dtype in [
+            ('sudden_drop_pct', 'REAL'),
+            ('sudden_drop_severity', 'TEXT'),
+            ('pipeline_version', 'TEXT'),
+            ('veto_reason', 'TEXT'),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE coupling_measurements ADD COLUMN {col} {dtype}")
+            except sqlite3.OperationalError:
+                pass
+
+        # Add pipeline_version to predictions
+        try:
+            cursor.execute("ALTER TABLE predictions ADD COLUMN pipeline_version TEXT DEFAULT 'v0.4'")
+        except sqlite3.OperationalError:
+            pass
+
+        # Add new columns to noaa_alerts (migration for existing DBs)
+        noaa_new_cols = [
+            ('message_code', 'TEXT'),
+            ('kp_observed', 'REAL'),
+            ('kp_predicted', 'REAL'),
+            ('kp_max_24h', 'REAL'),
+            ('valid_from', 'DATETIME'),
+            ('valid_to', 'DATETIME'),
+            ('g_scale', 'INTEGER'),
+            ('s_scale', 'INTEGER'),
+            ('r_scale', 'INTEGER'),
+            ('source_region', 'TEXT'),
+            ('raw_json', 'TEXT'),
+        ]
+        for col, dtype in noaa_new_cols:
+            try:
+                cursor.execute(f"ALTER TABLE noaa_alerts ADD COLUMN {col} {dtype}")
+            except sqlite3.OperationalError:
+                pass
+
         # Create indices for fast queries
+        # Time series: timestamp is primary query axis
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_goes_timestamp ON goes_xray(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_wind_timestamp ON solar_wind(timestamp)")
+
+        # Coupling: composite index for (pair, timestamp) queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_timestamp ON coupling_measurements(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_pair ON coupling_measurements(pair)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_pair_time ON coupling_measurements(pair, timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_status ON coupling_measurements(status)")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_coupling_unique ON coupling_measurements(timestamp, pair)")
+
+        # Flare events: time-based queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_time ON flare_events(start_time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_peak ON flare_events(peak_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_class ON flare_events(class)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_source ON flare_events(source)")
+
+        # Predictions: time and verification status
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_time ON predictions(prediction_time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_verified ON predictions(verified)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_pair ON predictions(trigger_pair)")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_predictions_unique ON predictions(prediction_time, trigger_pair)")
+
+        # Prediction matches: for evaluation queries
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_prediction ON prediction_matches(prediction_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_flare ON prediction_matches(flare_event_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_type ON prediction_matches(match_type)")
+
+        # Phase divergence
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_timestamp ON phase_divergence(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_phases ON phase_divergence(phase_goes, phase_experimental)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_type ON phase_divergence(divergence_type)")
+
+        # NOAA alerts
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_noaa_issue_time ON noaa_alerts(issue_time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_noaa_code ON noaa_alerts(message_code)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_noaa_type ON noaa_alerts(alert_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_noaa_kp ON noaa_alerts(kp_observed)")
 
         self.conn.commit()
 
@@ -267,17 +360,21 @@ class MonitoringDB:
                         deviation_pct: float = None, status: str = None,
                         trend: str = None, slope_pct_per_hour: float = None,
                         acceleration: float = None, confidence: str = None,
-                        n_points: int = None) -> int:
-        """Insert coupling measurement."""
+                        n_points: int = None, sudden_drop_pct: float = None,
+                        sudden_drop_severity: str = None, veto_reason: str = None,
+                        pipeline_version: str = 'v0.4') -> int:
+        """Insert coupling measurement with optional sudden drop and versioning."""
         cursor = self.conn.cursor()
         try:
             cursor.execute("""
                 INSERT OR REPLACE INTO coupling_measurements
                 (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
-                 status, trend, slope_pct_per_hour, acceleration, confidence, n_points)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
+                 sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
-                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points))
+                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
+                  sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -310,9 +407,17 @@ class MonitoringDB:
                           trigger_pair: str = None, trigger_status: str = None,
                           trigger_residual: float = None, trigger_trend: str = None,
                           notes: str = None) -> int:
-        """Insert a prediction."""
+        """Insert a prediction (skips if same time+pair exists)."""
         cursor = self.conn.cursor()
         try:
+            # Check for existing prediction with same time and pair
+            cursor.execute("""
+                SELECT id FROM predictions
+                WHERE prediction_time = ? AND trigger_pair = ?
+            """, (prediction_time, trigger_pair))
+            if cursor.fetchone():
+                return -1  # Already exists
+
             cursor.execute("""
                 INSERT INTO predictions
                 (prediction_time, predicted_class, predicted_probability,
@@ -326,16 +431,86 @@ class MonitoringDB:
             print(f"Error inserting prediction: {e}")
             return -1
 
+    def insert_prediction_match(self, prediction_id: int, flare_event_id: int,
+                                match_type: str, time_to_peak_min: float = None,
+                                distance_score: float = None, notes: str = None) -> int:
+        """
+        Insert prediction ↔ flare match (many-to-many relationship).
+
+        Args:
+            prediction_id: ID from predictions table
+            flare_event_id: ID from flare_events table
+            match_type: 'hit', 'near_miss', 'post_event', or 'ambiguous'
+            time_to_peak_min: Time from prediction to flare peak in minutes
+            distance_score: Optional matching score (0-1, higher = better match)
+            notes: Optional notes
+
+        Returns:
+            Row ID or -1 on error/duplicate
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO prediction_matches
+                (prediction_id, flare_event_id, match_type, time_to_peak_min,
+                 distance_score, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (prediction_id, flare_event_id, match_type, time_to_peak_min,
+                  distance_score, notes))
+            self.conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return -1  # Duplicate match
+        except sqlite3.Error as e:
+            print(f"Error inserting prediction match: {e}")
+            return -1
+
     def insert_noaa_alert(self, alert_id: str, issue_time: str,
-                          alert_type: str = None, message: str = None) -> int:
-        """Insert NOAA alert."""
+                          message_code: str = None, alert_type: str = None,
+                          kp_observed: float = None, kp_predicted: float = None,
+                          kp_max_24h: float = None,
+                          valid_from: str = None, valid_to: str = None,
+                          g_scale: int = None, s_scale: int = None, r_scale: int = None,
+                          source_region: str = None, message: str = None,
+                          raw_json: str = None) -> int:
+        """
+        Insert NOAA Space Weather alert with Kp and scale tracking.
+
+        Args:
+            alert_id: Unique alert identifier
+            issue_time: When alert was issued (ISO datetime)
+            message_code: NOAA code (WARK05, ALTK06, etc.)
+            alert_type: WARNING, ALERT, WATCH, SUMMARY, or FORECAST
+            kp_observed: Current observed Kp index
+            kp_predicted: Predicted Kp index
+            kp_max_24h: Maximum Kp in last 24 hours
+            valid_from: Alert validity start time
+            valid_to: Alert validity end time
+            g_scale: Geomagnetic storm scale (G0-G5)
+            s_scale: Solar radiation scale (S0-S5)
+            r_scale: Radio blackout scale (R0-R5)
+            source_region: Active region number (e.g., AR3842)
+            message: Full message text
+            raw_json: Original JSON for debugging
+
+        Returns:
+            Row ID or -1 on error
+        """
         cursor = self.conn.cursor()
         try:
             cursor.execute("""
                 INSERT OR IGNORE INTO noaa_alerts
-                (alert_id, issue_time, alert_type, message)
-                VALUES (?, ?, ?, ?)
-            """, (alert_id, issue_time, alert_type, message))
+                (alert_id, issue_time, message_code, alert_type,
+                 kp_observed, kp_predicted, kp_max_24h,
+                 valid_from, valid_to,
+                 g_scale, s_scale, r_scale,
+                 source_region, message, raw_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (alert_id, issue_time, message_code, alert_type,
+                  kp_observed, kp_predicted, kp_max_24h,
+                  valid_from, valid_to,
+                  g_scale, s_scale, r_scale,
+                  source_region, message, raw_json))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -963,6 +1138,257 @@ class MonitoringDB:
     # DIVERGENCE VALIDATION
     # =========================================================================
 
+    def extract_predictions_from_coupling(self, statuses: list[str] = None) -> int:
+        """
+        Extract predictions from coupling_measurements into predictions table.
+
+        Converts ALERT/ELEVATED coupling entries into prediction records
+        for separate tracking and validation.
+
+        Args:
+            statuses: List of statuses to extract (default: ['ALERT', 'ELEVATED'])
+
+        Returns:
+            Number of predictions extracted
+        """
+        if statuses is None:
+            statuses = ['ALERT', 'ELEVATED']
+
+        cursor = self.conn.cursor()
+
+        # Get coupling measurements with alert/elevated status
+        placeholders = ','.join('?' * len(statuses))
+        cursor.execute(f"""
+            SELECT DISTINCT timestamp, pair, delta_mi, residual, status, trend
+            FROM coupling_measurements
+            WHERE status IN ({placeholders})
+            ORDER BY timestamp
+        """, statuses)
+
+        measurements = cursor.fetchall()
+        inserted = 0
+
+        for m in measurements:
+            ts, pair, delta_mi, residual, status, trend = m
+
+            # Check if already exists
+            cursor.execute("""
+                SELECT id FROM predictions
+                WHERE prediction_time = ? AND trigger_pair = ?
+            """, (ts, pair))
+
+            if cursor.fetchone():
+                continue  # Already extracted
+
+            # Estimate predicted class based on status
+            if status == 'ALERT':
+                predicted_class = 'M'  # Alert suggests M-class potential
+            else:
+                predicted_class = 'C'  # Elevated suggests C-class
+
+            cursor.execute("""
+                INSERT INTO predictions
+                (prediction_time, predicted_class, trigger_pair, trigger_status,
+                 trigger_residual, trigger_trend, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (ts, predicted_class, pair, status, residual, trend,
+                  f'Auto-extracted from coupling_measurements'))
+
+            inserted += 1
+
+        self.conn.commit()
+        return inserted
+
+    def verify_predictions_against_flares(self, window_hours: float = 6.0) -> dict:
+        """
+        Match predictions with subsequent flares.
+
+        Args:
+            window_hours: Time window to look for flares after prediction
+
+        Returns:
+            dict with verification statistics
+        """
+        cursor = self.conn.cursor()
+
+        # Get unverified predictions
+        cursor.execute("""
+            SELECT id, prediction_time, predicted_class, trigger_pair
+            FROM predictions
+            WHERE verified = 0 OR verified IS NULL
+            ORDER BY prediction_time
+        """)
+        predictions = cursor.fetchall()
+
+        stats = {
+            'total_checked': 0,
+            'matched': 0,
+            'unmatched': 0,
+            'avg_lead_time': None,
+            'lead_times': []
+        }
+
+        for pred in predictions:
+            pred_id, pred_time, pred_class, pair = pred
+
+            # Find flare within window AFTER prediction
+            cursor.execute("""
+                SELECT id, start_time, class, magnitude
+                FROM flare_events
+                WHERE start_time > ?
+                AND start_time <= datetime(?, ?)
+                AND class IN ('C', 'M', 'X')
+                ORDER BY start_time ASC
+                LIMIT 1
+            """, (pred_time, pred_time, f'+{window_hours} hours'))
+
+            flare = cursor.fetchone()
+            stats['total_checked'] += 1
+
+            if flare:
+                flare_id, flare_time, flare_class, magnitude = flare
+
+                # Calculate lead time (handle timezone-naive vs aware)
+                from datetime import datetime, timezone as tz
+                pred_time_str = pred_time.replace('Z', '+00:00')
+                flare_time_str = flare_time.replace('Z', '+00:00')
+
+                pred_dt = datetime.fromisoformat(pred_time_str)
+                flare_dt = datetime.fromisoformat(flare_time_str)
+
+                # Make both timezone-aware (UTC) if not already
+                if pred_dt.tzinfo is None:
+                    pred_dt = pred_dt.replace(tzinfo=tz.utc)
+                if flare_dt.tzinfo is None:
+                    flare_dt = flare_dt.replace(tzinfo=tz.utc)
+
+                lead_time = (flare_dt - pred_dt).total_seconds() / 3600
+
+                cursor.execute("""
+                    UPDATE predictions
+                    SET verified = 1, actual_flare_id = ?, lead_time_hours = ?
+                    WHERE id = ?
+                """, (flare_id, lead_time, pred_id))
+
+                stats['matched'] += 1
+                stats['lead_times'].append(lead_time)
+            else:
+                cursor.execute("""
+                    UPDATE predictions
+                    SET verified = 0
+                    WHERE id = ?
+                """, (pred_id,))
+                stats['unmatched'] += 1
+
+        self.conn.commit()
+
+        if stats['lead_times']:
+            stats['avg_lead_time'] = sum(stats['lead_times']) / len(stats['lead_times'])
+
+        return stats
+
+    def get_prediction_summary(self) -> dict:
+        """Get summary of predictions vs NOAA flares with post-flare classification."""
+        cursor = self.conn.cursor()
+
+        # Classify each prediction as PRE-flare, POST-flare, or unrelated
+        cursor.execute("""
+            SELECT p.id, p.prediction_time, p.actual_flare_id, p.verified, p.lead_time_hours
+            FROM predictions p
+            ORDER BY p.prediction_time
+        """)
+        predictions = cursor.fetchall()
+
+        true_positives = 0
+        false_positives = 0
+        post_flare = 0
+        lead_times = []
+
+        for pred in predictions:
+            pred_id, pred_time, flare_id, verified, lead_time = pred
+
+            if flare_id and lead_time and lead_time > 0:
+                # Prediction followed by flare = True Positive
+                true_positives += 1
+                lead_times.append(lead_time)
+            else:
+                # Check if this prediction is AFTER a recent flare (post-flare effect)
+                cursor.execute("""
+                    SELECT id, peak_time, class, magnitude
+                    FROM flare_events
+                    WHERE peak_time < ?
+                    AND peak_time >= datetime(?, '-2 hours')
+                    ORDER BY peak_time DESC
+                    LIMIT 1
+                """, (pred_time, pred_time))
+                recent_flare = cursor.fetchone()
+
+                if recent_flare:
+                    # This is a post-flare alert, not a false positive
+                    post_flare += 1
+                else:
+                    false_positives += 1
+
+        # NOAA flares summary (only recent, matching our monitoring period)
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_flares,
+                SUM(CASE WHEN class = 'X' THEN 1 ELSE 0 END) as x_class,
+                SUM(CASE WHEN class = 'M' THEN 1 ELSE 0 END) as m_class,
+                SUM(CASE WHEN class = 'C' THEN 1 ELSE 0 END) as c_class
+            FROM flare_events
+        """)
+        flare_stats = dict(cursor.fetchone())
+
+        # FN = flares in monitoring period without predictions
+        cursor.execute("""
+            SELECT MIN(prediction_time), MAX(prediction_time) FROM predictions
+        """)
+        time_range = cursor.fetchone()
+
+        if time_range[0]:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT f.id) as missed_flares
+                FROM flare_events f
+                WHERE f.class IN ('C', 'M', 'X')
+                AND f.start_time >= ?
+                AND f.start_time <= datetime(?, '+1 day')
+                AND NOT EXISTS (
+                    SELECT 1 FROM predictions p
+                    WHERE p.actual_flare_id = f.id
+                )
+            """, (time_range[0], time_range[1]))
+            fn = cursor.fetchone()[0]
+        else:
+            fn = 0
+
+        # Calculate metrics (excluding post-flare from FP)
+        precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
+        recall = true_positives / (true_positives + fn) if (true_positives + fn) > 0 else 0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        avg_lead = sum(lead_times) / len(lead_times) if lead_times else None
+
+        return {
+            'predictions': {
+                'total_predictions': len(predictions),
+                'true_positives': true_positives,
+                'false_positives': false_positives,
+                'post_flare': post_flare,
+                'avg_lead_time': avg_lead
+            },
+            'noaa_flares': flare_stats,
+            'metrics': {
+                'true_positives': true_positives,
+                'false_positives': false_positives,
+                'post_flare_alerts': post_flare,
+                'false_negatives': fn,
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1,
+                'avg_lead_time_hours': avg_lead
+            }
+        }
+
     def validate_divergences_against_flares(self, window_hours: int = 24) -> dict:
         """
         Retrospectively validate divergences against GOES flare history.
@@ -1070,6 +1496,92 @@ class MonitoringDB:
 
         self.conn.commit()
         return stats
+
+    # =========================================================================
+    # EXPORT METHODS
+    # =========================================================================
+
+    def export_to_csv(self, table: str, output_path: Path, days: int = None) -> int:
+        """
+        Export table data to CSV file.
+
+        Args:
+            table: Table name (predictions, flare_events, coupling_measurements, etc.)
+            output_path: Output CSV file path
+            days: Limit to last N days (None = all data)
+
+        Returns:
+            Number of rows exported
+        """
+        import csv
+
+        valid_tables = [
+            'predictions', 'flare_events', 'coupling_measurements',
+            'goes_xray', 'solar_wind', 'phase_divergence'
+        ]
+
+        if table not in valid_tables:
+            raise ValueError(f"Invalid table: {table}. Valid: {valid_tables}")
+
+        cursor = self.conn.cursor()
+
+        # Build query with optional date filter
+        if days:
+            # Find timestamp column
+            ts_col = 'timestamp' if table != 'predictions' else 'prediction_time'
+            if table == 'flare_events':
+                ts_col = 'start_time'
+            query = f"SELECT * FROM {table} WHERE {ts_col} >= datetime('now', '-{days} days') ORDER BY {ts_col}"
+        else:
+            query = f"SELECT * FROM {table}"
+
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        if not rows:
+            return 0
+
+        # Get column names
+        columns = [desc[0] for desc in cursor.description]
+
+        # Write CSV
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(output_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(columns)
+            for row in rows:
+                writer.writerow(row)
+
+        return len(rows)
+
+    def export_all_csv(self, output_dir: Path, days: int = None) -> dict:
+        """
+        Export all tables to CSV files.
+
+        Args:
+            output_dir: Output directory
+            days: Limit to last N days (None = all data)
+
+        Returns:
+            Dict with table names and row counts
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        tables = [
+            'predictions', 'flare_events', 'coupling_measurements',
+            'goes_xray', 'solar_wind'
+        ]
+
+        results = {}
+        for table in tables:
+            output_path = output_dir / f"{table}.csv"
+            count = self.export_to_csv(table, output_path, days)
+            results[table] = count
+
+        return results
 
 
 # =============================================================================

@@ -229,6 +229,8 @@ class StatusFormatter:
             residual = data.get('residual', 0)
             trend = data.get('trend', 'NO_DATA')
             slope = data.get('slope_pct_per_hour', 0)
+            sudden_drop_pct = data.get('sudden_drop_pct', 0)
+            sudden_drop_severity = data.get('sudden_drop_severity')
 
             # Compute anomaly level from z-score
             anomaly_level = get_anomaly_level(residual)
@@ -245,12 +247,22 @@ class StatusFormatter:
             else:
                 r_style = "green"
 
-            # Build trend string
+            # Build trend string with sudden drop indicator
             trend_str = f"{trend_icon} {slope:+.1f}%/h"
+            if sudden_drop_severity:
+                drop_icon = "⚡" if sudden_drop_severity == 'SEVERE' else "↘"
+                trend_str += f" {drop_icon}{sudden_drop_pct*100:+.0f}%"
 
             # Anomaly text with sign indicator
             sign = "+" if residual > 0 else ""
             anomaly_text = Text(f"{anomaly_level} ({sign}{residual:.1f}σ)", style=anomaly_style)
+
+            # Sudden drop detection (pre-flare warning even if above baseline)
+            if sudden_drop_severity and not data.get('is_break'):
+                if sudden_drop_severity == 'SEVERE':
+                    anomaly_text = Text(f"⚡ SUDDEN DROP ({sudden_drop_pct*100:.0f}%)", style="bold yellow")
+                else:
+                    anomaly_text = Text(f"↘ DROP ({sudden_drop_pct*100:.0f}%)", style="yellow")
 
             # Break indicator overrides with 4K confirmation status
             if data.get('is_break'):

@@ -386,6 +386,77 @@ class TestCouplingMonitor:
         assert result is False
 
 
+class TestSuddenDropDetector:
+    """Test sudden drop detection for pre-flare warnings."""
+
+    @pytest.fixture
+    def monitor(self):
+        """Create monitor with typical history."""
+        m = CouplingMonitor()
+        m.history = [
+            {'timestamp': '2026-01-01T10:00:00', 'coupling': {'193-211': {'delta_mi': 0.90}}},
+            {'timestamp': '2026-01-01T10:10:00', 'coupling': {'193-211': {'delta_mi': 0.95}}},
+            {'timestamp': '2026-01-01T10:20:00', 'coupling': {'193-211': {'delta_mi': 0.88}}},
+        ]
+        return m
+
+    def test_no_drop_normal_status(self, monitor):
+        """No significant drop = NORMAL status."""
+        result = monitor.compute_residual('193-211', 0.90)
+        assert result['sudden_drop']['sudden_drop'] is False
+        # Status based on absolute threshold (0.90 > baseline 0.59)
+        assert result['status'] == 'NORMAL'
+
+    def test_moderate_drop_detected(self, monitor):
+        """15-25% drop = MODERATE severity."""
+        # 0.95 * 0.83 = 0.79 (17% drop from max)
+        result = monitor.compute_residual('193-211', 0.79)
+        assert result['sudden_drop']['sudden_drop'] is True
+        assert result['sudden_drop']['severity'] == 'MODERATE'
+
+    def test_severe_drop_detected(self, monitor):
+        """25%+ drop = SEVERE severity."""
+        # 0.95 * 0.73 = 0.69 (27% drop from max)
+        result = monitor.compute_residual('193-211', 0.69)
+        assert result['sudden_drop']['sudden_drop'] is True
+        assert result['sudden_drop']['severity'] == 'SEVERE'
+
+    def test_sudden_drop_triggers_elevated_status(self, monitor):
+        """Severe sudden drop should trigger ELEVATED even if above baseline."""
+        # 0.70 is above baseline (0.59) but 26% below recent max (0.95)
+        result = monitor.compute_residual('193-211', 0.70)
+        assert result['sudden_drop']['sudden_drop'] is True
+        assert result['sudden_drop']['severity'] == 'SEVERE'
+        assert result['status'] == 'ELEVATED'
+
+    def test_m3_preflare_scenario(self, monitor):
+        """Simulate M3 pre-flare drop that was missed before."""
+        # M3 timeline: 0.917 → 0.953 → 0.875 → 0.714 (drop!)
+        monitor.history = [
+            {'timestamp': '2026-01-11T21:38:00', 'coupling': {'193-211': {'delta_mi': 0.917}}},
+            {'timestamp': '2026-01-11T21:48:00', 'coupling': {'193-211': {'delta_mi': 0.953}}},
+            {'timestamp': '2026-01-11T21:59:00', 'coupling': {'193-211': {'delta_mi': 0.875}}},
+        ]
+        result = monitor.compute_residual('193-211', 0.714)
+
+        # Should detect severe drop
+        assert result['sudden_drop']['sudden_drop'] is True
+        assert result['sudden_drop']['severity'] == 'SEVERE'
+        drop_pct = result['sudden_drop']['drop_pct']
+        assert drop_pct < -0.20  # At least 20% drop
+
+        # Should trigger ELEVATED (pre-flare warning!)
+        assert result['status'] == 'ELEVATED'
+
+    def test_empty_history_no_crash(self):
+        """Empty history should not crash."""
+        m = CouplingMonitor()
+        m.history = []
+        result = m.compute_residual('193-211', 0.5)
+        assert result['sudden_drop']['sudden_drop'] is False
+        assert 'reason' in result['sudden_drop']
+
+
 class TestAlertThresholds:
     """Test that alert thresholds match paper findings."""
 

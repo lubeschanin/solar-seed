@@ -209,6 +209,71 @@ def get_dscovr_solar_wind() -> dict | None:
     return result if result else None
 
 
+def parse_noaa_alert(alert: dict) -> dict:
+    """Parse NOAA alert and extract Kp/scale information."""
+    import re
+    import json
+
+    message = alert.get('message', '')
+    product_id = alert.get('product_id', '')
+
+    # Extract NOAA message code (e.g., WARK05, ALTK06)
+    code_match = re.search(r'Code:\s*(\w+)', message)
+    message_code = code_match.group(1) if code_match else None
+
+    # Determine alert type from product_id or code
+    alert_type = None
+    if product_id.startswith('WAR') or (message_code and message_code.startswith('WAR')):
+        alert_type = 'WARNING'
+    elif product_id.startswith('ALT') or (message_code and message_code.startswith('ALT')):
+        alert_type = 'ALERT'
+    elif product_id.startswith('WAT'):
+        alert_type = 'WATCH'
+    elif product_id.startswith('SUM'):
+        alert_type = 'SUMMARY'
+
+    # Extract Kp from code (e.g., WARK05 → Kp=5)
+    kp_predicted = None
+    if message_code and len(message_code) >= 6:
+        try:
+            kp_predicted = int(message_code[-1])
+        except ValueError:
+            pass
+
+    # Extract Kp from message text
+    kp_match = re.search(r'Kp\s*[=:]\s*(\d+)', message)
+    kp_observed = int(kp_match.group(1)) if kp_match else None
+
+    # Extract G/S/R scale (e.g., "G2 - Moderate", "S1 - Minor", "R1 - Minor")
+    g_match = re.search(r'G(\d)', message)
+    s_match = re.search(r'S(\d)', message)
+    r_match = re.search(r'R(\d)', message)
+
+    g_scale = int(g_match.group(1)) if g_match else None
+    s_scale = int(s_match.group(1)) if s_match else None
+    r_scale = int(r_match.group(1)) if r_match else None
+
+    # Extract active region (e.g., AR3842, Region 3842)
+    region_match = re.search(r'(?:AR|Region\s*)(\d{4})', message)
+    source_region = f"AR{region_match.group(1)}" if region_match else None
+
+    # Extract validity period
+    valid_match = re.search(r'Valid\s+(\d{4}\s+\w+\s+\d+)\s+to\s+(\d{4}\s+\w+\s+\d+)', message)
+    valid_from = valid_to = None  # Would need more parsing for actual dates
+
+    return {
+        'message_code': message_code or product_id,
+        'alert_type': alert_type,
+        'kp_observed': kp_observed,
+        'kp_predicted': kp_predicted,
+        'g_scale': g_scale,
+        's_scale': s_scale,
+        'r_scale': r_scale,
+        'source_region': source_region,
+        'raw_json': json.dumps(alert),
+    }
+
+
 def get_noaa_alerts() -> list:
     """Fetch active NOAA space weather alerts."""
     print("  Fetching NOAA alerts...")
@@ -233,15 +298,40 @@ def get_noaa_alerts() -> list:
                 if issue_time.tzinfo is None:
                     issue_time = issue_time.replace(tzinfo=timezone.utc)
                 if now - issue_time < timedelta(hours=24):
+                    parsed = parse_noaa_alert(alert)
                     recent.append({
                         'type': alert.get('product_id', 'unknown'),
                         'message': alert.get('message', '')[:200],
-                        'issued': alert['issue_datetime']
+                        'issued': alert['issue_datetime'],
+                        **parsed,  # Include parsed Kp/scale info
                     })
         except (KeyError, ValueError, TypeError):
             continue
 
     return recent[:5]  # Top 5 recent
+
+
+def store_noaa_alerts(alerts: list):
+    """Store NOAA alerts in database."""
+    if not alerts:
+        return
+
+    db = get_monitoring_db()
+    for alert in alerts:
+        db.insert_noaa_alert(
+            alert_id=f"{alert['type']}_{alert['issued']}",
+            issue_time=alert['issued'],
+            message_code=alert.get('message_code'),
+            alert_type=alert.get('alert_type'),
+            kp_observed=alert.get('kp_observed'),
+            kp_predicted=alert.get('kp_predicted'),
+            g_scale=alert.get('g_scale'),
+            s_scale=alert.get('s_scale'),
+            r_scale=alert.get('r_scale'),
+            source_region=alert.get('source_region'),
+            message=alert.get('message'),
+            raw_json=alert.get('raw_json'),
+        )
 
 
 def assess_geomagnetic_risk(solar_wind: dict) -> tuple[str, int]:
@@ -372,6 +462,10 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
         # Skip internal metadata fields
         if pair.startswith('_'):
             continue
+
+        status = data.get('status')
+
+        # Store coupling measurement with sudden drop info
         db.insert_coupling(
             timestamp=timestamp,
             pair=pair,
@@ -379,13 +473,29 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
             mi_original=data.get('mi_original'),
             residual=data.get('residual'),
             deviation_pct=data.get('deviation_pct'),
-            status=data.get('status'),
+            status=status,
             trend=data.get('trend'),
             slope_pct_per_hour=data.get('slope_pct_per_hour'),
             acceleration=data.get('acceleration'),
             confidence=data.get('confidence'),
-            n_points=data.get('n_points')
+            n_points=data.get('n_points'),
+            sudden_drop_pct=data.get('sudden_drop_pct'),
+            sudden_drop_severity=data.get('sudden_drop_severity'),
+            veto_reason=data.get('break_vetoed'),
         )
+
+        # Auto-create prediction for ALERT/ELEVATED status
+        if status in ('ALERT', 'ELEVATED'):
+            predicted_class = 'M' if status == 'ALERT' else 'C'
+            db.insert_prediction(
+                prediction_time=timestamp,
+                predicted_class=predicted_class,
+                trigger_pair=pair,
+                trigger_status=status,
+                trigger_residual=data.get('residual'),
+                trigger_trend=data.get('trend'),
+                notes='Auto-created during monitoring'
+            )
 
     # Check and log phase divergence
     check_and_log_divergence(timestamp, coupling, xray, db)
@@ -684,12 +794,19 @@ def _analyze_pair(wl1: int, wl2: int, channels: dict, monitor, validate_breaks: 
     residual_info = monitor.compute_residual(pair_key, delta_mi)
     trend_info = monitor.analyze_trend(pair_key)
 
+    # Extract sudden drop info
+    sudden_drop = residual_info.get('sudden_drop', {})
+    sudden_drop_pct = sudden_drop.get('drop_pct', 0) if sudden_drop else 0
+    sudden_drop_severity = sudden_drop.get('severity') if sudden_drop else None
+
     output['result'] = {
         'delta_mi': delta_mi,
         'mi_original': shuffle_result.mi_original,
         'residual': residual_info['residual'],
         'deviation_pct': residual_info['deviation_pct'],
         'status': residual_info['status'],
+        'sudden_drop_pct': sudden_drop_pct,
+        'sudden_drop_severity': sudden_drop_severity,
         'artifact_warning': artifact is not None,
         'is_break': break_check.get('is_break', False),
         'break_vetoed': break_check.get('vetoed'),
@@ -942,6 +1059,8 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: b
             if solar_wind:
                 risk, risk_level = assess_geomagnetic_risk(solar_wind)
                 store_solar_wind_reading(solar_wind, risk, risk_level)
+            if alerts:
+                store_noaa_alerts(alerts)
 
         coupling = None
         if with_coupling and (time.time() - last_coupling) > coupling_interval:
@@ -1105,6 +1224,8 @@ def check(
             if solar_wind:
                 risk, risk_level = assess_geomagnetic_risk(solar_wind)
                 store_solar_wind_reading(solar_wind, risk, risk_level)
+            if alerts:
+                store_noaa_alerts(alerts)
 
         coupling_data = None
         if coupling:
@@ -1405,6 +1526,197 @@ def validate_divergences(
     if result['precursor'] > 0:
         console.print(f"\n[bold green]🎯 {result['precursor']} PRECURSOR events found![/]")
         console.print("[green]These divergences preceded flares - potential early warning signals.[/]")
+
+
+@app.command(name="extract-predictions")
+def extract_predictions(
+    window: float = typer.Option(6.0, "--window", "-w", help="Hours window for flare matching"),
+):
+    """
+    🎯 Extract predictions from coupling data and verify against NOAA flares.
+
+    This separates our predictions from NOAA ground truth:
+    - predictions table: Our system's alerts/warnings
+    - flare_events table: NOAA/DONKI flares (ground truth)
+    """
+    db = MonitoringDB()
+
+    console.print("\n[bold]Extracting predictions from coupling measurements...[/]")
+
+    # Extract predictions
+    extracted = db.extract_predictions_from_coupling()
+    console.print(f"  Extracted: [cyan]{extracted}[/] new predictions")
+
+    # Verify against flares
+    console.print(f"\n[bold]Verifying against NOAA flares (±{window}h window)...[/]")
+    verify_result = db.verify_predictions_against_flares(window_hours=window)
+
+    console.print(f"  Checked:   [cyan]{verify_result['total_checked']}[/] predictions")
+    console.print(f"  Matched:   [green]{verify_result['matched']}[/] (true positives)")
+    console.print(f"  Unmatched: [yellow]{verify_result['unmatched']}[/] (false positives)")
+
+    if verify_result['avg_lead_time']:
+        console.print(f"  Avg lead:  [cyan]{verify_result['avg_lead_time']:.1f}[/] hours")
+
+    # Show summary
+    console.print("\n[bold]Summary:[/]")
+    summary = db.get_prediction_summary()
+
+    from rich.table import Table
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Category", style="cyan")
+    table.add_column("Count", justify="right")
+
+    table.add_row("Our Predictions", str(summary['predictions']['total_predictions']))
+    table.add_row("  - Pre-Flare (TP)", f"[green]{summary['metrics']['true_positives']}[/]")
+    table.add_row("  - Post-Flare", f"[dim]{summary['metrics']['post_flare_alerts']}[/]")
+    table.add_row("  - False Positives", f"[yellow]{summary['metrics']['false_positives']}[/]")
+    table.add_row("", "")
+    table.add_row("Flares (monitoring period)", str(summary['metrics']['true_positives'] + summary['metrics']['false_negatives']))
+    table.add_row("  - Detected (TP)", f"[green]{summary['metrics']['true_positives']}[/]")
+    table.add_row("  - Missed (FN)", f"[red]{summary['metrics']['false_negatives']}[/]")
+    table.add_row("", "")
+    table.add_row("[bold]Precision[/]", f"[bold]{summary['metrics']['precision']:.1%}[/]")
+    table.add_row("[bold]Recall[/]", f"[bold]{summary['metrics']['recall']:.1%}[/]")
+    table.add_row("[bold]F1 Score[/]", f"[bold]{summary['metrics']['f1_score']:.2f}[/]")
+    if summary['metrics']['avg_lead_time_hours']:
+        table.add_row("Avg Lead Time", f"{summary['metrics']['avg_lead_time_hours']:.1f}h")
+
+    console.print(table)
+
+
+@app.command(name="show-predictions")
+def show_predictions(
+    limit: int = typer.Option(20, "--limit", "-l", help="Number of predictions to show"),
+):
+    """
+    📊 Show predictions vs NOAA flares comparison.
+
+    Displays our system's predictions alongside actual NOAA flare events.
+    """
+    db = MonitoringDB()
+
+    from rich.table import Table
+
+    # Show predictions
+    console.print("\n[bold]Recent Predictions (our system):[/]")
+    cursor = db.conn.cursor()
+    cursor.execute("""
+        SELECT prediction_time, predicted_class, trigger_pair, trigger_status,
+               actual_flare_id, lead_time_hours, verified
+        FROM predictions
+        ORDER BY prediction_time DESC
+        LIMIT ?
+    """, (limit,))
+
+    preds = cursor.fetchall()
+
+    if preds:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Time", style="cyan")
+        table.add_column("Predicted", style="yellow")
+        table.add_column("Pair")
+        table.add_column("Status")
+        table.add_column("Flare?", justify="center")
+        table.add_column("Lead", justify="right")
+
+        for p in preds:
+            ts = p[0][:16] if p[0] else ""
+            pred_cls = p[1] or ""
+            pair = p[2] or ""
+            status = p[3] or ""
+            flare = "[green]✓[/]" if p[4] else "[red]✗[/]"
+            lead = f"{p[5]:.1f}h" if p[5] else ""
+
+            table.add_row(ts, pred_cls, pair, status, flare, lead)
+
+        console.print(table)
+    else:
+        console.print("[yellow]No predictions yet. Run 'extract-predictions' first.[/]")
+
+    # Show recent NOAA flares
+    console.print("\n[bold]Recent NOAA Flares (ground truth):[/]")
+    cursor.execute("""
+        SELECT start_time, class, magnitude, source, location
+        FROM flare_events
+        ORDER BY start_time DESC
+        LIMIT ?
+    """, (limit,))
+
+    flares = cursor.fetchall()
+
+    if flares:
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Time", style="cyan")
+        table.add_column("Class", style="yellow")
+        table.add_column("Source")
+        table.add_column("Location")
+
+        for f in flares:
+            ts = f[0][:16] if f[0] else ""
+            cls = f"{f[1]}{f[2]:.1f}" if f[1] and f[2] else ""
+            src = f[3] or ""
+            loc = f[4] or ""
+
+            table.add_row(ts, cls, src, loc)
+
+        console.print(table)
+
+    # Show summary
+    summary = db.get_prediction_summary()
+    console.print(f"\n[bold]Metrics:[/] Precision={summary['metrics']['precision']:.1%}, "
+                  f"Recall={summary['metrics']['recall']:.1%}, "
+                  f"F1={summary['metrics']['f1_score']:.3f}")
+
+
+@app.command(name="export")
+def export_csv(
+    table: str = typer.Argument(None, help="Table to export (or 'all')"),
+    output: str = typer.Option("results/exports", "--output", "-o", help="Output path"),
+    days: int = typer.Option(None, "--days", "-d", help="Limit to last N days"),
+):
+    """
+    📤 Export database tables to CSV.
+
+    Examples:
+      export all                    # Export all tables
+      export predictions            # Export predictions only
+      export flare_events -d 30     # Last 30 days of flares
+      export coupling_measurements  # All coupling data
+    """
+    from pathlib import Path
+
+    db = MonitoringDB()
+
+    if table is None or table == 'all':
+        # Export all tables
+        output_dir = Path(output)
+        console.print(f"\n[bold]Exporting all tables to {output_dir}/[/]\n")
+
+        results = db.export_all_csv(output_dir, days)
+
+        for tbl, count in results.items():
+            if count > 0:
+                console.print(f"  [green]✓[/] {tbl}.csv: {count} rows")
+            else:
+                console.print(f"  [dim]- {tbl}.csv: empty[/]")
+
+        total = sum(results.values())
+        console.print(f"\n[bold]Total: {total} rows exported[/]")
+
+    else:
+        # Export single table
+        output_path = Path(output)
+        if not output_path.suffix:
+            output_path = output_path / f"{table}.csv"
+
+        console.print(f"\n[bold]Exporting {table} to {output_path}[/]\n")
+
+        try:
+            count = db.export_to_csv(table, output_path, days)
+            console.print(f"  [green]✓[/] {count} rows exported")
+        except ValueError as e:
+            console.print(f"  [red]Error: {e}[/]")
 
 
 @app.command()

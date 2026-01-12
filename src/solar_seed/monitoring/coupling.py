@@ -91,20 +91,96 @@ class CouplingMonitor:
 
         return previous_breaks >= min_frames - 1
 
+    def detect_sudden_drop(self, pair: str, delta_mi: float, lookback: int = 3) -> dict:
+        """
+        Detect sudden relative drop in coupling.
+
+        This catches pre-flare drops that are still above baseline but represent
+        a significant decrease from recent readings.
+
+        Args:
+            pair: Channel pair (e.g. '193-211')
+            delta_mi: Current ΔMI value
+            lookback: Number of previous readings to compare (default: 3 = ~30 min)
+
+        Returns:
+            Dict with drop detection results
+        """
+        pair_history = [
+            h for h in self.history
+            if pair in h.get('coupling', {})
+        ]
+
+        if len(pair_history) < lookback:
+            return {
+                'sudden_drop': False,
+                'drop_pct': 0,
+                'reference_value': None,
+                'reason': f'Not enough history ({len(pair_history)}/{lookback})'
+            }
+
+        # Get recent values (excluding current)
+        recent_values = [
+            h['coupling'][pair]['delta_mi']
+            for h in pair_history[-lookback:]
+        ]
+
+        # Use max of recent values as reference (captures the "normal" level)
+        reference = max(recent_values)
+
+        # Calculate drop percentage
+        if reference > 0:
+            drop_pct = (delta_mi - reference) / reference
+        else:
+            drop_pct = 0
+
+        # Thresholds for sudden drop detection
+        SUDDEN_DROP_THRESHOLD = -0.15  # 15% drop from recent max
+        SEVERE_DROP_THRESHOLD = -0.25  # 25% drop = more urgent
+
+        if drop_pct < SEVERE_DROP_THRESHOLD:
+            sudden_drop = True
+            severity = 'SEVERE'
+        elif drop_pct < SUDDEN_DROP_THRESHOLD:
+            sudden_drop = True
+            severity = 'MODERATE'
+        else:
+            sudden_drop = False
+            severity = None
+
+        return {
+            'sudden_drop': sudden_drop,
+            'drop_pct': drop_pct,
+            'reference_value': reference,
+            'current_value': delta_mi,
+            'severity': severity,
+            'lookback_minutes': lookback * 10,  # Assuming 10min intervals
+        }
+
     def compute_residual(self, pair: str, delta_mi: float) -> dict:
-        """Compute residual r(t) = (ΔMI - baseline) / std."""
+        """Compute residual r(t) = (ΔMI - baseline) / std with sudden drop detection."""
         if pair not in self.BASELINES:
-            return {'residual': 0, 'deviation_pct': 0, 'status': 'unknown'}
+            return {'residual': 0, 'deviation_pct': 0, 'status': 'unknown', 'sudden_drop': None}
 
         baseline = self.BASELINES[pair]
         residual = (delta_mi - baseline['mean']) / baseline['std']
         deviation_pct = (delta_mi - baseline['mean']) / baseline['mean']
 
+        # Check for sudden drop (relative to recent readings)
+        drop_info = self.detect_sudden_drop(pair, delta_mi)
+
+        # Determine status - combine absolute threshold AND sudden drop
         if deviation_pct < self.ALERT_THRESHOLD:
             status = 'ALERT'
         elif deviation_pct < -0.15:
             status = 'WARNING'
         elif deviation_pct < -0.10:
+            status = 'ELEVATED'
+        elif drop_info['sudden_drop'] and drop_info['severity'] == 'SEVERE':
+            # Sudden severe drop even if above baseline
+            status = 'ELEVATED'
+        elif drop_info['sudden_drop'] and drop_info['severity'] == 'MODERATE':
+            # Sudden moderate drop
             status = 'ELEVATED'
         else:
             status = 'NORMAL'
@@ -112,7 +188,8 @@ class CouplingMonitor:
         return {
             'residual': residual,
             'deviation_pct': deviation_pct,
-            'status': status
+            'status': status,
+            'sudden_drop': drop_info
         }
 
     def _theil_sen_slope(self, values: list) -> float:

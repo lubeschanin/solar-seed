@@ -308,6 +308,181 @@ class TestMigration:
         assert len(recent) == 3
 
 
+class TestNoaaAlerts:
+    """Test NOAA alert parsing and storage."""
+
+    @pytest.fixture
+    def db(self):
+        """Create temporary database."""
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+            db_path = Path(f.name)
+        db = MonitoringDB(db_path=db_path)
+        yield db
+        db.close()
+        db_path.unlink()
+
+    def test_insert_noaa_alert(self, db):
+        """Insert NOAA alert with all fields."""
+        row_id = db.insert_noaa_alert(
+            alert_id="WARK04_2026-01-12T09:00:00",
+            issue_time="2026-01-12T09:00:00",
+            message_code="WARK04",
+            alert_type="WARNING",
+            kp_observed=3,
+            kp_predicted=4,
+            g_scale=2,
+            source_region="AR3842",
+            message="Geomagnetic K-index of 4 expected"
+        )
+        assert row_id > 0
+
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT * FROM noaa_alerts WHERE id = ?", (row_id,))
+        row = cursor.fetchone()
+        assert row['message_code'] == 'WARK04'
+        assert row['alert_type'] == 'WARNING'
+        assert row['kp_predicted'] == 4
+        assert row['g_scale'] == 2
+
+    def test_noaa_alert_duplicate_prevention(self, db):
+        """Duplicate alerts are ignored."""
+        db.insert_noaa_alert(
+            alert_id="ALTEF3_2026-01-12T11:00:00",
+            issue_time="2026-01-12T11:00:00",
+            message_code="ALTEF3",
+            alert_type="ALERT"
+        )
+        # Try inserting same alert_id
+        db.insert_noaa_alert(
+            alert_id="ALTEF3_2026-01-12T11:00:00",
+            issue_time="2026-01-12T11:00:00",
+            message_code="ALTEF3_modified",
+            alert_type="ALERT"
+        )
+
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM noaa_alerts")
+        assert cursor.fetchone()[0] == 1  # Only one entry
+
+    def test_noaa_alert_scales(self, db):
+        """Test G/S/R scale storage."""
+        db.insert_noaa_alert(
+            alert_id="test_scales",
+            issue_time="2026-01-12T10:00:00",
+            g_scale=3,
+            s_scale=2,
+            r_scale=1
+        )
+
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT g_scale, s_scale, r_scale FROM noaa_alerts WHERE alert_id = ?",
+                       ("test_scales",))
+        row = cursor.fetchone()
+        assert row['g_scale'] == 3
+        assert row['s_scale'] == 2
+        assert row['r_scale'] == 1
+
+
+class TestNoaaAlertParsing:
+    """Test NOAA alert message parsing."""
+
+    def test_parse_kp_warning(self):
+        """Parse Kp warning message."""
+        from scripts.early_warning import parse_noaa_alert
+
+        alert = {
+            'product_id': 'K04W',
+            'message': '''Space Weather Message Code: WARK04
+Serial Number: 5218
+Issue Time: 2026 Jan 12 0902 UTC
+
+EXTENDED WARNING: Geomagnetic K-index of 4 expected
+Extension to Serial Number: 5217
+Valid From: 2026 Jan 11 1800 UTC
+Valid To: 2026 Jan 12 0900 UTC'''
+        }
+        result = parse_noaa_alert(alert)
+
+        assert result['message_code'] == 'WARK04'
+        assert result['alert_type'] == 'WARNING'
+        assert result['kp_predicted'] == 4
+
+    def test_parse_electron_flux_alert(self):
+        """Parse electron flux alert message."""
+        from scripts.early_warning import parse_noaa_alert
+
+        alert = {
+            'product_id': 'EF3A',
+            'message': '''Space Weather Message Code: ALTEF3
+Serial Number: 3598
+Issue Time: 2026 Jan 12 1101 UTC
+
+ALERT: Electron 2MeV Integral Flux exceeded 1000pfu
+Threshold Reached: 2026 Jan 12 1040 UTC'''
+        }
+        result = parse_noaa_alert(alert)
+
+        assert result['message_code'] == 'ALTEF3'
+        assert result['alert_type'] == 'ALERT'
+        assert result['kp_predicted'] == 3  # Extracted from ALTEF3
+
+    def test_parse_geomagnetic_storm_scales(self):
+        """Parse G-scale from storm message."""
+        from scripts.early_warning import parse_noaa_alert
+
+        alert = {
+            'product_id': 'WATA50',
+            'message': '''Space Weather Message Code: WATA50
+WATCH: Geomagnetic Storm Category G2 - Moderate
+Expected: 2026 Jan 12'''
+        }
+        result = parse_noaa_alert(alert)
+
+        assert result['g_scale'] == 2
+        assert result['alert_type'] == 'WATCH'
+
+    def test_parse_radio_blackout(self):
+        """Parse R-scale from radio blackout."""
+        from scripts.early_warning import parse_noaa_alert
+
+        alert = {
+            'product_id': 'ALTTP2',
+            'message': '''Space Weather Message Code: ALTTP2
+ALERT: Type II Radio Emission
+R1 - Minor Radio Blackout observed'''
+        }
+        result = parse_noaa_alert(alert)
+
+        assert result['r_scale'] == 1
+        assert result['alert_type'] == 'ALERT'
+
+    def test_parse_active_region(self):
+        """Parse active region from message."""
+        from scripts.early_warning import parse_noaa_alert
+
+        alert = {
+            'product_id': 'SUMX01',
+            'message': '''Space Weather Message Code: SUMX01
+Summary: X1.0 Flare from Region 3842
+Peak Time: 2026 Jan 12 0530 UTC'''
+        }
+        result = parse_noaa_alert(alert)
+
+        assert result['source_region'] == 'AR3842'
+
+    def test_parse_empty_message(self):
+        """Handle empty/missing fields gracefully."""
+        from scripts.early_warning import parse_noaa_alert
+
+        alert = {'product_id': 'TEST', 'message': ''}
+        result = parse_noaa_alert(alert)
+
+        assert result['message_code'] == 'TEST'  # Falls back to product_id
+        assert result['kp_observed'] is None
+        assert result['kp_predicted'] is None
+        assert result['g_scale'] is None
+
+
 class TestPredictionVerification:
     """Test prediction verification workflow."""
 
