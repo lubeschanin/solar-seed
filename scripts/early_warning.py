@@ -487,6 +487,44 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
         # Auto-create prediction for ALERT/ELEVATED status
         if status in ('ALERT', 'ELEVATED'):
             predicted_class = 'M' if status == 'ALERT' else 'C'
+
+            # Determine trigger_kind based on what caused the alert
+            trigger_kind = None
+            trigger_value = None
+            trigger_threshold = None
+
+            sudden_drop = data.get('sudden_drop_severity')
+            is_break = data.get('is_break')
+            deviation_pct = data.get('deviation_pct')
+            z_mad = data.get('z_mad')
+
+            if sudden_drop:
+                # Sudden drop detector triggered
+                trigger_kind = 'SUDDEN_DROP'
+                trigger_value = data.get('sudden_drop_pct')
+                trigger_threshold = -0.15 if sudden_drop == 'MODERATE' else -0.25
+            elif is_break:
+                # Coupling break detected
+                trigger_kind = 'BREAK'
+                trigger_value = z_mad
+                trigger_threshold = 2.0
+            elif deviation_pct is not None and deviation_pct < -0.25:
+                # Absolute threshold exceeded (ALERT)
+                trigger_kind = 'THRESHOLD'
+                trigger_value = deviation_pct
+                trigger_threshold = -0.25
+            elif deviation_pct is not None and deviation_pct < -0.15:
+                # Warning threshold (ELEVATED)
+                trigger_kind = 'THRESHOLD'
+                trigger_value = deviation_pct
+                trigger_threshold = -0.15
+            else:
+                # Fallback: check trend
+                trend = data.get('trend')
+                if trend in ('DECLINING', 'ACCELERATING_DOWN'):
+                    trigger_kind = 'TREND'
+                    trigger_value = data.get('slope_pct_per_hour')
+
             db.insert_prediction(
                 prediction_time=timestamp,
                 predicted_class=predicted_class,
@@ -494,6 +532,9 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
                 trigger_status=status,
                 trigger_residual=data.get('residual'),
                 trigger_trend=data.get('trend'),
+                trigger_kind=trigger_kind,
+                trigger_value=trigger_value,
+                trigger_threshold=trigger_threshold,
                 notes='Auto-created during monitoring'
             )
 
