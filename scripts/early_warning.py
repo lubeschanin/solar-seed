@@ -1452,8 +1452,8 @@ def extract_flares(
 
 @app.command(name="import-flares")
 def import_flares(
-    start: str = typer.Option("2024-01-01", "--start", "-s", help="Start date (YYYY-MM-DD)"),
-    end: str = typer.Option("2024-12-31", "--end", "-e", help="End date (YYYY-MM-DD)"),
+    start: str = typer.Option("2026-01-01", "--start", "-s", help="Start date (YYYY-MM-DD)"),
+    end: str = typer.Option("2026-12-31", "--end", "-e", help="End date (YYYY-MM-DD)"),
     min_class: str = typer.Option("M", "--min-class", "-c", help="Minimum flare class (C, M, or X)"),
 ):
     """
