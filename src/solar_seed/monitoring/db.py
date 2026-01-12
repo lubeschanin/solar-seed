@@ -198,7 +198,43 @@ class MonitoringDB:
                 flare_within_24h INTEGER DEFAULT NULL,
                 flare_class TEXT DEFAULT NULL,
                 flare_time DATETIME DEFAULT NULL,
+                trigger_was_vetoed BOOLEAN DEFAULT NULL,
+                trigger_robustness_score REAL DEFAULT NULL,
+                trigger_quality_ok BOOLEAN DEFAULT NULL,
                 notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # =================================================================
+        # REPRODUCIBILITY TABLES (Run tracking)
+        # =================================================================
+
+        # Pipeline runs - captures each monitoring session
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ended_at DATETIME,
+                git_commit TEXT,
+                config_hash TEXT,
+                pipeline_version TEXT DEFAULT 'v0.5',
+                status TEXT CHECK(status IN ('running', 'completed', 'failed', 'interrupted')) DEFAULT 'running',
+                n_measurements INTEGER DEFAULT 0,
+                n_predictions INTEGER DEFAULT 0,
+                n_divergences INTEGER DEFAULT 0,
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Run configuration - JSON blob for full reproducibility
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS run_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                config_hash TEXT UNIQUE NOT NULL,
+                config_json TEXT NOT NULL,
+                description TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -227,17 +263,38 @@ class MonitoringDB:
             ('sudden_drop_severity', 'TEXT'),
             ('pipeline_version', 'TEXT'),
             ('veto_reason', 'TEXT'),
+            # Structured quality fields (v0.5)
+            ('quality_ok', 'BOOLEAN'),
+            ('robustness_score', 'REAL'),
+            ('sync_delta_s', 'REAL'),
+            ('run_id', 'INTEGER'),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE coupling_measurements ADD COLUMN {col} {dtype}")
             except sqlite3.OperationalError:
                 pass
 
-        # Add pipeline_version to predictions
-        try:
-            cursor.execute("ALTER TABLE predictions ADD COLUMN pipeline_version TEXT DEFAULT 'v0.4'")
-        except sqlite3.OperationalError:
-            pass
+        # Add columns to predictions
+        for col, dtype in [
+            ('pipeline_version', "TEXT DEFAULT 'v0.4'"),
+            ('run_id', 'INTEGER'),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE predictions ADD COLUMN {col} {dtype}")
+            except sqlite3.OperationalError:
+                pass
+
+        # Add trigger quality fields to phase_divergence (v0.5)
+        for col, dtype in [
+            ('trigger_was_vetoed', 'BOOLEAN'),
+            ('trigger_robustness_score', 'REAL'),
+            ('trigger_quality_ok', 'BOOLEAN'),
+            ('run_id', 'INTEGER'),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE phase_divergence ADD COLUMN {col} {dtype}")
+            except sqlite3.OperationalError:
+                pass
 
         # Add new columns to noaa_alerts (migration for existing DBs)
         noaa_new_cols = [
@@ -298,6 +355,21 @@ class MonitoringDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_noaa_code ON noaa_alerts(message_code)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_noaa_type ON noaa_alerts(alert_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_noaa_kp ON noaa_alerts(kp_observed)")
+
+        # Runs and config (reproducibility)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_version ON runs(pipeline_version)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_config_hash ON run_config(config_hash)")
+
+        # Run FK indexes (for queries by run)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_run ON coupling_measurements(run_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_run ON predictions(run_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_run ON phase_divergence(run_id)")
+
+        # Quality filtering indexes
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_quality ON coupling_measurements(quality_ok)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_vetoed ON phase_divergence(trigger_was_vetoed)")
 
         self.conn.commit()
 
@@ -362,19 +434,23 @@ class MonitoringDB:
                         acceleration: float = None, confidence: str = None,
                         n_points: int = None, sudden_drop_pct: float = None,
                         sudden_drop_severity: str = None, veto_reason: str = None,
-                        pipeline_version: str = 'v0.4') -> int:
-        """Insert coupling measurement with optional sudden drop and versioning."""
+                        pipeline_version: str = 'v0.5',
+                        quality_ok: bool = None, robustness_score: float = None,
+                        sync_delta_s: float = None, run_id: int = None) -> int:
+        """Insert coupling measurement with quality fields and run tracking."""
         cursor = self.conn.cursor()
         try:
             cursor.execute("""
                 INSERT OR REPLACE INTO coupling_measurements
                 (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
-                 sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version,
+                 quality_ok, robustness_score, sync_delta_s, run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
                   status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
-                  sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version))
+                  sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version,
+                  quality_ok, robustness_score, sync_delta_s, run_id))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -530,6 +606,10 @@ class MonitoringDB:
         goes_rising: bool = None,
         max_z_score: float = None,
         trigger_pair: str = None,
+        trigger_was_vetoed: bool = None,
+        trigger_robustness_score: float = None,
+        trigger_quality_ok: bool = None,
+        run_id: int = None,
         notes: str = None,
     ) -> int:
         """
@@ -541,6 +621,10 @@ class MonitoringDB:
         Args:
             divergence_type: PRECURSOR, POST_EVENT, or STRUCTURAL_EVENT
             goes_rising: Whether GOES was trending up at time of divergence
+            trigger_was_vetoed: Whether the trigger measurement was vetoed
+            trigger_robustness_score: Robustness score (0-1) of trigger measurement
+            trigger_quality_ok: Whether trigger passed all quality checks
+            run_id: FK to runs table for reproducibility
         """
         cursor = self.conn.cursor()
         try:
@@ -548,17 +632,126 @@ class MonitoringDB:
                 INSERT INTO phase_divergence
                 (timestamp, phase_goes, phase_experimental, reason_goes,
                  reason_experimental, divergence_type, goes_flux, goes_class,
-                 goes_rising, max_z_score, trigger_pair, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 goes_rising, max_z_score, trigger_pair,
+                 trigger_was_vetoed, trigger_robustness_score, trigger_quality_ok,
+                 run_id, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (timestamp, phase_goes, phase_experimental, reason_goes,
                   reason_experimental, divergence_type, goes_flux, goes_class,
                   1 if goes_rising else 0 if goes_rising is not None else None,
-                  max_z_score, trigger_pair, notes))
+                  max_z_score, trigger_pair,
+                  trigger_was_vetoed, trigger_robustness_score, trigger_quality_ok,
+                  run_id, notes))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
             print(f"Error inserting phase divergence: {e}")
             return -1
+
+    # =========================================================================
+    # RUN MANAGEMENT (Reproducibility)
+    # =========================================================================
+
+    def start_run(self, git_commit: str = None, config_hash: str = None,
+                  pipeline_version: str = 'v0.5', notes: str = None) -> int:
+        """
+        Start a new monitoring run.
+
+        Args:
+            git_commit: Git commit hash for code version
+            config_hash: Hash of configuration (FK to run_config)
+            pipeline_version: Pipeline version string
+            notes: Optional notes about this run
+
+        Returns:
+            Run ID for use in subsequent inserts
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO runs (git_commit, config_hash, pipeline_version, notes)
+                VALUES (?, ?, ?, ?)
+            """, (git_commit, config_hash, pipeline_version, notes))
+            self.conn.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as e:
+            print(f"Error starting run: {e}")
+            return -1
+
+    def complete_run(self, run_id: int, status: str = 'completed',
+                     n_measurements: int = None, n_predictions: int = None,
+                     n_divergences: int = None) -> bool:
+        """
+        Mark a run as completed and update statistics.
+
+        Args:
+            run_id: ID of the run to complete
+            status: Final status ('completed', 'failed', 'interrupted')
+            n_measurements: Total coupling measurements in this run
+            n_predictions: Total predictions generated
+            n_divergences: Total phase divergences logged
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                UPDATE runs SET
+                    ended_at = CURRENT_TIMESTAMP,
+                    status = ?,
+                    n_measurements = COALESCE(?, n_measurements),
+                    n_predictions = COALESCE(?, n_predictions),
+                    n_divergences = COALESCE(?, n_divergences)
+                WHERE id = ?
+            """, (status, n_measurements, n_predictions, n_divergences, run_id))
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Error completing run: {e}")
+            return False
+
+    def save_config(self, config_dict: dict, description: str = None) -> str:
+        """
+        Save a configuration and return its hash.
+
+        Args:
+            config_dict: Configuration as dictionary
+            description: Human-readable description
+
+        Returns:
+            Config hash (use as FK in runs.config_hash)
+        """
+        import hashlib
+        config_json = json.dumps(config_dict, sort_keys=True)
+        config_hash = hashlib.sha256(config_json.encode()).hexdigest()[:16]
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO run_config (config_hash, config_json, description)
+                VALUES (?, ?, ?)
+            """, (config_hash, config_json, description))
+            self.conn.commit()
+        except sqlite3.Error as e:
+            print(f"Error saving config: {e}")
+
+        return config_hash
+
+    def get_run(self, run_id: int) -> dict:
+        """Get run details by ID."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_active_run(self) -> dict:
+        """Get the most recent running run (if any)."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM runs
+            WHERE status = 'running'
+            ORDER BY started_at DESC LIMIT 1
+        """)
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     # =========================================================================
     # QUERY METHODS

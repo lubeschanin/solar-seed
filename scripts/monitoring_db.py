@@ -161,6 +161,47 @@ class MonitoringDB:
             )
         """)
 
+        # Pipeline runs (reproducibility)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ended_at DATETIME,
+                git_commit TEXT,
+                config_hash TEXT,
+                pipeline_version TEXT DEFAULT 'v0.5',
+                status TEXT CHECK(status IN ('running', 'completed', 'failed', 'interrupted')) DEFAULT 'running',
+                n_measurements INTEGER DEFAULT 0,
+                n_predictions INTEGER DEFAULT 0,
+                n_divergences INTEGER DEFAULT 0,
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Run configuration (reproducibility)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS run_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                config_hash TEXT UNIQUE NOT NULL,
+                config_json TEXT NOT NULL,
+                description TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Migrations for new columns
+        for col, dtype in [
+            ('quality_ok', 'BOOLEAN'),
+            ('robustness_score', 'REAL'),
+            ('sync_delta_s', 'REAL'),
+            ('run_id', 'INTEGER'),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE coupling_measurements ADD COLUMN {col} {dtype}")
+            except sqlite3.OperationalError:
+                pass
+
         # Create indices for fast queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_goes_timestamp ON goes_xray(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_wind_timestamp ON solar_wind(timestamp)")
@@ -232,17 +273,21 @@ class MonitoringDB:
                         deviation_pct: float = None, status: str = None,
                         trend: str = None, slope_pct_per_hour: float = None,
                         acceleration: float = None, confidence: str = None,
-                        n_points: int = None) -> int:
-        """Insert coupling measurement."""
+                        n_points: int = None, quality_ok: bool = None,
+                        robustness_score: float = None, sync_delta_s: float = None,
+                        run_id: int = None) -> int:
+        """Insert coupling measurement with quality fields."""
         cursor = self.conn.cursor()
         try:
             cursor.execute("""
                 INSERT OR REPLACE INTO coupling_measurements
                 (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
-                 status, trend, slope_pct_per_hour, acceleration, confidence, n_points)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
+                 quality_ok, robustness_score, sync_delta_s, run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
-                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points))
+                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
+                  quality_ok, robustness_score, sync_delta_s, run_id))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
