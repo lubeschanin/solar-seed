@@ -71,4 +71,3 @@ htmlcov/
 # Type checking
 .mypy_cache/
 paper.pdf
-CLAUDE.md
