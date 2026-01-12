@@ -519,11 +519,18 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
                 trigger_value = deviation_pct
                 trigger_threshold = -0.15
             else:
-                # Fallback: check trend
-                trend = data.get('trend')
-                if trend in ('DECLINING', 'ACCELERATING_DOWN'):
-                    trigger_kind = 'TREND'
-                    trigger_value = data.get('slope_pct_per_hour')
+                # Check for z-score spike (STRONG/EXTREME anomaly level)
+                residual = data.get('residual')
+                if residual is not None and abs(residual) > 4.0:
+                    trigger_kind = 'Z_SCORE_SPIKE'
+                    trigger_value = residual
+                    trigger_threshold = 4.0
+                else:
+                    # Fallback: check trend
+                    trend = data.get('trend')
+                    if trend in ('DECLINING', 'ACCELERATING_DOWN'):
+                        trigger_kind = 'TREND'
+                        trigger_value = data.get('slope_pct_per_hour')
 
             db.insert_prediction(
                 prediction_time=timestamp,
