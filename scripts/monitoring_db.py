@@ -81,12 +81,89 @@ class MonitoringDB:
             )
         """)
 
+        # =================================================================
+        # DIMENSION TABLES (Normalization)
+        # =================================================================
+
+        # Channels lookup table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wavelength INTEGER NOT NULL,
+                instrument TEXT NOT NULL DEFAULT 'AIA',
+                name TEXT,
+                temperature_mk REAL,
+                region TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(wavelength, instrument)
+            )
+        """)
+
+        # Pairs lookup table (normalized)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pairs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ch_a_id INTEGER NOT NULL REFERENCES channels(id),
+                ch_b_id INTEGER NOT NULL REFERENCES channels(id),
+                pair_name TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(ch_a_id, ch_b_id),
+                CHECK(ch_a_id < ch_b_id)
+            )
+        """)
+
+        # Seed channels if empty
+        cursor.execute("SELECT COUNT(*) FROM channels")
+        if cursor.fetchone()[0] == 0:
+            aia_channels = [
+                (94, 'AIA', '94 Å', 6.3, 'Flares'),
+                (131, 'AIA', '131 Å', 10.0, 'Flares (hot)'),
+                (171, 'AIA', '171 Å', 0.6, 'Quiet Corona'),
+                (193, 'AIA', '193 Å', 1.2, 'Corona'),
+                (211, 'AIA', '211 Å', 2.0, 'Active Regions'),
+                (304, 'AIA', '304 Å', 0.05, 'Chromosphere'),
+                (335, 'AIA', '335 Å', 2.5, 'Active Regions (hot)'),
+            ]
+            cursor.executemany("""
+                INSERT INTO channels (wavelength, instrument, name, temperature_mk, region)
+                VALUES (?, ?, ?, ?, ?)
+            """, aia_channels)
+
+        # Seed pairs if empty
+        cursor.execute("SELECT COUNT(*) FROM pairs")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("SELECT id, wavelength FROM channels WHERE instrument = 'AIA'")
+            ch_map = {row[1]: row[0] for row in cursor.fetchall()}
+            common_pairs = [
+                (171, 193), (171, 211), (171, 304),
+                (193, 211), (193, 304), (193, 335),
+                (211, 304), (211, 335),
+                (94, 131), (94, 193), (131, 193),
+            ]
+            for a, b in common_pairs:
+                if a in ch_map and b in ch_map:
+                    ch_a = min(ch_map[a], ch_map[b])
+                    ch_b = max(ch_map[a], ch_map[b])
+                    pair_name = f"{min(a,b)}-{max(a,b)}"
+                    try:
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO pairs (ch_a_id, ch_b_id, pair_name)
+                            VALUES (?, ?, ?)
+                        """, (ch_a, ch_b, pair_name))
+                    except:
+                        pass
+
+        # =================================================================
+        # OBSERVATION TABLES
+        # =================================================================
+
         # Coupling measurements
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS coupling_measurements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp DATETIME NOT NULL,
                 pair TEXT NOT NULL,
+                pair_id INTEGER REFERENCES pairs(id),
                 delta_mi REAL NOT NULL,
                 mi_original REAL,
                 residual REAL,
@@ -196,11 +273,22 @@ class MonitoringDB:
             ('robustness_score', 'REAL'),
             ('sync_delta_s', 'REAL'),
             ('run_id', 'INTEGER'),
+            ('pair_id', 'INTEGER'),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE coupling_measurements ADD COLUMN {col} {dtype}")
             except sqlite3.OperationalError:
                 pass
+
+        # Migrate existing pair strings to pair_id
+        try:
+            cursor.execute("""
+                UPDATE coupling_measurements
+                SET pair_id = (SELECT p.id FROM pairs p WHERE p.pair_name = coupling_measurements.pair)
+                WHERE pair_id IS NULL AND pair IS NOT NULL
+            """)
+        except sqlite3.OperationalError:
+            pass
 
         # Create indices for fast queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_goes_timestamp ON goes_xray(timestamp)")
@@ -208,9 +296,13 @@ class MonitoringDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_timestamp ON coupling_measurements(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_pair ON coupling_measurements(pair)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_status ON coupling_measurements(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_pair_id ON coupling_measurements(pair_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_run_time ON coupling_measurements(run_id, timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_time ON flare_events(start_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_class ON flare_events(class)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_time ON predictions(prediction_time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_wavelength ON channels(wavelength)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pairs_name ON pairs(pair_name)")
 
         self.conn.commit()
 
@@ -275,17 +367,25 @@ class MonitoringDB:
                         acceleration: float = None, confidence: str = None,
                         n_points: int = None, quality_ok: bool = None,
                         robustness_score: float = None, sync_delta_s: float = None,
-                        run_id: int = None) -> int:
-        """Insert coupling measurement with quality fields."""
+                        run_id: int = None, pair_id: int = None) -> int:
+        """Insert coupling measurement with quality fields and pair normalization."""
         cursor = self.conn.cursor()
+
+        # Auto-resolve pair_id from pair string if not provided
+        if pair_id is None and pair:
+            cursor.execute("SELECT id FROM pairs WHERE pair_name = ?", (pair,))
+            row = cursor.fetchone()
+            if row:
+                pair_id = row[0]
+
         try:
             cursor.execute("""
                 INSERT OR REPLACE INTO coupling_measurements
-                (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
+                (timestamp, pair, pair_id, delta_mi, mi_original, residual, deviation_pct,
                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
                  quality_ok, robustness_score, sync_delta_s, run_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, pair, pair_id, delta_mi, mi_original, residual, deviation_pct,
                   status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
                   quality_ok, robustness_score, sync_delta_s, run_id))
             self.conn.commit()

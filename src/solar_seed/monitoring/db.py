@@ -81,12 +81,91 @@ class MonitoringDB:
             )
         """)
 
+        # =================================================================
+        # DIMENSION TABLES (Normalization)
+        # =================================================================
+
+        # Channels lookup table (AIA, EUVI wavelengths)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wavelength INTEGER NOT NULL,
+                instrument TEXT NOT NULL DEFAULT 'AIA',
+                name TEXT,
+                temperature_mk REAL,
+                region TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(wavelength, instrument)
+            )
+        """)
+
+        # Pairs lookup table (normalized, ch_a < ch_b guaranteed)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pairs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ch_a_id INTEGER NOT NULL REFERENCES channels(id),
+                ch_b_id INTEGER NOT NULL REFERENCES channels(id),
+                pair_name TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(ch_a_id, ch_b_id),
+                CHECK(ch_a_id < ch_b_id)
+            )
+        """)
+
+        # Seed channels if empty
+        cursor.execute("SELECT COUNT(*) FROM channels")
+        if cursor.fetchone()[0] == 0:
+            aia_channels = [
+                (94, 'AIA', '94 Å', 6.3, 'Flares'),
+                (131, 'AIA', '131 Å', 10.0, 'Flares (hot)'),
+                (171, 'AIA', '171 Å', 0.6, 'Quiet Corona'),
+                (193, 'AIA', '193 Å', 1.2, 'Corona'),
+                (211, 'AIA', '211 Å', 2.0, 'Active Regions'),
+                (304, 'AIA', '304 Å', 0.05, 'Chromosphere'),
+                (335, 'AIA', '335 Å', 2.5, 'Active Regions (hot)'),
+            ]
+            cursor.executemany("""
+                INSERT INTO channels (wavelength, instrument, name, temperature_mk, region)
+                VALUES (?, ?, ?, ?, ?)
+            """, aia_channels)
+
+        # Seed pairs if empty (common AIA pairs)
+        cursor.execute("SELECT COUNT(*) FROM pairs")
+        if cursor.fetchone()[0] == 0:
+            # Get channel IDs
+            cursor.execute("SELECT id, wavelength FROM channels WHERE instrument = 'AIA'")
+            ch_map = {row[1]: row[0] for row in cursor.fetchall()}
+
+            common_pairs = [
+                (171, 193), (171, 211), (171, 304),
+                (193, 211), (193, 304), (193, 335),
+                (211, 304), (211, 335),
+                (94, 131), (94, 193), (131, 193),
+            ]
+            for a, b in common_pairs:
+                if a in ch_map and b in ch_map:
+                    ch_a = min(ch_map[a], ch_map[b])
+                    ch_b = max(ch_map[a], ch_map[b])
+                    pair_name = f"{min(a,b)}-{max(a,b)}"
+                    try:
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO pairs (ch_a_id, ch_b_id, pair_name)
+                            VALUES (?, ?, ?)
+                        """, (ch_a, ch_b, pair_name))
+                    except:
+                        pass
+
+        # =================================================================
+        # OBSERVATION TABLES
+        # =================================================================
+
         # Coupling measurements
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS coupling_measurements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp DATETIME NOT NULL,
                 pair TEXT NOT NULL,
+                pair_id INTEGER REFERENCES pairs(id),
                 delta_mi REAL NOT NULL,
                 mi_original REAL,
                 residual REAL,
@@ -124,17 +203,26 @@ class MonitoringDB:
             CREATE TABLE IF NOT EXISTS predictions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 prediction_time DATETIME NOT NULL,
+                issued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                valid_from DATETIME,
+                valid_to DATETIME,
                 predicted_class TEXT,
                 predicted_probability REAL,
                 trigger_pair TEXT,
+                trigger_pair_id INTEGER REFERENCES pairs(id),
+                trigger_measurement_id INTEGER REFERENCES coupling_measurements(id),
                 trigger_status TEXT,
                 trigger_residual REAL,
                 trigger_trend TEXT,
+                trigger_kind TEXT CHECK(trigger_kind IN ('Z_SCORE_SPIKE', 'SUDDEN_DROP', 'BREAK', 'TREND', 'THRESHOLD', 'TRANSFER_STATE')),
+                trigger_value REAL,
+                trigger_threshold REAL,
                 actual_flare_id INTEGER REFERENCES flare_events(id),
                 verified BOOLEAN DEFAULT FALSE,
                 lead_time_hours REAL,
                 notes TEXT,
-                pipeline_version TEXT DEFAULT 'v0.4',
+                pipeline_version TEXT DEFAULT 'v0.5',
+                run_id INTEGER REFERENCES runs(id),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -268,21 +356,51 @@ class MonitoringDB:
             ('robustness_score', 'REAL'),
             ('sync_delta_s', 'REAL'),
             ('run_id', 'INTEGER'),
+            # Normalized pair reference (v0.6)
+            ('pair_id', 'INTEGER'),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE coupling_measurements ADD COLUMN {col} {dtype}")
             except sqlite3.OperationalError:
                 pass
 
-        # Add columns to predictions
+        # Add columns to predictions (v0.6 - enhanced prediction tracking)
         for col, dtype in [
-            ('pipeline_version', "TEXT DEFAULT 'v0.4'"),
+            ('pipeline_version', "TEXT DEFAULT 'v0.5'"),
             ('run_id', 'INTEGER'),
+            ('issued_at', 'DATETIME'),
+            ('valid_from', 'DATETIME'),
+            ('valid_to', 'DATETIME'),
+            ('trigger_pair_id', 'INTEGER'),
+            ('trigger_measurement_id', 'INTEGER'),
+            ('trigger_kind', 'TEXT'),
+            ('trigger_value', 'REAL'),
+            ('trigger_threshold', 'REAL'),
         ]:
             try:
                 cursor.execute(f"ALTER TABLE predictions ADD COLUMN {col} {dtype}")
             except sqlite3.OperationalError:
                 pass
+
+        # Migrate existing pair strings to pair_id (one-time migration)
+        try:
+            cursor.execute("""
+                UPDATE coupling_measurements
+                SET pair_id = (SELECT p.id FROM pairs p WHERE p.pair_name = coupling_measurements.pair)
+                WHERE pair_id IS NULL AND pair IS NOT NULL
+            """)
+        except sqlite3.OperationalError:
+            pass
+
+        # Migrate predictions trigger_pair to trigger_pair_id
+        try:
+            cursor.execute("""
+                UPDATE predictions
+                SET trigger_pair_id = (SELECT p.id FROM pairs p WHERE p.pair_name = predictions.trigger_pair)
+                WHERE trigger_pair_id IS NULL AND trigger_pair IS NOT NULL
+            """)
+        except sqlite3.OperationalError:
+            pass
 
         # Add trigger quality fields to phase_divergence (v0.5)
         for col, dtype in [
@@ -371,6 +489,26 @@ class MonitoringDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_quality ON coupling_measurements(quality_ok)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_vetoed ON phase_divergence(trigger_was_vetoed)")
 
+        # Dimension tables (channels, pairs)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_wavelength ON channels(wavelength)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_instrument ON channels(instrument)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pairs_name ON pairs(pair_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pairs_channels ON pairs(ch_a_id, ch_b_id)")
+
+        # Normalized pair_id indexes
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_pair_id ON coupling_measurements(pair_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_pair_id ON predictions(trigger_pair_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_measurement ON predictions(trigger_measurement_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_kind ON predictions(trigger_kind)")
+
+        # Composite indexes for run-scoped queries (critical for performance)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_run_time ON coupling_measurements(run_id, timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_run_time ON predictions(run_id, prediction_time)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divergence_run_time ON phase_divergence(run_id, timestamp)")
+
+        # Composite indexes for class-time queries
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_class_time ON flare_events(class, start_time)")
+
         self.conn.commit()
 
     def close(self):
@@ -434,20 +572,29 @@ class MonitoringDB:
                         acceleration: float = None, confidence: str = None,
                         n_points: int = None, sudden_drop_pct: float = None,
                         sudden_drop_severity: str = None, veto_reason: str = None,
-                        pipeline_version: str = 'v0.5',
+                        pipeline_version: str = 'v0.6',
                         quality_ok: bool = None, robustness_score: float = None,
-                        sync_delta_s: float = None, run_id: int = None) -> int:
+                        sync_delta_s: float = None, run_id: int = None,
+                        pair_id: int = None) -> int:
         """Insert coupling measurement with quality fields and run tracking."""
         cursor = self.conn.cursor()
+
+        # Auto-resolve pair_id from pair string if not provided
+        if pair_id is None and pair:
+            cursor.execute("SELECT id FROM pairs WHERE pair_name = ?", (pair,))
+            row = cursor.fetchone()
+            if row:
+                pair_id = row[0]
+
         try:
             cursor.execute("""
                 INSERT OR REPLACE INTO coupling_measurements
-                (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
+                (timestamp, pair, pair_id, delta_mi, mi_original, residual, deviation_pct,
                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
                  sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version,
                  quality_ok, robustness_score, sync_delta_s, run_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (timestamp, pair, delta_mi, mi_original, residual, deviation_pct,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, pair, pair_id, delta_mi, mi_original, residual, deviation_pct,
                   status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
                   sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version,
                   quality_ok, robustness_score, sync_delta_s, run_id))
@@ -482,9 +629,44 @@ class MonitoringDB:
                           predicted_probability: float = None,
                           trigger_pair: str = None, trigger_status: str = None,
                           trigger_residual: float = None, trigger_trend: str = None,
+                          trigger_kind: str = None, trigger_value: float = None,
+                          trigger_threshold: float = None,
+                          trigger_measurement_id: int = None,
+                          valid_from: str = None, valid_to: str = None,
+                          run_id: int = None, pipeline_version: str = 'v0.6',
                           notes: str = None) -> int:
-        """Insert a prediction (skips if same time+pair exists)."""
+        """
+        Insert a prediction (skips if same time+pair exists).
+
+        Args:
+            trigger_kind: Z_SCORE_SPIKE, SUDDEN_DROP, BREAK, TREND, THRESHOLD, TRANSFER_STATE
+            trigger_value: The actual value that triggered the prediction
+            trigger_threshold: The threshold that was exceeded
+            trigger_measurement_id: FK to the coupling_measurement that triggered this
+            valid_from, valid_to: Forecast window (defaults to prediction_time, +90min)
+        """
         cursor = self.conn.cursor()
+
+        # Auto-resolve trigger_pair_id from trigger_pair string
+        trigger_pair_id = None
+        if trigger_pair:
+            cursor.execute("SELECT id FROM pairs WHERE pair_name = ?", (trigger_pair,))
+            row = cursor.fetchone()
+            if row:
+                trigger_pair_id = row[0]
+
+        # Default valid_from/to if not provided
+        if valid_from is None:
+            valid_from = prediction_time
+        if valid_to is None and prediction_time:
+            # Default 90 min forecast window
+            try:
+                from datetime import datetime, timedelta
+                dt = datetime.fromisoformat(prediction_time.replace('Z', '+00:00'))
+                valid_to = (dt + timedelta(minutes=90)).isoformat()
+            except:
+                pass
+
         try:
             # Check for existing prediction with same time and pair
             cursor.execute("""
@@ -496,11 +678,19 @@ class MonitoringDB:
 
             cursor.execute("""
                 INSERT INTO predictions
-                (prediction_time, predicted_class, predicted_probability,
-                 trigger_pair, trigger_status, trigger_residual, trigger_trend, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (prediction_time, predicted_class, predicted_probability,
-                  trigger_pair, trigger_status, trigger_residual, trigger_trend, notes))
+                (prediction_time, issued_at, valid_from, valid_to,
+                 predicted_class, predicted_probability,
+                 trigger_pair, trigger_pair_id, trigger_measurement_id,
+                 trigger_status, trigger_residual, trigger_trend,
+                 trigger_kind, trigger_value, trigger_threshold,
+                 run_id, pipeline_version, notes)
+                VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (prediction_time, valid_from, valid_to,
+                  predicted_class, predicted_probability,
+                  trigger_pair, trigger_pair_id, trigger_measurement_id,
+                  trigger_status, trigger_residual, trigger_trend,
+                  trigger_kind, trigger_value, trigger_threshold,
+                  run_id, pipeline_version, notes))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
