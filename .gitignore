@@ -72,3 +72,6 @@ htmlcov/
 .mypy_cache/
 paper.pdf
 CLAUDE.md
+
+# Logs
+results/early_warning/cron.log
