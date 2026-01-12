@@ -72,16 +72,18 @@ class ReportGenerator:
         """, (f'-{days} days',))
         stats['goes'] = goes
 
-        # Flare counts by class
+        # Flare counts by class (from flare_events table, not raw GOES data)
         flares = self._query("""
-            SELECT flare_class, COUNT(*) as count
-            FROM goes_xray
-            WHERE timestamp >= datetime('now', ?)
-            AND flare_class IS NOT NULL
-            GROUP BY flare_class
-            ORDER BY flare_class
+            SELECT class, COUNT(*) as count
+            FROM flare_events
+            WHERE start_time >= datetime('now', ?)
+            GROUP BY class
+            ORDER BY class DESC
         """, (f'-{days} days',))
-        stats['flare_counts'] = {f['flare_class']: f['count'] for f in flares}
+        stats['flare_counts'] = {f['class']: f['count'] for f in flares}
+
+        # Total flare events
+        stats['total_flare_events'] = sum(f['count'] for f in flares)
 
         # Coupling measurements
         coupling = self._query_one("""
@@ -228,13 +230,21 @@ class ReportGenerator:
         """
         stats = {}
 
-        # Get all coupling breaks by category
-        # ALERT = Actionable (validated + trigger enabled)
-        # WARNING = Diagnostic only (vetoed or below trigger threshold)
+        # Get all coupling anomalies by category
+        # ALERT = Strong anomaly (> 25% below baseline)
+        # ELEVATED = Moderate anomaly (10-25% below baseline)
+        # WARNING = Weak anomaly (below threshold)
         alerts = self._query("""
             SELECT timestamp, pair, delta_mi, status, deviation_pct
             FROM coupling_measurements
             WHERE status = 'ALERT'
+            ORDER BY timestamp
+        """)
+
+        elevated = self._query("""
+            SELECT timestamp, pair, delta_mi, status, deviation_pct
+            FROM coupling_measurements
+            WHERE status = 'ELEVATED'
             ORDER BY timestamp
         """)
 
@@ -245,31 +255,57 @@ class ReportGenerator:
             ORDER BY timestamp
         """)
 
-        # Break hierarchy (reviewer-proof)
-        stats['break_candidates'] = len(alerts) + len(warnings)
-        stats['validated_breaks'] = len(alerts)  # Only ALERTs are fully validated
-        stats['diagnostic_anomalies'] = len(warnings)  # Vetoed or sub-threshold
-        stats['actionable_alerts'] = len(alerts)
+        # Break hierarchy
+        stats['alert_count'] = len(alerts)
+        stats['elevated_count'] = len(elevated)
+        stats['warning_count'] = len(warnings)
+        stats['break_candidates'] = len(alerts) + len(elevated) + len(warnings)
+        stats['actionable_alerts'] = len(alerts) + len(elevated)  # ALERT + ELEVATED are actionable
+        stats['diagnostic_anomalies'] = len(warnings)  # WARNING = diagnostic only
 
-        # Use only actionable alerts for precision/recall
-        breaks = alerts
+        # Use ALERT + ELEVATED as potential precursors for precision/recall
+        breaks = alerts + elevated
 
-        # Get all significant GOES events (C-class and above)
-        flares = self._query("""
+        # Get flare events from properly extracted events table (not raw GOES data)
+        # This uses the extract_flare_events_from_goes() grouping logic
+        flare_events = self._query("""
             SELECT
-                timestamp,
-                flux,
-                flare_class,
+                start_time as timestamp,
+                peak_time,
+                end_time,
+                peak_flux as flux,
+                class || magnitude as flare_class,
+                class,
                 magnitude
-            FROM goes_xray
-            WHERE flux >= 1e-6
-            ORDER BY timestamp
+            FROM flare_events
+            WHERE start_time >= datetime('now', '-30 days')
+            ORDER BY start_time
         """)
-        stats['total_flares'] = len(flares)
 
-        # Group flares into episodes (90-min gap = new episode)
-        episodes = self._group_flares_into_episodes(flares, gap_minutes=90)
-        stats['total_episodes'] = len(episodes)
+        # Fallback: if no extracted events, use grouped GOES data
+        if not flare_events:
+            raw_flares = self._query("""
+                SELECT timestamp, flux, flare_class
+                FROM goes_xray
+                WHERE flux >= 1e-6
+                ORDER BY timestamp
+            """)
+            episodes = self._group_flares_into_episodes(raw_flares, gap_minutes=90)
+            stats['total_flares'] = len(episodes)  # Count episodes, not data points
+            stats['total_episodes'] = len(episodes)
+            stats['flare_source'] = 'grouped_goes'
+        else:
+            # Use extracted flare events directly (already grouped)
+            episodes = [{
+                'start': self._parse_timestamp(f['timestamp']),
+                'end': self._parse_timestamp(f.get('end_time') or f['timestamp']),
+                'flares': [f],
+                'peak_flux': f.get('flux', 0),
+                'peak_class': f.get('flare_class', 'C1'),
+            } for f in flare_events if self._parse_timestamp(f['timestamp'])]
+            stats['total_flares'] = len(episodes)
+            stats['total_episodes'] = len(episodes)
+            stats['flare_source'] = 'flare_events'
 
         # Match breaks to EPISODES (not individual flares)
         # Window: 0.5 - 6 hours before episode start
@@ -323,20 +359,16 @@ class ReportGenerator:
                 'scope_label': 'WITH PRECURSOR' if has_precursor else 'NO PRECURSOR (out of scope)'
             })
 
-        # Legacy: also keep individual flare details
-        matched_flares = set()
-        for i in matched_episodes:
-            for f in episodes[i]['flares']:
-                matched_flares.add(f['timestamp'])
-        stats['flares_with_precursor'] = len(matched_flares)
-        stats['flares_without_precursor'] = len(flares) - len(matched_flares)
+        # Individual flare/episode details
+        stats['flares_with_precursor'] = len(matched_episodes)
+        stats['flares_without_precursor'] = len(episodes) - len(matched_episodes)
         stats['flare_details'] = []
-        for f in flares:
-            has_precursor = f['timestamp'] in matched_flares
+        for i, ep in enumerate(episodes):
+            has_precursor = i in matched_episodes
             stats['flare_details'].append({
-                'timestamp': f['timestamp'],
-                'class': f['flare_class'],
-                'flux': f['flux'],
+                'timestamp': ep['start'].isoformat() if ep['start'] else '?',
+                'class': ep['peak_class'],
+                'flux': ep['peak_flux'],
                 'in_scope': has_precursor,
                 'scope_label': 'WITH PRECURSOR' if has_precursor else 'NO PRECURSOR (out of scope)'
             })
@@ -370,12 +402,12 @@ class ReportGenerator:
             if not break_time:
                 continue
 
-            for flare in flares:
-                flare_time = self._parse_timestamp(flare['timestamp'])
-                if not flare_time:
+            for ep in episodes:
+                ep_start = ep['start']
+                if not ep_start:
                     continue
 
-                delta_hours = (flare_time - break_time).total_seconds() / 3600
+                delta_hours = (ep_start - break_time).total_seconds() / 3600
                 if WINDOW_MIN_HOURS <= delta_hours <= WINDOW_MAX_HOURS:
                     lead_times.append(delta_hours)
                     break
