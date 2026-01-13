@@ -4,11 +4,15 @@
 
 AIA-Datenquellen haben unterschiedliche Verfügbarkeit und Auflösung:
 
-| Quelle | Auflösung | Latenz | MI-Genauigkeit |
-|--------|-----------|--------|----------------|
-| Synoptic | 1024² | ~2 min | 304Å: +350% Inflation |
-| SDAC | 4096² | ~3 Tage | Akkurat |
-| JSOC | 4096² | ~6 Tage | Akkurat |
+| Quelle | Auflösung | Dateigröße | Latenz | MI-Genauigkeit |
+|--------|-----------|------------|--------|----------------|
+| Synoptic | 1024² | ~4 MB | ~2 min | 304Å: +350% Inflation |
+| SDAC | 1024² | ~4 MB | ~3 Tage | 304Å: +350% Inflation |
+| **JSOC** | **4096²** | **~65 MB** | variabel | **Akkurat** |
+
+**Wichtig:** Nur JSOC liefert echte 4k-Daten!
+SDAC und andere Mirror behaupten "FULLDISK" liefern aber nur 1k.
+Die Dateigröße zeigt es: ~4 MB = 1k, ~65 MB = 4k.
 
 **Kernproblem:** Für Echtzeit-Monitoring ist nur 1k verfügbar, aber 304Å-MI-Werte
 sind bei 1k um Faktor 3.5 aufgebläht (räumliches Aliasing).
@@ -25,18 +29,22 @@ sind bei 1k um Faktor 3.5 aufgebläht (räumliches Aliasing).
 │  ✓ 193-211 ist scale-invariant, für Predictions verwenden      │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
-                    (warte 3+ Tage)
+                    (warte bis JSOC verfügbar)
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                       BACKFILL JOB                              │
 │                                                                 │
-│  1. Finde Messungen mit resolution='1k' älter als 3 Tage       │
-│  2. Prüfe ob SDAC 4k-Daten für diesen Zeitpunkt hat            │
-│  3. Lade 4k-Daten, berechne MI neu                             │
-│  4. Update Messung: resolution='4k', neue MI-Werte             │
-│  5. Re-evaluiere Predictions mit korrigierten Werten           │
+│  1. Finde Messungen mit resolution='1k'                        │
+│  2. Prüfe ob JSOC 4k-Daten für diesen Zeitpunkt hat (~65MB)    │
+│  3. Lade 4k-Daten, verifiziere 4096x4096                       │
+│  4. Berechne MI neu mit voller Auflösung                       │
+│  5. Update Messung: resolution='4k', neue MI-Werte             │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Aktueller Status (Jan 2026):**
+JSOC ist seit 8. Januar offline (Hardware-Ausfall). Backfill wird möglich
+sobald JSOC den Backlog verarbeitet hat.
 
 ## Datenbank-Schema-Erweiterung
 
@@ -72,47 +80,52 @@ def run_coupling_analysis():
         predictions = predict_from_all_pairs(mi_values)
 ```
 
-### 2. SDAC Loader (neu)
+### 2. JSOC Loader (4k-only)
 
 ```python
-def load_aia_sdac(timestamp: str, wavelengths: list[int]) -> tuple[dict, dict]:
+def load_aia_jsoc(timestamp: str, wavelengths: list[int]) -> tuple[dict, dict]:
     """
-    Lade 4k AIA-Daten von SDAC für einen historischen Zeitpunkt.
+    Lade 4k AIA-Daten von JSOC für einen historischen Zeitpunkt.
 
-    SDAC hat ~3 Tage Latenz, liefert aber volle 4096² Auflösung.
+    JSOC ist die EINZIGE Quelle für echte 4096² Auflösung!
+    Andere Provider (SDAC, etc.) liefern nur 1k trotz "FULLDISK".
+
+    Erkennung: Dateigröße ~65 MB = 4k, ~4 MB = 1k
 
     Returns:
-        (channels_dict, metadata) oder (None, None) wenn nicht verfügbar
+        (channels_dict, metadata) oder (None, None) wenn nicht 4k verfügbar
     """
     from sunpy.net import Fido, attrs as a
     import astropy.units as u
 
-    dt = datetime.fromisoformat(timestamp)
-
     result = Fido.search(
         a.Time(dt - timedelta(minutes=2), dt + timedelta(minutes=2)),
         a.Instrument.aia,
-        a.Wavelength([wl * u.Angstrom for wl in wavelengths]),
-        a.Provider('SDAC')
+        a.Wavelength(wl * u.Angstrom),
+        a.Provider('JSOC')  # NUR JSOC hat 4k!
     )
 
-    if len(result) == 0 or len(result[0]) == 0:
-        return None, None
+    # Verifiziere 4k durch Dateigröße oder Extent
+    if result[0][0]['Size'] < 50:  # 4k = ~65MB, 1k = ~4MB
+        return None, None  # Nicht 4k, ablehnen
 
     # Download und laden...
 ```
 
-### 3. Backfill Command (neu)
+### 3. Backfill Command
 
 ```bash
-# Backfill der letzten 7 Tage
-uv run python scripts/early_warning.py backfill --days 7
+# JSOC Status prüfen (wann sind 4k-Daten verfügbar?)
+uv run python scripts/early_warning.py backfill --check-jsoc
 
-# Backfill eines bestimmten Zeitraums
-uv run python scripts/early_warning.py backfill --start 2026-01-08 --end 2026-01-10
-
-# Status anzeigen
+# Backfill Status anzeigen
 uv run python scripts/early_warning.py backfill --status
+
+# Prüfen was backfillbar wäre (dry-run)
+uv run python scripts/early_warning.py backfill --dry-run --days 14
+
+# Tatsächliches Backfill ausführen
+uv run python scripts/early_warning.py backfill --days 14
 ```
 
 ```python

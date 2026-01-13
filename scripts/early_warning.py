@@ -1841,21 +1841,43 @@ def backfill(
     status: bool = typer.Option(False, "--status", "-s", help="Show backfill status only"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Check availability without updating"),
     limit: int = typer.Option(100, "--limit", "-l", help="Max measurements to process"),
+    check_jsoc: bool = typer.Option(False, "--check-jsoc", help="Check JSOC 4k availability"),
 ):
     """
-    🔄 Backfill 1k measurements with 4k SDAC data.
+    🔄 Backfill 1k measurements with 4k JSOC data.
 
-    SDAC provides full 4096x4096 resolution with ~3 day latency.
+    JSOC is the ONLY source for true 4096x4096 resolution (~65MB/file).
+    Other providers (SDAC, etc.) only serve 1k despite claiming "FULLDISK".
+
     This corrects the +350% MI inflation in 304Å pairs from 1k synoptic data.
+
+    Note: JSOC has been offline since Jan 8, 2026. Backfill will work once
+    JSOC processes the backlog.
 
     Examples:
       backfill --status        # Show backfill statistics
+      backfill --check-jsoc    # Check when JSOC 4k data is available
       backfill --dry-run       # Check what would be backfilled
       backfill --days 14       # Backfill last 14 days
     """
     from rich.table import Table
 
     db = get_monitoring_db()
+
+    # Check JSOC availability
+    if check_jsoc:
+        try:
+            from solar_seed.data_sources import get_jsoc_latest_date
+            latest = get_jsoc_latest_date()
+            if latest:
+                console.print(f"\n[bold]📡 JSOC Status[/]")
+                console.print(f"  Latest 4k data: {latest}")
+                console.print(f"  [dim]Measurements after this date cannot be backfilled yet[/]")
+            else:
+                console.print("[yellow]⚠️ JSOC 4k data currently unavailable[/]")
+        except Exception as e:
+            console.print(f"[red]Error checking JSOC: {e}[/]")
+        return
 
     # Show status
     if status:
@@ -1865,12 +1887,20 @@ def backfill(
         console.print(f"  Backfilled (4k):    {stats['backfilled_4k']}")
         console.print(f"  Pending (1k):       {stats['pending_1k']}")
         console.print(f"  Eligible (>3 days): {stats['eligible_for_backfill']}")
+
+        # Also check JSOC
+        try:
+            from solar_seed.data_sources import get_jsoc_latest_date
+            latest = get_jsoc_latest_date()
+            console.print(f"\n  JSOC 4k available until: {latest or 'unavailable'}")
+        except:
+            pass
         return
 
     # Get measurements to backfill
     measurements = db.get_measurements_for_backfill(
-        min_age_days=3,
-        max_age_days=days + 3,
+        min_age_days=0,  # Try all, JSOC check will filter
+        max_age_days=days + 30,
         limit=limit
     )
 
@@ -1889,11 +1919,11 @@ def backfill(
     console.print(f"\n[bold]🔄 Backfill: {len(by_timestamp)} timestamps, {len(measurements)} measurements[/]")
 
     if dry_run:
-        console.print("[dim](dry run - checking availability)[/]\n")
+        console.print("[dim](dry run - checking JSOC 4k availability)[/]\n")
 
-    # Import SDAC loader
+    # Import JSOC loader
     try:
-        from solar_seed.data_sources import load_aia_sdac, check_sdac_availability
+        from solar_seed.data_sources import load_aia_jsoc, check_jsoc_4k_availability
         from solar_seed.radial_profile import subtract_radial_geometry
         from solar_seed.mutual_info import mutual_information
     except ImportError as e:
@@ -1906,20 +1936,20 @@ def backfill(
     failed = 0
 
     for ts, pairs in sorted(by_timestamp.items()):
-        # Quick availability check
-        if not check_sdac_availability(ts):
-            console.print(f"  [dim]{ts}: SDAC not available[/]")
+        # Quick availability check for 4k
+        if not check_jsoc_4k_availability(ts):
+            console.print(f"  [dim]{ts}: JSOC 4k not available[/]")
             skipped += len(pairs)
             continue
 
         if dry_run:
-            console.print(f"  [green]{ts}: SDAC available ({len(pairs)} pairs)[/]")
+            console.print(f"  [green]{ts}: JSOC 4k available ({len(pairs)} pairs)[/]")
             continue
 
         # Load 4k data
-        channels, meta = load_aia_sdac(ts, [193, 211, 304])
+        channels, meta = load_aia_jsoc(ts, [193, 211, 304])
         if not channels:
-            console.print(f"  [yellow]{ts}: Load failed[/]")
+            console.print(f"  [yellow]{ts}: 4k load failed (not true 4k?)[/]")
             failed += len(pairs)
             continue
 
@@ -1958,7 +1988,7 @@ def backfill(
     # Summary
     console.print(f"\n[bold]Summary:[/]")
     console.print(f"  Updated:  {updated}")
-    console.print(f"  Skipped:  {skipped}")
+    console.print(f"  Skipped:  {skipped} (JSOC 4k not available)")
     console.print(f"  Failed:   {failed}")
 
 
