@@ -18,13 +18,25 @@ from datetime import datetime
 class CouplingMonitor:
     """Track coupling residuals over time for pre-flare detection."""
 
-    # Baseline values from 8-day rotation analysis
-    BASELINES = {
-        '193-211': {'mean': 0.59, 'std': 0.12},
-        '193-304': {'mean': 0.07, 'std': 0.02},
+    # Baseline values by resolution
+    # 1k: From synoptic data (spatial aliasing affects 304Å pairs)
+    # 4k: From JSOC full-resolution backfill (accurate MI values)
+    BASELINES_1K = {
+        '193-211': {'mean': 0.59, 'std': 0.12},   # Scale-invariant
+        '193-304': {'mean': 0.07, 'std': 0.02},   # Underestimated at 1k
         '171-193': {'mean': 0.17, 'std': 0.04},
         '211-335': {'mean': 0.28, 'std': 0.06},
     }
+
+    BASELINES_4K = {
+        '193-211': {'mean': 1.03, 'std': 0.31},   # ~1.7x higher than 1k
+        '193-304': {'mean': 0.32, 'std': 0.12},   # ~4.5x higher than 1k
+        '171-193': {'mean': 0.29, 'std': 0.07},   # Estimated 1.7x scaling
+        '211-335': {'mean': 0.48, 'std': 0.10},   # Estimated 1.7x scaling
+    }
+
+    # Legacy alias for backwards compatibility
+    BASELINES = BASELINES_1K
 
     # Flare analysis showed -25% to -47% reduction during flares
     ALERT_THRESHOLD = -0.25  # 25% below baseline triggers warning
@@ -157,12 +169,25 @@ class CouplingMonitor:
             'lookback_minutes': lookback * 10,  # Assuming 10min intervals
         }
 
-    def compute_residual(self, pair: str, delta_mi: float) -> dict:
-        """Compute residual r(t) = (ΔMI - baseline) / std with sudden drop detection."""
-        if pair not in self.BASELINES:
+    def get_baselines(self, resolution: str = '1k') -> dict:
+        """Get baselines for the specified resolution."""
+        if resolution == '4k':
+            return self.BASELINES_4K
+        return self.BASELINES_1K
+
+    def compute_residual(self, pair: str, delta_mi: float, resolution: str = '1k') -> dict:
+        """Compute residual r(t) = (ΔMI - baseline) / std with sudden drop detection.
+
+        Args:
+            pair: Channel pair (e.g. '193-211')
+            delta_mi: Current ΔMI value
+            resolution: Data resolution ('1k' or '4k') - affects baseline selection
+        """
+        baselines = self.get_baselines(resolution)
+        if pair not in baselines:
             return {'residual': 0, 'deviation_pct': 0, 'status': 'unknown', 'sudden_drop': None}
 
-        baseline = self.BASELINES[pair]
+        baseline = baselines[pair]
         residual = (delta_mi - baseline['mean']) / baseline['std']
         deviation_pct = (delta_mi - baseline['mean']) / baseline['mean']
 

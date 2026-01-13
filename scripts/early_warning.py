@@ -752,9 +752,13 @@ def _load_channels(wavelengths: list[int], use_synoptic: bool = False) -> tuple[
 
 
 def _analyze_pair(wl1: int, wl2: int, channels: dict, monitor, validate_breaks: bool,
-                  subtract_radial_geometry, sector_ring_shuffle_test) -> dict:
+                  subtract_radial_geometry, sector_ring_shuffle_test,
+                  resolution: str = '1k') -> dict:
     """
     Analyze a single channel pair: compute MI, detect breaks, run validation.
+
+    Args:
+        resolution: Data resolution ('1k' or '4k') - affects baseline thresholds
 
     Returns dict with keys: result, break_detection, registration_check, robustness_check,
                             quality_warnings, artifact_warnings
@@ -846,7 +850,7 @@ def _analyze_pair(wl1: int, wl2: int, channels: dict, monitor, validate_breaks: 
                 break_check['vetoed'] = 'robustness'
                 output['break_detection'] = break_check
 
-    residual_info = monitor.compute_residual(pair_key, delta_mi)
+    residual_info = monitor.compute_residual(pair_key, delta_mi, resolution=resolution)
     trend_info = monitor.analyze_trend(pair_key)
 
     # Extract sudden drop info
@@ -936,12 +940,16 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
         break_detections = {}
         robustness_checks = {}
 
+        # Determine resolution from data source
+        resolution = '4k' if data_source in ('full-res', 'vso', 'jsoc') else '1k'
+
         pairs = [(193, 211), (193, 304), (171, 193)]
         for wl1, wl2 in pairs:
             if wl1 in channels and wl2 in channels:
                 pair_output = _analyze_pair(
                     wl1, wl2, channels, monitor, validate_breaks,
-                    subtract_radial_geometry, sector_ring_shuffle_test
+                    subtract_radial_geometry, sector_ring_shuffle_test,
+                    resolution=resolution
                 )
                 pair_key = pair_output['pair_key']
                 results[pair_key] = pair_output['result']
