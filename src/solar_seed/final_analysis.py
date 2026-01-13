@@ -1295,6 +1295,38 @@ class SegmentResult:
     pair_stds: Dict[str, float]
 
 
+def _load_partial_checkpoint(partial_file: Path) -> Tuple[Dict[str, List[float]], List[str], int]:
+    """Load partial day checkpoint if exists."""
+    if partial_file.exists():
+        try:
+            with open(partial_file) as f:
+                data = json.load(f)
+            return (
+                data.get("pair_values", {}),
+                data.get("timestamps", []),
+                data.get("last_index", 0)
+            )
+        except Exception:
+            pass
+    return {}, [], 0
+
+
+def _save_partial_checkpoint(
+    partial_file: Path,
+    pair_values: Dict[str, List[float]],
+    timestamps: List[str],
+    last_index: int
+) -> None:
+    """Save partial day checkpoint."""
+    data = {
+        "pair_values": pair_values,
+        "timestamps": timestamps,
+        "last_index": last_index
+    }
+    with open(partial_file, "w") as f:
+        json.dump(data, f)
+
+
 def run_segment_analysis(
     date: str,  # "2025-12-01"
     cadence_minutes: int = 12,
@@ -1304,6 +1336,9 @@ def run_segment_analysis(
 ) -> Optional[SegmentResult]:
     """
     Analyzes a single segment (one day).
+
+    Supports intra-day checkpointing for resume after abort.
+    Partial progress is saved to {date}.partial.json.
 
     Args:
         date: Date in format YYYY-MM-DD
@@ -1334,18 +1369,26 @@ def run_segment_analysis(
     end_time = start_time + timedelta(days=1)
     n_points = int(24 * 60 / cadence_minutes)  # 120 at 12-min cadence
 
-    if verbose:
+    # Check for partial checkpoint (intra-day resume)
+    partial_file = out_path / f"{date}.partial.json"
+    pair_keys = [f"{a}-{b}" for a, b in combinations(WAVELENGTHS, 2)]
+
+    pair_values, timestamps, start_index = _load_partial_checkpoint(partial_file)
+
+    # Initialize missing pair keys
+    if not pair_values:
+        pair_values = {key: [] for key in pair_keys}
+
+    if start_index > 0 and verbose:
+        print(f"\n  📅 Segment {date}: resuming from {start_index}/{n_points}")
+    elif verbose:
         print(f"\n  📅 Segment {date}: {n_points} timepoints")
 
-    # Initialize data structures
-    pair_keys = [f"{a}-{b}" for a, b in combinations(WAVELENGTHS, 2)]
-    pair_values: Dict[str, List[float]] = {key: [] for key in pair_keys}
-    timestamps: List[str] = []
     failed_count = 0
 
-    # Analyze each timepoint
-    t = start_time
-    for i in range(n_points):
+    # Analyze each timepoint (starting from checkpoint)
+    t = start_time + timedelta(minutes=cadence_minutes * start_index)
+    for i in range(start_index, n_points):
         timestamp = t.isoformat()
 
         if verbose:
@@ -1371,6 +1414,10 @@ def run_segment_analysis(
             if verbose:
                 print("✓")
 
+            # Save partial checkpoint every 5 successful timepoints
+            if (len(timestamps) % 5) == 0:
+                _save_partial_checkpoint(partial_file, pair_values, timestamps, i + 1)
+
             # Garbage Collection
             if (i + 1) % 10 == 0:
                 gc.collect()
@@ -1379,10 +1426,14 @@ def run_segment_analysis(
             if verbose:
                 print("⚠️")
 
+            # Save checkpoint on failure too (to preserve progress)
+            if len(timestamps) > 0:
+                _save_partial_checkpoint(partial_file, pair_values, timestamps, i + 1)
+
             if failed_count >= 10:
                 if verbose:
-                    print(f"    ✗ Abort: 10 consecutive failures")
-                break
+                    print(f"    ✗ Abort: 10 consecutive failures (progress saved)")
+                return None  # Return None but progress is saved
 
         t += timedelta(minutes=cadence_minutes)
 
@@ -1390,6 +1441,9 @@ def run_segment_analysis(
     if not timestamps:
         if verbose:
             print(f"    ✗ No data for {date}")
+        # Clean up partial file if no data
+        if partial_file.exists():
+            partial_file.unlink()
         return None
 
     # Calculate statistics
@@ -1413,6 +1467,10 @@ def run_segment_analysis(
 
     # Save
     save_segment(result, segment_file)
+
+    # Clean up partial checkpoint on success
+    if partial_file.exists():
+        partial_file.unlink()
 
     if verbose:
         print(f"    ✓ Segment {date}: {len(timestamps)} points saved")
