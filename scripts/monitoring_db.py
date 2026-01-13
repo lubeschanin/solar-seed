@@ -274,6 +274,10 @@ class MonitoringDB:
             ('sync_delta_s', 'REAL'),
             ('run_id', 'INTEGER'),
             ('pair_id', 'INTEGER'),
+            # Backfill support (v0.7)
+            ('resolution', 'TEXT'),           # '1k' or '4k'
+            ('backfilled_at', 'DATETIME'),    # when 4k data was backfilled
+            ('original_delta_mi', 'REAL'),    # original 1k value before backfill
         ]:
             try:
                 cursor.execute(f"ALTER TABLE coupling_measurements ADD COLUMN {col} {dtype}")
@@ -367,8 +371,13 @@ class MonitoringDB:
                         acceleration: float = None, confidence: str = None,
                         n_points: int = None, quality_ok: bool = None,
                         robustness_score: float = None, sync_delta_s: float = None,
-                        run_id: int = None, pair_id: int = None) -> int:
-        """Insert coupling measurement with quality fields and pair normalization."""
+                        run_id: int = None, pair_id: int = None,
+                        resolution: str = None) -> int:
+        """Insert coupling measurement with quality fields and pair normalization.
+
+        Args:
+            resolution: '1k' for synoptic, '4k' for full-res. Enables backfill tracking.
+        """
         cursor = self.conn.cursor()
 
         # Auto-resolve pair_id from pair string if not provided
@@ -383,11 +392,11 @@ class MonitoringDB:
                 INSERT OR REPLACE INTO coupling_measurements
                 (timestamp, pair, pair_id, delta_mi, mi_original, residual, deviation_pct,
                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
-                 quality_ok, robustness_score, sync_delta_s, run_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 quality_ok, robustness_score, sync_delta_s, run_id, resolution)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (timestamp, pair, pair_id, delta_mi, mi_original, residual, deviation_pct,
                   status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
-                  quality_ok, robustness_score, sync_delta_s, run_id))
+                  quality_ok, robustness_score, sync_delta_s, run_id, resolution))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -695,6 +704,107 @@ class MonitoringDB:
 
         print(f"Imported {count} coupling measurements from {json_path}")
         return count
+
+    # =========================================================================
+    # Backfill Support
+    # =========================================================================
+
+    def get_measurements_for_backfill(
+        self,
+        min_age_days: int = 3,
+        max_age_days: int = 30,
+        limit: int = 1000
+    ) -> list[dict]:
+        """
+        Get 1k measurements that could be backfilled with 4k data.
+
+        Args:
+            min_age_days: Minimum age (SDAC needs ~3 days)
+            max_age_days: Maximum age to consider
+            limit: Maximum number of results
+
+        Returns:
+            List of measurements with timestamp, pair, delta_mi
+        """
+        cursor = self.conn.cursor()
+        cutoff_min = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        cutoff_max = (datetime.now(timezone.utc) - timedelta(days=min_age_days)).isoformat()
+
+        cursor.execute("""
+            SELECT timestamp, pair, delta_mi, resolution
+            FROM coupling_measurements
+            WHERE (resolution = '1k' OR resolution IS NULL)
+              AND backfilled_at IS NULL
+              AND timestamp >= ?
+              AND timestamp <= ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (cutoff_min, cutoff_max, limit))
+
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_measurement_backfill(
+        self,
+        timestamp: str,
+        pair: str,
+        new_delta_mi: float,
+        original_delta_mi: float = None
+    ) -> bool:
+        """
+        Update a measurement with backfilled 4k data.
+
+        Args:
+            timestamp: Measurement timestamp
+            pair: Channel pair (e.g., '193-304')
+            new_delta_mi: New MI value from 4k data
+            original_delta_mi: Original 1k value (for audit)
+
+        Returns:
+            True if updated, False if not found
+        """
+        cursor = self.conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+
+        cursor.execute("""
+            UPDATE coupling_measurements
+            SET delta_mi = ?,
+                resolution = '4k',
+                backfilled_at = ?,
+                original_delta_mi = COALESCE(original_delta_mi, ?)
+            WHERE timestamp = ? AND pair = ?
+        """, (new_delta_mi, now, original_delta_mi, timestamp, pair))
+
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_backfill_stats(self) -> dict:
+        """Get backfill statistics."""
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN resolution = '4k' THEN 1 ELSE 0 END) as backfilled,
+                SUM(CASE WHEN resolution = '1k' OR resolution IS NULL THEN 1 ELSE 0 END) as pending_1k
+            FROM coupling_measurements
+        """)
+        row = cursor.fetchone()
+
+        cursor.execute("""
+            SELECT COUNT(DISTINCT timestamp) as unique_timestamps
+            FROM coupling_measurements
+            WHERE (resolution = '1k' OR resolution IS NULL)
+              AND backfilled_at IS NULL
+              AND timestamp <= datetime('now', '-3 days')
+        """)
+        eligible = cursor.fetchone()[0]
+
+        return {
+            'total': row['total'],
+            'backfilled_4k': row['backfilled'],
+            'pending_1k': row['pending_1k'],
+            'eligible_for_backfill': eligible,
+        }
 
     def get_database_stats(self) -> dict:
         """Get database statistics."""

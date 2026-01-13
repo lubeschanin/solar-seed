@@ -458,6 +458,11 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
         return
     db = get_monitoring_db()
 
+    # Extract resolution from quality metadata
+    quality = coupling.get('_quality', {})
+    resolution_str = quality.get('resolution', '1024x1024')
+    resolution = '1k' if '1024' in resolution_str else '4k'
+
     for pair, data in coupling.items():
         # Skip internal metadata fields
         if pair.startswith('_'):
@@ -465,7 +470,7 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
 
         status = data.get('status')
 
-        # Store coupling measurement with sudden drop info
+        # Store coupling measurement with resolution for backfill tracking
         db.insert_coupling(
             timestamp=timestamp,
             pair=pair,
@@ -479,9 +484,7 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
             acceleration=data.get('acceleration'),
             confidence=data.get('confidence'),
             n_points=data.get('n_points'),
-            sudden_drop_pct=data.get('sudden_drop_pct'),
-            sudden_drop_severity=data.get('sudden_drop_severity'),
-            veto_reason=data.get('break_vetoed'),
+            resolution=resolution,
         )
 
         # Auto-create prediction for ALERT/ELEVATED status
@@ -699,9 +702,12 @@ def run_stereo_coupling_analysis() -> dict | None:
         return None
 
 
-def _load_channels(wavelengths: list[int], use_synoptic: bool = True) -> tuple[dict | None, str | None, dict | None, str | None]:
+def _load_channels(wavelengths: list[int], use_synoptic: bool = False) -> tuple[dict | None, str | None, dict | None, str | None]:
     """
     Load AIA channel data with fallback strategy.
+
+    Default: 4k full-resolution (more accurate MI, especially for 304Å pairs).
+    Synoptic 1k available as fallback but has +350% MI inflation for chromospheric pairs.
 
     Returns:
         (channels, timestamp, quality_info, data_source) or (None, None, None, None) on failure
@@ -711,7 +717,7 @@ def _load_channels(wavelengths: list[int], use_synoptic: bool = True) -> tuple[d
     quality_info = None
     data_source = None
 
-    # Primary: Try synoptic data (fast, reliable, no queue)
+    # Optional: Try synoptic data (fast but inaccurate for 304Å pairs)
     if use_synoptic:
         print("  Trying AIA synoptic data (1k, direct access)...")
         channels, timestamp, quality_info = load_aia_synoptic(wavelengths)
@@ -719,22 +725,23 @@ def _load_channels(wavelengths: list[int], use_synoptic: bool = True) -> tuple[d
             data_source = 'synoptic'
             print(f"  ✓ Using synoptic data from: {timestamp}")
 
-    # Fallback 1: Full-res via VSO
+    # Primary: Full-res via VSO (4k, accurate MI)
     if not channels or len(channels) < 2:
-        print("  Synoptic unavailable, trying full-res via VSO...")
+        print("  Loading AIA full-res data (4k via VSO)...")
         channels, timestamp, quality_info = load_aia_latest(wavelengths, max_age_minutes=30)
         if channels and len(channels) >= 2:
             data_source = 'full-res'
 
-    # Fallback 2: Direct load (legacy)
+    # Fallback 2: Synoptic (1k, less accurate for 304Å but reliable)
     if not channels or len(channels) < 2:
-        print("  VSO unavailable, trying direct fallback...")
-        fallback_time = datetime.now(timezone.utc) - timedelta(minutes=10)
-        timestamp = fallback_time.strftime("%Y-%m-%dT%H:%M:00")
-        channels = load_aia_direct(timestamp, wavelengths)
-        quality_info = None
+        print("  ⚠️ 4k unavailable, falling back to synoptic (1k)...")
+        print("    Note: 304Å MI will be inflated by ~350%")
+        channels, timestamp, quality_info = load_aia_synoptic(wavelengths)
         if channels and len(channels) >= 2:
-            data_source = 'direct-fallback'
+            data_source = 'synoptic-fallback'
+            if quality_info:
+                quality_info['warnings'] = quality_info.get('warnings', [])
+                quality_info['warnings'].append("1k resolution: 304Å MI inflated ~350%")
 
     if not channels or len(channels) < 2:
         print("  ✗ Could not load AIA data from any source")
@@ -889,13 +896,12 @@ def _build_goes_context(xray: dict) -> dict | None:
     }
 
 
-def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_synoptic: bool = True) -> dict | None:
+def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_synoptic: bool = False) -> dict | None:
     """
-    Run quick coupling analysis on latest AIA data with quality checks.
+    Run coupling analysis on latest AIA data with quality checks.
 
-    Hybrid Approach:
-    - Primary: AIA synoptic data (1024x1024, direct access, no queue)
-    - Fallback: Full-res via VSO (4096x4096, may be rate-limited)
+    Default: 4k full-resolution (accurate MI, especially for 304Å pairs).
+    1k synoptic inflates 304Å MI by +350% due to spatial aliasing.
 
     Includes validation: time alignment, registration shift, robustness check,
     coupling break detection, and phase-gating.
@@ -1827,6 +1833,133 @@ def location(
 
 # Import box for tables
 from rich import box
+
+
+@app.command()
+def backfill(
+    days: int = typer.Option(7, "--days", "-d", help="Days to look back"),
+    status: bool = typer.Option(False, "--status", "-s", help="Show backfill status only"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Check availability without updating"),
+    limit: int = typer.Option(100, "--limit", "-l", help="Max measurements to process"),
+):
+    """
+    🔄 Backfill 1k measurements with 4k SDAC data.
+
+    SDAC provides full 4096x4096 resolution with ~3 day latency.
+    This corrects the +350% MI inflation in 304Å pairs from 1k synoptic data.
+
+    Examples:
+      backfill --status        # Show backfill statistics
+      backfill --dry-run       # Check what would be backfilled
+      backfill --days 14       # Backfill last 14 days
+    """
+    from rich.table import Table
+
+    db = get_monitoring_db()
+
+    # Show status
+    if status:
+        stats = db.get_backfill_stats()
+        console.print("\n[bold]📊 Backfill Status[/]")
+        console.print(f"  Total measurements: {stats['total']}")
+        console.print(f"  Backfilled (4k):    {stats['backfilled_4k']}")
+        console.print(f"  Pending (1k):       {stats['pending_1k']}")
+        console.print(f"  Eligible (>3 days): {stats['eligible_for_backfill']}")
+        return
+
+    # Get measurements to backfill
+    measurements = db.get_measurements_for_backfill(
+        min_age_days=3,
+        max_age_days=days + 3,
+        limit=limit
+    )
+
+    if not measurements:
+        console.print("[green]✓ No measurements need backfilling[/]")
+        return
+
+    # Group by timestamp
+    by_timestamp = {}
+    for m in measurements:
+        ts = m['timestamp']
+        if ts not in by_timestamp:
+            by_timestamp[ts] = []
+        by_timestamp[ts].append(m)
+
+    console.print(f"\n[bold]🔄 Backfill: {len(by_timestamp)} timestamps, {len(measurements)} measurements[/]")
+
+    if dry_run:
+        console.print("[dim](dry run - checking availability)[/]\n")
+
+    # Import SDAC loader
+    try:
+        from solar_seed.data_sources import load_aia_sdac, check_sdac_availability
+        from solar_seed.radial_profile import subtract_radial_geometry
+        from solar_seed.mutual_info import mutual_information
+    except ImportError as e:
+        console.print(f"[red]Import error: {e}[/]")
+        return
+
+    # Process each timestamp
+    updated = 0
+    skipped = 0
+    failed = 0
+
+    for ts, pairs in sorted(by_timestamp.items()):
+        # Quick availability check
+        if not check_sdac_availability(ts):
+            console.print(f"  [dim]{ts}: SDAC not available[/]")
+            skipped += len(pairs)
+            continue
+
+        if dry_run:
+            console.print(f"  [green]{ts}: SDAC available ({len(pairs)} pairs)[/]")
+            continue
+
+        # Load 4k data
+        channels, meta = load_aia_sdac(ts, [193, 211, 304])
+        if not channels:
+            console.print(f"  [yellow]{ts}: Load failed[/]")
+            failed += len(pairs)
+            continue
+
+        # Calculate MI for each pair
+        for m in pairs:
+            pair = m['pair']
+            wl1, wl2 = map(int, pair.split('-'))
+
+            if wl1 not in channels or wl2 not in channels:
+                continue
+
+            try:
+                # Subtract radial geometry
+                res1, _, _ = subtract_radial_geometry(channels[wl1])
+                res2, _, _ = subtract_radial_geometry(channels[wl2])
+
+                # Calculate MI
+                new_mi = mutual_information(res1, res2)
+
+                # Update in DB
+                db.update_measurement_backfill(
+                    timestamp=ts,
+                    pair=pair,
+                    new_delta_mi=new_mi,
+                    original_delta_mi=m['delta_mi']
+                )
+
+                change_pct = ((new_mi / m['delta_mi']) - 1) * 100 if m['delta_mi'] else 0
+                console.print(f"  [green]✓[/] {ts} {pair}: {m['delta_mi']:.3f} → {new_mi:.3f} ({change_pct:+.0f}%)")
+                updated += 1
+
+            except Exception as e:
+                console.print(f"  [red]✗[/] {ts} {pair}: {e}")
+                failed += 1
+
+    # Summary
+    console.print(f"\n[bold]Summary:[/]")
+    console.print(f"  Updated:  {updated}")
+    console.print(f"  Skipped:  {skipped}")
+    console.print(f"  Failed:   {failed}")
 
 
 def main():
