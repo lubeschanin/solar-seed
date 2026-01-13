@@ -166,6 +166,63 @@ class TestCouplingMonitor:
         assert monitor.BASELINES['193-211']['mean'] == 0.59
         assert monitor.BASELINES['193-211']['std'] == 0.12
 
+    def test_baselines_1k_and_4k_defined(self, monitor):
+        """Verify both 1k and 4k baselines exist."""
+        # 1k baselines (synoptic data)
+        assert '193-211' in monitor.BASELINES_1K
+        assert '193-304' in monitor.BASELINES_1K
+        assert monitor.BASELINES_1K['193-211']['mean'] == 0.59
+        assert monitor.BASELINES_1K['193-304']['mean'] == 0.07
+
+        # 4k baselines (JSOC full-resolution)
+        assert '193-211' in monitor.BASELINES_4K
+        assert '193-304' in monitor.BASELINES_4K
+        assert monitor.BASELINES_4K['193-211']['mean'] == 1.03
+        assert monitor.BASELINES_4K['193-304']['mean'] == 0.32
+
+        # 4k values should be higher than 1k
+        assert monitor.BASELINES_4K['193-211']['mean'] > monitor.BASELINES_1K['193-211']['mean']
+        assert monitor.BASELINES_4K['193-304']['mean'] > monitor.BASELINES_1K['193-304']['mean']
+
+    def test_get_baselines_method(self, monitor):
+        """Test get_baselines returns correct baselines for resolution."""
+        baselines_1k = monitor.get_baselines('1k')
+        baselines_4k = monitor.get_baselines('4k')
+
+        assert baselines_1k == monitor.BASELINES_1K
+        assert baselines_4k == monitor.BASELINES_4K
+
+        # Default should be 1k
+        assert monitor.get_baselines() == monitor.BASELINES_1K
+
+    def test_residual_with_resolution_parameter(self, monitor):
+        """Test compute_residual uses correct baseline for resolution."""
+        delta_mi = 0.30  # Test value for 193-304
+
+        # With 1k baseline (0.07): 0.30 is way above baseline
+        result_1k = monitor.compute_residual('193-304', delta_mi, resolution='1k')
+        assert result_1k['deviation_pct'] > 3.0  # 329% above baseline
+
+        # With 4k baseline (0.32): 0.30 is slightly below baseline
+        result_4k = monitor.compute_residual('193-304', delta_mi, resolution='4k')
+        assert result_4k['deviation_pct'] < 0  # Below baseline
+        assert result_4k['deviation_pct'] > -0.10  # But not much
+
+    def test_residual_4k_status_classification(self, monitor):
+        """Test status classification with 4k baselines."""
+        # 4k 193-304 baseline: 0.32
+        # Normal: around baseline
+        result = monitor.compute_residual('193-304', 0.32, resolution='4k')
+        assert result['status'] == 'NORMAL'
+
+        # Warning: 20% below baseline = 0.256
+        result = monitor.compute_residual('193-304', 0.256, resolution='4k')
+        assert result['status'] == 'WARNING'
+
+        # Alert: 30% below baseline = 0.224
+        result = monitor.compute_residual('193-304', 0.22, resolution='4k')
+        assert result['status'] == 'ALERT'
+
     def test_residual_normal(self, monitor):
         """Normal coupling: within 1σ of baseline."""
         # 193-211 baseline: 0.59 ± 0.12
