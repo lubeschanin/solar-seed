@@ -161,7 +161,8 @@ def check_segments() -> dict:
 
     info["exists"] = True
     info["count"] = len(segment_files)
-    info["dates"] = [f.stem for f in segment_files]
+    # Strip .partial suffix from dates (e.g., "2025-12-16.partial" -> "2025-12-16")
+    info["dates"] = [f.stem.replace(".partial", "") for f in segment_files]
     info["first_date"] = info["dates"][0] if info["dates"] else None
     info["last_date"] = info["dates"][-1] if info["dates"] else None
 
