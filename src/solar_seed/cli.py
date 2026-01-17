@@ -775,14 +775,15 @@ def run_reports():
   │              PRECURSOR DETECTION STATISTICS                         │
   └─────────────────────────────────────────────────────────────────────┘
 """)
-        print(f"  Detection Window: {stats['window_min_hours']:.1f} - {stats['window_max_hours']:.1f} hours after break")
+        print(f"  Detection Window: {stats.get('window_min_hours', 0.5):.1f} - {stats.get('window_max_hours', 6.0):.1f} hours after break")
         print()
-        print(f"  Total Breaks Detected:  {stats['total_breaks']}")
-        print(f"  Total Flares (C+):      {stats['total_flares']}")
+        print(f"  Actionable Alerts:      {stats.get('actionable_alerts', 0)}")
+        print(f"  Break Candidates:       {stats.get('break_candidates', 0)}")
+        print(f"  Total Flares (C+):      {stats.get('total_flares', 0)}")
         print()
-        print(f"  True Positives (TP):    {stats['true_positives']}")
-        print(f"  False Positives (FP):   {stats['false_positives']}")
-        print(f"  False Negatives (FN):   {stats['false_negatives']}")
+        print(f"  True Positives (TP):    {stats.get('true_positives', 0)}")
+        print(f"  False Positives (FP):   {stats.get('false_positives', 0)}")
+        print(f"  False Negatives (FN):   {stats.get('false_negatives', 0)}")
         print()
 
         if stats['precision'] is not None:
