@@ -191,6 +191,81 @@ def classify_phase_goes_only(
 
 
 # =============================================================================
+# PHASE CLASSIFICATION: ΔMI-ONLY (Pure Coupling)
+# =============================================================================
+
+class MIPhase:
+    """Pure ΔMI phase states - independent of GOES."""
+    BASELINE = 'BASELINE'           # Normal coupling
+    ELEVATED = 'ELEVATED'           # Above-normal coupling (structural activity)
+    ANOMALY = 'ANOMALY'             # Coupling break detected (single reading)
+    DESTABILIZING = 'DESTABILIZING' # Sustained decoupling trend (pre-flare candidate)
+    DECOUPLED = 'DECOUPLED'         # Severe decoupling (strong break)
+
+
+def classify_phase_mi_only(pairs_data: dict) -> tuple[str, str]:
+    """
+    Classify phase using ONLY ΔMI coupling data (no GOES input).
+
+    This is the pure early-warning classifier that can detect precursors
+    BEFORE GOES flux rises. No contamination from lagging indicators.
+
+    Phase palette:
+    - BASELINE: Normal coupling (|z| < 2)
+    - ELEVATED: Structural activity (z > 2, positive)
+    - ANOMALY: Coupling break detected (z < -2)
+    - DESTABILIZING: Sustained decoupling trend (z < -2 AND declining)
+    - DECOUPLED: Severe coupling break (z < -3)
+
+    Returns:
+        (phase, reason) tuple
+    """
+    # Extract key metrics from primary pair (193-211 = coronal coupling)
+    z_211 = pairs_data.get('193-211', {}).get('residual', 0)
+    z_304 = pairs_data.get('193-304', {}).get('residual', 0)
+    trend_211 = pairs_data.get('193-211', {}).get('slope_pct_per_hour', 0)
+    trend_304 = pairs_data.get('193-304', {}).get('slope_pct_per_hour', 0)
+
+    # Count pairs with significant negative anomalies
+    neg_pairs = []
+    for pair, data in pairs_data.items():
+        if pair.startswith('_'):
+            continue
+        z = data.get('residual', 0)
+        if z < -2:
+            neg_pairs.append((pair, z))
+
+    # Maximum positive and negative z-scores
+    z_values = [pairs_data.get(p, {}).get('residual', 0)
+                for p in pairs_data if not p.startswith('_')]
+    max_z = max(z_values) if z_values else 0
+    min_z = min(z_values) if z_values else 0
+
+    # Rule 1: DECOUPLED - severe coupling break (strongest signal)
+    if min_z < -3:
+        worst_pair = min(neg_pairs, key=lambda x: x[1]) if neg_pairs else ('193-211', min_z)
+        return MIPhase.DECOUPLED, f"Severe break: {worst_pair[0]} at {worst_pair[1]:.1f}σ"
+
+    # Rule 2: DESTABILIZING - coupling break with declining trend
+    if z_211 < -2 and trend_211 < -3:
+        return MIPhase.DESTABILIZING, f"Coronal decoupling: {z_211:.1f}σ, {trend_211:+.1f}%/h"
+    if z_304 < -2 and trend_304 < -3:
+        return MIPhase.DESTABILIZING, f"Chromospheric decoupling: {z_304:.1f}σ, {trend_304:+.1f}%/h"
+
+    # Rule 3: ANOMALY - coupling break detected (but not yet trending)
+    if neg_pairs:
+        worst_pair = min(neg_pairs, key=lambda x: x[1])
+        return MIPhase.ANOMALY, f"Break: {worst_pair[0]} at {worst_pair[1]:.1f}σ"
+
+    # Rule 4: ELEVATED - above-normal coupling (structural activity, not alarm)
+    if max_z > 2:
+        return MIPhase.ELEVATED, f"Structural activity: {max_z:.1f}σ"
+
+    # Rule 5: BASELINE - normal coupling
+    return MIPhase.BASELINE, "Normal coupling"
+
+
+# =============================================================================
 # PHASE CLASSIFICATION: EXPERIMENTAL (ΔMI-integrated)
 # =============================================================================
 
@@ -282,29 +357,47 @@ def classify_phase_parallel(
     goes_class: str = None,
 ) -> dict:
     """
-    Run both phase classifiers in parallel and report divergence.
+    Run all three phase classifiers in parallel and report divergence.
 
     Returns dict with:
-        - current: (phase, reason) from GOES-only
-        - experimental: (phase, reason) from ΔMI-integrated
-        - is_divergent: bool
+        - goes_only: (phase, reason) from GOES-only classifier
+        - mi_only: (phase, reason) from pure ΔMI classifier (NO GOES input)
+        - integrated: (phase, reason) from ΔMI+GOES hybrid
+        - is_divergent: bool (GOES vs MI-only)
         - divergence_note: str explaining the divergence
+        - mi_precursor: bool - True if MI sees anomaly while GOES is quiet
+
+    The key comparison for early warning is GOES-only vs MI-only:
+    - If MI-only sees ANOMALY/DESTABILIZING while GOES shows BASELINE → precursor candidate
     """
-    current = classify_phase_goes_only(goes_flux, goes_rising, goes_class)
-    experimental = classify_phase_experimental(pairs_data, goes_flux, goes_rising, goes_class)
+    goes_only = classify_phase_goes_only(goes_flux, goes_rising, goes_class)
+    mi_only = classify_phase_mi_only(pairs_data)
+    integrated = classify_phase_experimental(pairs_data, goes_flux, goes_rising, goes_class)
 
-    is_divergent = current[0] != experimental[0]
+    # Key divergence: GOES quiet but MI sees anomaly
+    mi_sees_anomaly = mi_only[0] in [MIPhase.ANOMALY, MIPhase.DESTABILIZING, MIPhase.DECOUPLED]
+    goes_quiet = goes_only[0] == Phase.BASELINE
 
-    if is_divergent:
-        divergence_note = f"GOES says {current[0]}, ΔMI says {experimental[0]}"
+    mi_precursor = mi_sees_anomaly and goes_quiet
+    is_divergent = goes_only[0] != integrated[0]
+
+    if mi_precursor:
+        divergence_note = f"⚠️ PRECURSOR: ΔMI={mi_only[0]} while GOES quiet"
+    elif is_divergent:
+        divergence_note = f"GOES={goes_only[0]}, integrated={integrated[0]}"
     else:
-        divergence_note = "Both classifiers agree"
+        divergence_note = "All classifiers agree"
 
     return {
-        'current': current,
-        'experimental': experimental,
+        'goes_only': goes_only,
+        'mi_only': mi_only,
+        'integrated': integrated,
         'is_divergent': is_divergent,
+        'mi_precursor': mi_precursor,
         'divergence_note': divergence_note,
+        # Legacy keys for backward compatibility
+        'current': goes_only,
+        'experimental': integrated,
     }
 
 

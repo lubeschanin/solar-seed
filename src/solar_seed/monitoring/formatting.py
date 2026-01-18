@@ -16,7 +16,7 @@ from rich.style import Style
 from rich import box
 
 from .constants import (
-    AnomalyLevel, Phase, get_anomaly_level,
+    AnomalyLevel, Phase, MIPhase, get_anomaly_level,
     classify_phase, classify_phase_parallel,
 )
 from .relevance import assess_personal_relevance, get_subsolar_point, LOCATIONS
@@ -71,6 +71,23 @@ class StatusFormatter:
         # Alert states
         Phase.PRE_FLARE: '⚠️',        # Warning - destabilization
         Phase.ACTIVE: '🔴',           # Red - ongoing energy release
+    }
+
+    # Icons and styles for pure ΔMI classifier (MIPhase)
+    MI_PHASE_ICONS = {
+        MIPhase.BASELINE: '🟢',
+        MIPhase.ELEVATED: '🔵',       # Blue - structural activity (not alarm)
+        MIPhase.ANOMALY: '🟡',        # Yellow - single break detected
+        MIPhase.DESTABILIZING: '🟠',  # Orange - declining trend
+        MIPhase.DECOUPLED: '🔴',      # Red - severe break
+    }
+
+    MI_PHASE_STYLES = {
+        MIPhase.BASELINE: Style(color="green"),
+        MIPhase.ELEVATED: Style(color="cyan"),
+        MIPhase.ANOMALY: Style(color="yellow", bold=True),
+        MIPhase.DESTABILIZING: Style(color="bright_red", bold=True),
+        MIPhase.DECOUPLED: Style(color="red", bold=True),
     }
 
     TREND_ICONS = {
@@ -296,49 +313,64 @@ class StatusFormatter:
         self._print_alerts(coupling, AnomalyStatus, BreakType)
 
     def _print_phase_comparison(self, comparison: dict):
-        """Print parallel phase comparison panel showing both classifiers."""
-        current_phase, current_reason = comparison['current']
-        exp_phase, exp_reason = comparison['experimental']
-        is_divergent = comparison['is_divergent']
+        """Print parallel phase comparison panel showing all three classifiers."""
+        goes_phase, goes_reason = comparison['goes_only']
+        mi_phase, mi_reason = comparison['mi_only']
+        int_phase, int_reason = comparison['integrated']
+        mi_precursor = comparison.get('mi_precursor', False)
 
-        # Build side-by-side content using columns
-        # Left panel: CURRENT (GOES-only)
-        current_icon = self.PHASE_ICONS.get(current_phase, '❓')
-        current_style = self.PHASE_STYLES.get(current_phase, Style())
+        # Panel 1: GOES-only (reference)
+        goes_icon = self.PHASE_ICONS.get(goes_phase, '❓')
+        goes_style = self.PHASE_STYLES.get(goes_phase, Style())
 
-        left_text = Text()
-        left_text.append("CURRENT (GOES-only)\n", style="bold dim")
-        left_text.append("─" * 28 + "\n", style="dim")
-        left_text.append(f"{current_icon} ", style="bold")
-        left_text.append(f"{current_phase}\n", style=current_style)
-        left_text.append(f"{current_reason}\n\n", style="dim")
-        left_text.append("Rule: GOES flux thresholds", style="dim italic")
+        goes_text = Text()
+        goes_text.append("GOES-only\n", style="bold dim")
+        goes_text.append("─" * 22 + "\n", style="dim")
+        goes_text.append(f"{goes_icon} ", style="bold")
+        goes_text.append(f"{goes_phase}\n", style=goes_style)
+        goes_text.append(f"{goes_reason}\n", style="dim")
 
-        # Right panel: EXPERIMENTAL (ΔMI-integrated)
-        exp_icon = self.PHASE_ICONS.get(exp_phase, '❓')
-        exp_style = self.PHASE_STYLES.get(exp_phase, Style())
+        # Panel 2: ΔMI-only (PURE - no GOES input!)
+        mi_icon = self.MI_PHASE_ICONS.get(mi_phase, '❓')
+        mi_style = self.MI_PHASE_STYLES.get(mi_phase, Style())
 
-        right_text = Text()
-        right_text.append("EXPERIMENTAL (ΔMI-integrated)\n", style="bold dim")
-        right_text.append("─" * 28 + "\n", style="dim")
-        right_text.append(f"{exp_icon} ", style="bold")
-        right_text.append(f"{exp_phase}\n", style=exp_style)
-        right_text.append(f"{exp_reason}\n\n", style="dim")
-        right_text.append("Rule: max(|r|) + GOES", style="dim italic")
+        mi_text = Text()
+        mi_text.append("ΔMI-only (PURE)\n", style="bold cyan")
+        mi_text.append("─" * 22 + "\n", style="dim")
+        mi_text.append(f"{mi_icon} ", style="bold")
+        mi_text.append(f"{mi_phase}\n", style=mi_style)
+        mi_text.append(f"{mi_reason}\n", style="dim")
 
-        # Create two panels side by side
-        left_panel = Panel(left_text, border_style="blue", box=box.ROUNDED, width=35)
-        right_panel = Panel(right_text, border_style="magenta", box=box.ROUNDED, width=35)
+        # Panel 3: Integrated (hybrid)
+        int_icon = self.PHASE_ICONS.get(int_phase, '❓')
+        int_style = self.PHASE_STYLES.get(int_phase, Style())
 
-        columns = Columns([left_panel, right_panel], padding=(0, 2))
+        int_text = Text()
+        int_text.append("Integrated\n", style="bold dim")
+        int_text.append("─" * 22 + "\n", style="dim")
+        int_text.append(f"{int_icon} ", style="bold")
+        int_text.append(f"{int_phase}\n", style=int_style)
+        int_text.append(f"{int_reason}\n", style="dim")
 
-        # Divergence status line
-        if is_divergent:
+        # Create three panels side by side
+        goes_panel = Panel(goes_text, border_style="blue", box=box.ROUNDED, width=28)
+        mi_panel = Panel(mi_text, border_style="cyan" if not mi_precursor else "bright_yellow", box=box.ROUNDED, width=28)
+        int_panel = Panel(int_text, border_style="magenta", box=box.ROUNDED, width=28)
+
+        columns = Columns([goes_panel, mi_panel, int_panel], padding=(0, 1))
+
+        # Status line based on precursor detection
+        if mi_precursor:
             status_line = Text()
             status_line.append("\nStatus: ", style="dim")
-            status_line.append("⚠️ DIVERGENT\n", style="bold yellow")
-            status_line.append("Interpretation: ", style="dim")
-            status_line.append("Energy (GOES) and structure (ΔMI) are temporarily decoupled", style="yellow italic")
+            status_line.append("⚠️ PRECURSOR DETECTED\n", style="bold bright_yellow")
+            status_line.append("ΔMI sees coupling anomaly while GOES is still quiet → potential early warning", style="yellow italic")
+            border_style = "bright_yellow"
+        elif comparison['is_divergent']:
+            status_line = Text()
+            status_line.append("\nStatus: ", style="dim")
+            status_line.append("DIVERGENT\n", style="bold yellow")
+            status_line.append(comparison['divergence_note'], style="yellow italic")
             border_style = "yellow"
         else:
             status_line = Text()
@@ -352,9 +384,9 @@ class StatusFormatter:
 
         self.console.print(Panel(
             content,
-            title="🎯 PHASE COMPARISON",
+            title="🎯 PHASE COMPARISON (3-way)",
             border_style=border_style,
-            subtitle="[dim]Parallel classifier validation[/]",
+            subtitle="[dim]GOES vs ΔMI-pure vs Integrated[/]",
         ))
 
     def _print_phase(self, phase: str, reason: str):
