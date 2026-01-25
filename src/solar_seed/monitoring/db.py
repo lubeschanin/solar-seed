@@ -194,7 +194,11 @@ class MonitoringDB:
                 location TEXT,
                 source TEXT DEFAULT 'auto',
                 notes TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                active_region_num INTEGER,
+                linked_cme_ids TEXT,
+                donki_link TEXT,
+                donki_flr_id TEXT
             )
         """)
 
@@ -438,6 +442,19 @@ class MonitoringDB:
             except sqlite3.OperationalError:
                 pass
 
+        # Add new columns to flare_events for DONKI data
+        flare_new_cols = [
+            ('active_region_num', 'INTEGER'),
+            ('linked_cme_ids', 'TEXT'),  # JSON array of CME IDs
+            ('donki_link', 'TEXT'),
+            ('donki_flr_id', 'TEXT'),    # DONKI flare ID for deduplication
+        ]
+        for col, dtype in flare_new_cols:
+            try:
+                cursor.execute(f"ALTER TABLE flare_events ADD COLUMN {col} {dtype}")
+            except sqlite3.OperationalError:
+                pass
+
         # Create indices for fast queries
         # Time series: timestamp is primary query axis
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_goes_timestamp ON goes_xray(timestamp)")
@@ -455,6 +472,7 @@ class MonitoringDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_peak ON flare_events(peak_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_class ON flare_events(class)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_source ON flare_events(source)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_ar ON flare_events(active_region_num)")
 
         # Predictions: time and verification status
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_time ON predictions(prediction_time)")
@@ -1202,27 +1220,65 @@ class MonitoringDB:
             if not '+' in begin_time and not begin_time.endswith('Z'):
                 begin_time += '+00:00'
 
-            # Check if already exists
+            # Extract new DONKI fields
+            donki_flr_id = flare.get('flrID', '')
+            active_region_num = flare.get('activeRegionNum')
+            donki_link = flare.get('link', '')
+
+            # Extract linked CME IDs
+            linked_events = flare.get('linkedEvents') or []
+            cme_ids = [e.get('activityID', '') for e in linked_events
+                       if 'CME' in e.get('activityID', '')]
+            linked_cme_ids = json.dumps(cme_ids) if cme_ids else None
+
+            # Check if already exists (by DONKI ID or by class/magnitude/time)
+            if donki_flr_id:
+                cursor.execute("SELECT id FROM flare_events WHERE donki_flr_id = ?", (donki_flr_id,))
+                existing = cursor.fetchone()
+                if existing:
+                    # Update existing record with new fields
+                    cursor.execute("""
+                        UPDATE flare_events
+                        SET active_region_num = ?, linked_cme_ids = ?, donki_link = ?
+                        WHERE id = ?
+                    """, (active_region_num, linked_cme_ids, donki_link, existing[0]))
+                    continue
+
+            # Fallback: check by class/magnitude/date
             cursor.execute("""
                 SELECT id FROM flare_events
                 WHERE class = ? AND magnitude = ?
                 AND peak_time LIKE ?
             """, (flare_class, magnitude, f"{begin_time[:10]}%"))
 
-            if cursor.fetchone():
+            existing = cursor.fetchone()
+            if existing:
+                # Update existing record with new fields
+                cursor.execute("""
+                    UPDATE flare_events
+                    SET active_region_num = ?, linked_cme_ids = ?, donki_link = ?, donki_flr_id = ?
+                    WHERE id = ?
+                """, (active_region_num, linked_cme_ids, donki_link, donki_flr_id, existing[0]))
                 continue
 
-            # Insert
+            # Insert new flare
             cursor.execute("""
-                INSERT INTO flare_events (start_time, peak_time, end_time, class, magnitude, source, location)
-                VALUES (?, ?, ?, ?, ?, 'DONKI', ?)
+                INSERT INTO flare_events (
+                    start_time, peak_time, end_time, class, magnitude, source, location,
+                    active_region_num, linked_cme_ids, donki_link, donki_flr_id
+                )
+                VALUES (?, ?, ?, ?, ?, 'DONKI', ?, ?, ?, ?, ?)
             """, (
                 begin_time,
                 peak_time.replace('Z', '+00:00') if peak_time else begin_time,
                 end_time.replace('Z', '+00:00') if end_time else None,
                 flare_class,
                 magnitude,
-                flare.get('sourceLocation', '')
+                flare.get('sourceLocation', ''),
+                active_region_num,
+                linked_cme_ids,
+                donki_link,
+                donki_flr_id
             ))
             imported += 1
 

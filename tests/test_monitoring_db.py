@@ -538,3 +538,130 @@ class TestPredictionVerification:
         accuracy = db.get_prediction_accuracy()
         assert accuracy['overall']['total_predictions'] == 2
         assert accuracy['overall']['verified_correct'] == 1
+
+
+class TestDonkiFields:
+    """Test DONKI-specific flare event fields."""
+
+    @pytest.fixture
+    def db(self):
+        """Create temporary database."""
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+            db_path = Path(f.name)
+        db = MonitoringDB(db_path=db_path)
+        yield db
+        db.close()
+        db_path.unlink()
+
+    def test_flare_with_donki_fields(self, db):
+        """Insert flare with active region, CME links, and DONKI metadata."""
+        cursor = db.conn.cursor()
+
+        # Insert flare with all DONKI fields
+        cursor.execute("""
+            INSERT INTO flare_events (
+                start_time, peak_time, class, magnitude, source, location,
+                active_region_num, linked_cme_ids, donki_link, donki_flr_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "2026-01-18T17:27:00+00:00",
+            "2026-01-18T18:09:00+00:00",
+            "X",
+            1.9,
+            "DONKI",
+            "S15E20",
+            14341,
+            '["2026-01-18T18:09:00-CME-001"]',
+            "https://kauai.ccmc.gsfc.nasa.gov/DONKI/view/FLR/44029/-1",
+            "2026-01-18T17:27:00-FLR-001"
+        ))
+        db.conn.commit()
+
+        # Verify storage
+        cursor.execute("SELECT * FROM flare_events WHERE class = 'X'")
+        row = cursor.fetchone()
+
+        assert row['active_region_num'] == 14341
+        assert '2026-01-18T18:09:00-CME-001' in row['linked_cme_ids']
+        assert 'DONKI' in row['donki_link']
+        assert row['donki_flr_id'] == '2026-01-18T17:27:00-FLR-001'
+
+    def test_flare_with_multiple_cmes(self, db):
+        """Flare with multiple linked CMEs."""
+        import json
+        cursor = db.conn.cursor()
+
+        cme_ids = ["2026-01-10T12:00:00-CME-001", "2026-01-10T14:00:00-CME-002"]
+
+        cursor.execute("""
+            INSERT INTO flare_events (
+                start_time, class, magnitude, linked_cme_ids
+            ) VALUES (?, ?, ?, ?)
+        """, (
+            "2026-01-10T11:30:00+00:00",
+            "X",
+            5.0,
+            json.dumps(cme_ids)
+        ))
+        db.conn.commit()
+
+        cursor.execute("SELECT linked_cme_ids FROM flare_events WHERE magnitude = 5.0")
+        row = cursor.fetchone()
+
+        parsed = json.loads(row['linked_cme_ids'])
+        assert len(parsed) == 2
+        assert "CME-001" in parsed[0]
+        assert "CME-002" in parsed[1]
+
+    def test_query_by_active_region(self, db):
+        """Query flares by active region number."""
+        cursor = db.conn.cursor()
+
+        # Insert multiple flares from same AR
+        for i, mag in enumerate([1.5, 2.0, 3.3]):
+            cursor.execute("""
+                INSERT INTO flare_events (
+                    start_time, class, magnitude, active_region_num
+                ) VALUES (?, ?, ?, ?)
+            """, (
+                f"2026-01-1{i}T12:00:00+00:00",
+                "M",
+                mag,
+                14341
+            ))
+
+        # Insert flare from different AR
+        cursor.execute("""
+            INSERT INTO flare_events (
+                start_time, class, magnitude, active_region_num
+            ) VALUES (?, ?, ?, ?)
+        """, ("2026-01-15T12:00:00+00:00", "M", 1.0, 14298))
+
+        db.conn.commit()
+
+        # Query by AR
+        cursor.execute("""
+            SELECT COUNT(*) as count, SUM(magnitude) as total_mag
+            FROM flare_events WHERE active_region_num = 14341
+        """)
+        row = cursor.fetchone()
+
+        assert row['count'] == 3
+        assert row['total_mag'] == pytest.approx(6.8)
+
+    def test_flare_without_donki_fields(self, db):
+        """Flares without DONKI fields should still work."""
+        row_id = db.insert_flare_event(
+            start_time="2026-01-10T12:00:00",
+            flare_class="C",
+            magnitude=5.0
+        )
+        assert row_id > 0
+
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT * FROM flare_events WHERE id = ?", (row_id,))
+        row = cursor.fetchone()
+
+        assert row['class'] == 'C'
+        assert row['active_region_num'] is None
+        assert row['linked_cme_ids'] is None

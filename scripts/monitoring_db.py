@@ -192,7 +192,11 @@ class MonitoringDB:
                 location TEXT,
                 source TEXT DEFAULT 'auto',
                 notes TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                active_region_num INTEGER,
+                linked_cme_ids TEXT,
+                donki_link TEXT,
+                donki_flr_id TEXT
             )
         """)
 
@@ -294,6 +298,18 @@ class MonitoringDB:
         except sqlite3.OperationalError:
             pass
 
+        # Add DONKI fields to flare_events (v0.8)
+        for col, dtype in [
+            ('active_region_num', 'INTEGER'),
+            ('linked_cme_ids', 'TEXT'),
+            ('donki_link', 'TEXT'),
+            ('donki_flr_id', 'TEXT'),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE flare_events ADD COLUMN {col} {dtype}")
+            except sqlite3.OperationalError:
+                pass
+
         # Create indices for fast queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_goes_timestamp ON goes_xray(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_wind_timestamp ON solar_wind(timestamp)")
@@ -304,6 +320,7 @@ class MonitoringDB:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coupling_run_time ON coupling_measurements(run_id, timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_time ON flare_events(start_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_class ON flare_events(class)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_flares_ar ON flare_events(active_region_num)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_time ON predictions(prediction_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_wavelength ON channels(wavelength)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_pairs_name ON pairs(pair_name)")
