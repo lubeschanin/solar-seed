@@ -11,11 +11,14 @@ provides 1024x1024 resolution with direct access (no queue).
 
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 
 def load_aia_latest(
     wavelengths: list[int],
-    max_age_minutes: int = 60
+    max_age_minutes: int = 60,
+    search_timeout: int = 60,
+    download_timeout: int = 240
 ) -> tuple[dict, str, dict] | tuple[None, None, None]:
     """
     Load the most recent available AIA data with quality metadata.
@@ -29,6 +32,12 @@ def load_aia_latest(
     - quality_flags: dict of wavelength -> QUALITY header value
     - exposure_times: dict of wavelength -> EXPTIME
     - warnings: list of quality warnings
+
+    Args:
+        wavelengths: List of AIA wavelengths to load (Angstroms)
+        max_age_minutes: Search window (minutes before now)
+        search_timeout: Timeout in seconds for VSO search (default: 60s)
+        download_timeout: Timeout in seconds for FITS download (default: 240s = 4min)
     """
     try:
         from sunpy.net import Fido, attrs as a
@@ -49,15 +58,31 @@ def load_aia_latest(
         exposure_times = {}
         warnings = []
 
-        for wl in wavelengths:
-            print(f"    Searching {wl} Å (last {max_age_minutes} min)...")
-
-            # Search for available images in time window
+        def _load_single_channel(wl):
+            """Load a single wavelength channel with VSO (called with timeout)."""
             result = Fido.search(
                 a.Time(start, now),
                 a.Instrument('AIA'),
                 a.Wavelength(wl * u.Angstrom)
             )
+            return result
+
+        for wl in wavelengths:
+            print(f"    Searching {wl} Å (last {max_age_minutes} min)...")
+
+            # Search with timeout
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_load_single_channel, wl)
+                    result = future.result(timeout=search_timeout)
+            except FutureTimeoutError:
+                print(f"    ⚠ Timeout searching {wl} Å (>{search_timeout}s)")
+                warnings.append(f"{wl}Å: VSO search timeout (>{search_timeout}s)")
+                continue
+            except Exception as e:
+                print(f"    ⚠ Error searching {wl} Å: {e}")
+                warnings.append(f"{wl}Å: VSO search error: {e}")
+                continue
 
             if len(result) > 0 and len(result[0]) > 0:
                 # Get the LAST (most recent) result
@@ -71,23 +96,47 @@ def load_aia_latest(
                 except:
                     print(f"    Found {n_results} images, using latest")
 
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    # Fetch only the most recent one
-                    files = Fido.fetch(result[0, latest_idx], path=tmpdir, progress=False)
-                    if files:
-                        smap = Map(files[0])
-                        channels[wl] = smap.data
+                def _fetch_file():
+                    """Fetch FITS file (called with timeout)."""
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        files = Fido.fetch(result[0, latest_idx], path=tmpdir, progress=False)
+                        if files:
+                            smap = Map(files[0])
+                            data = smap.data.copy()
+                            meta = smap.meta.copy()
+                            date = smap.date
+                            os.remove(files[0])
+                            return data, meta, date
+                    return None, None, None
+
+                # Fetch with timeout
+                print(f"    Downloading {wl} Å (timeout={download_timeout}s)...")
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(_fetch_file)
+                        fetch_result = future.result(timeout=download_timeout)
+                        data, meta, date = fetch_result
+                except FutureTimeoutError:
+                    print(f"    ⚠ Timeout downloading {wl} Å (>{download_timeout}s)")
+                    warnings.append(f"{wl}Å: VSO download timeout (>{download_timeout}s)")
+                    continue
+                except Exception as e:
+                    print(f"    ⚠ Error downloading {wl} Å: {e}")
+                    warnings.append(f"{wl}Å: VSO download error: {e}")
+                    continue
+
+                if data is not None:
+                        channels[wl] = data
 
                         # Get actual timestamp from the FITS header
-                        timestamps[wl] = smap.date.datetime
+                        timestamps[wl] = date.datetime
                         if actual_timestamp is None:
-                            actual_timestamp = smap.date.isot
+                            actual_timestamp = date.isot
                             print(f"    Actual image time: {actual_timestamp}")
 
                         # Extract quality metadata from FITS header
-                        header = smap.meta
-                        quality_flags[wl] = header.get('QUALITY', 0)
-                        exposure_times[wl] = header.get('EXPTIME', 0)
+                        quality_flags[wl] = meta.get('QUALITY', 0)
+                        exposure_times[wl] = meta.get('EXPTIME', 0)
 
                         # Check quality flag (only warn on critical bits)
                         # Bit 30 (2^30 = 1073741824) = AEC flag (normal operation)
@@ -103,13 +152,20 @@ def load_aia_latest(
                         if exposure_times[wl] < exp_expected * 0.5:
                             warnings.append(f"{wl}Å: Short exposure {exposure_times[wl]:.2f}s (expected ~{exp_expected}s)")
                             print(f"    ⚠ Short exposure: {exposure_times[wl]:.2f}s")
-
-                        os.remove(files[0])
             else:
                 print(f"    No {wl} Å images found in last {max_age_minutes} min")
 
         if not channels:
+            print(f"    ✗ No channels loaded successfully")
             return None, None, None
+
+        # Report partial success if some channels failed
+        failed_channels = set(wavelengths) - set(channels.keys())
+        if failed_channels:
+            print(f"    ⚠ Loaded {len(channels)}/{len(wavelengths)} channels (failed: {sorted(failed_channels)})")
+            warnings.append(f"Partial load: {len(channels)}/{len(wavelengths)} channels (failed: {sorted(failed_channels)})")
+        else:
+            print(f"    ✓ All {len(channels)} channels loaded successfully")
 
         # Check time synchronization between channels
         time_spread_sec = 0
@@ -140,8 +196,14 @@ def load_aia_latest(
         return None, None, None
 
 
-def load_aia_direct(timestamp: str, wavelengths: list[int]) -> Optional[dict]:
-    """Load AIA data for a specific timestamp (legacy, fallback)."""
+def load_aia_direct(timestamp: str, wavelengths: list[int], timeout_per_channel: int = 240) -> Optional[dict]:
+    """Load AIA data for a specific timestamp (legacy, fallback).
+
+    Args:
+        timestamp: ISO format timestamp
+        wavelengths: List of AIA wavelengths to load
+        timeout_per_channel: Timeout in seconds for each channel (default: 240s = 4min)
+    """
     try:
         from sunpy.net import Fido, attrs as a
         import astropy.units as u
@@ -153,22 +215,37 @@ def load_aia_direct(timestamp: str, wavelengths: list[int]) -> Optional[dict]:
         start = dt - timedelta(minutes=3)
         end = dt + timedelta(minutes=3)
 
-        channels = {}
-        for wl in wavelengths:
-            print(f"    Fetching {wl} Å...")
+        def _load_channel(wl):
+            """Load a single channel with timeout."""
             result = Fido.search(
                 a.Time(start, end),
                 a.Instrument('AIA'),
                 a.Wavelength(wl * u.Angstrom)
             )
-
             if len(result) > 0 and len(result[0]) > 0:
                 with tempfile.TemporaryDirectory() as tmpdir:
                     files = Fido.fetch(result[0, 0], path=tmpdir, progress=False)
                     if files:
                         smap = Map(files[0])
-                        channels[wl] = smap.data
+                        data = smap.data.copy()
                         os.remove(files[0])
+                        return data
+            return None
+
+        channels = {}
+        for wl in wavelengths:
+            print(f"    Fetching {wl} Å...")
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_load_channel, wl)
+                    data = future.result(timeout=timeout_per_channel)
+                    if data is not None:
+                        channels[wl] = data
+                        print(f"    ✓ {wl} Å loaded successfully")
+            except FutureTimeoutError:
+                print(f"    ⚠ Timeout loading {wl} Å (>{timeout_per_channel}s)")
+            except Exception as e:
+                print(f"    ⚠ Error loading {wl} Å: {e}")
 
         return channels if channels else None
 
