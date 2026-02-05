@@ -86,21 +86,22 @@ def load_aia_jsoc(
                 continue
 
             # Verify it's 4k data by checking extent
+            # Note: JSOC returns astropy Quantities, must use float() for comparison
             first_result = result[0][0]
             try:
-                extent_w = first_result['Extent Width']
-                extent_h = first_result['Extent Length']
+                extent_w = float(first_result['Extent Width'])
+                extent_h = float(first_result['Extent Length'])
                 if extent_w < 4000 or extent_h < 4000:
-                    print(f"      ✗ {wl}Å: Not 4k ({extent_w}x{extent_h})")
+                    print(f"      ✗ {wl}Å: Not 4k ({extent_w:.0f}x{extent_h:.0f})")
                     continue
-            except (KeyError, TypeError):
+            except (KeyError, TypeError, ValueError):
                 # If extent not in metadata, check file size (~65MB for 4k)
                 try:
-                    size_mb = first_result['Size']
+                    size_mb = float(first_result['Size'])
                     if size_mb < 50:  # 4k is ~65MB, 1k is ~4MB
                         print(f"      ✗ {wl}Å: File too small ({size_mb:.1f}MB, need ~65MB for 4k)")
                         continue
-                except (KeyError, TypeError):
+                except (KeyError, TypeError, ValueError):
                     pass
 
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -181,15 +182,16 @@ def check_jsoc_4k_availability(timestamp: str, wavelength: int = 193) -> bool:
         if len(result) == 0 or len(result[0]) == 0:
             return False
 
-        # Check if it's 4k (by file size or extent)
+        # Check if it's 4k (by extent or file size)
+        # Note: JSOC returns astropy Quantities, must use .value for comparison
         try:
-            size_mb = result[0][0]['Size']
-            return size_mb > 50  # 4k is ~65MB
-        except (KeyError, TypeError):
+            extent = float(result[0][0]['Extent Width'])
+            return extent >= 4000
+        except (KeyError, TypeError, ValueError):
             try:
-                extent = result[0][0]['Extent Width']
-                return extent >= 4000
-            except (KeyError, TypeError):
+                size = float(result[0][0]['Size'])
+                return size > 50  # 4k is ~65 MiB
+            except (KeyError, TypeError, ValueError):
                 return True  # Assume 4k if we can't check
 
     except Exception:

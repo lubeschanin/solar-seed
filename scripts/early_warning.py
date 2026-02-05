@@ -1968,11 +1968,26 @@ def backfill(
 
     # Import JSOC loader
     try:
-        from solar_seed.data_sources import load_aia_jsoc, check_jsoc_4k_availability
+        from solar_seed.data_sources import load_aia_jsoc, check_jsoc_4k_availability, get_jsoc_latest_date
         from solar_seed.radial_profile import subtract_radial_geometry
         from solar_seed.control_tests import sector_ring_shuffle_test
     except ImportError as e:
         console.print(f"[red]Import error: {e}[/]")
+        return
+
+    # Pre-flight: check if JSOC has any 4k data at all
+    console.print("  Checking JSOC availability...")
+    latest_jsoc = get_jsoc_latest_date()
+    if not latest_jsoc:
+        console.print("[yellow]  JSOC has no 4k data available (offline?). Nothing to backfill.[/]")
+        return
+
+    console.print(f"  JSOC 4k available until: {latest_jsoc}")
+
+    # Filter timestamps to only those within JSOC range
+    earliest_ts = min(by_timestamp.keys())
+    if earliest_ts > latest_jsoc + "T23:59:59":
+        console.print(f"[yellow]  All measurements ({earliest_ts[:10]}) are newer than JSOC data ({latest_jsoc}). Nothing to backfill.[/]")
         return
 
     # Process each timestamp
@@ -1981,6 +1996,11 @@ def backfill(
     failed = 0
 
     for ts, pairs in sorted(by_timestamp.items()):
+        # Skip timestamps beyond JSOC availability (no network call needed)
+        if ts[:10] > latest_jsoc:
+            skipped += len(pairs)
+            continue
+
         # Quick availability check for 4k
         if not check_jsoc_4k_availability(ts):
             console.print(f"  [dim]{ts}: JSOC 4k not available[/]")

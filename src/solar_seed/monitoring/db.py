@@ -2062,7 +2062,7 @@ class MonitoringDB:
               AND backfilled_at IS NULL
               AND timestamp >= ?
               AND timestamp <= ?
-            ORDER BY timestamp DESC
+            ORDER BY timestamp ASC
             LIMIT ?
         """, (cutoff_min, cutoff_max, limit))
 
