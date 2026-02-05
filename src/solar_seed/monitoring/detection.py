@@ -211,7 +211,7 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
                         window_values.append(val)
                     else:
                         excluded_count += 1
-        except:
+        except (KeyError, ValueError, TypeError):
             continue
 
     if len(window_values) < 3:

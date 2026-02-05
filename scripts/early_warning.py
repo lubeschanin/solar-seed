@@ -1488,7 +1488,7 @@ def extract_flares(
                 start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
                 peak_dt = datetime.fromisoformat(peak.replace('Z', '+00:00'))
                 duration = "—"  # Would need end_time for proper duration
-            except:
+            except (ValueError, AttributeError):
                 duration = "—"
 
             table.add_row(peak[:16].replace('T', ' '), flare_class, flux, duration)
@@ -1938,7 +1938,7 @@ def backfill(
             from solar_seed.data_sources import get_jsoc_latest_date
             latest = get_jsoc_latest_date()
             console.print(f"\n  JSOC 4k available until: {latest or 'unavailable'}")
-        except:
+        except Exception:
             pass
         return
 

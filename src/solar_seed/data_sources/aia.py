@@ -93,7 +93,7 @@ def load_aia_latest(
                 try:
                     result_time = result[0][latest_idx]['Start Time']
                     print(f"    Found {n_results} images, using latest: {result_time}")
-                except:
+                except (KeyError, IndexError):
                     print(f"    Found {n_results} images, using latest")
 
                 def _fetch_file():

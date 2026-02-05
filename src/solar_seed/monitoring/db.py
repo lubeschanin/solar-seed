@@ -152,7 +152,7 @@ class MonitoringDB:
                             INSERT OR IGNORE INTO pairs (ch_a_id, ch_b_id, pair_name)
                             VALUES (?, ?, ?)
                         """, (ch_a, ch_b, pair_name))
-                    except:
+                    except Exception:
                         pass
 
         # =================================================================
@@ -690,7 +690,7 @@ class MonitoringDB:
                 from datetime import datetime, timedelta
                 dt = datetime.fromisoformat(prediction_time.replace('Z', '+00:00'))
                 valid_to = (dt + timedelta(minutes=90)).isoformat()
-            except:
+            except (ValueError, AttributeError):
                 pass
 
         try:

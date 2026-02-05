@@ -51,7 +51,7 @@ class CouplingMonitor:
             try:
                 with open(self.history_file) as f:
                     return json.load(f)
-            except:
+            except (json.JSONDecodeError, OSError):
                 pass
         return []
 
@@ -285,7 +285,7 @@ class CouplingMonitor:
             t_first = datetime.fromisoformat(recent[0]['timestamp'].replace('Z', '+00:00'))
             t_last = datetime.fromisoformat(recent[-1]['timestamp'].replace('Z', '+00:00'))
             window_min = (t_last - t_first).total_seconds() / 60
-        except:
+        except (KeyError, ValueError, AttributeError):
             window_min = n * 10  # Fallback: assume 10min intervals
 
         # Robust Theil-Sen slope

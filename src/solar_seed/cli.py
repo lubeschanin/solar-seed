@@ -124,7 +124,7 @@ def check_checkpoint() -> dict:
             info["start_date"] = data.get("metadata", {}).get("start_time", "")[:10]
             info["hours"] = data.get("metadata", {}).get("hours")
             info["cadence"] = data.get("metadata", {}).get("cadence_minutes")
-        except:
+        except (OSError, json.JSONDecodeError, TypeError):
             pass
 
     # Get progress from checkpoint
@@ -172,7 +172,7 @@ def check_segments() -> dict:
             with open(sf) as f:
                 data = json.load(f)
             info["total_points"] += data.get("n_points", 0)
-        except:
+        except (OSError, json.JSONDecodeError, TypeError):
             pass
 
     return info
@@ -527,7 +527,7 @@ def get_timezone() -> str:
                 from zoneinfo import ZoneInfo
                 ZoneInfo(tz)  # Validate
                 return tz
-            except:
+            except Exception:
                 print("  ⚠ Invalid timezone. Examples: Europe/Berlin, America/New_York")
     else:
         city = cities[int(choice) - 1]

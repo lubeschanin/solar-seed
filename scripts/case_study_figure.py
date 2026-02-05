@@ -52,7 +52,7 @@ def load_coupling_data():
             ts += '+00:00'
         try:
             dt = datetime.fromisoformat(ts.replace('+00:00', ''))
-        except:
+        except (ValueError, AttributeError):
             continue
 
         c = h.get('coupling', {})
@@ -84,7 +84,7 @@ def load_goes_data():
         ts = row['timestamp'].replace('Z', '')
         try:
             dt = datetime.fromisoformat(ts)
-        except:
+        except (ValueError, AttributeError):
             continue
         times.append(dt)
         flux.append(row['flux'])

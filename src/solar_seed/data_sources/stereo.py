@@ -78,7 +78,7 @@ def load_stereo_a_latest(
                 try:
                     result_time = result[0][latest_idx]['Start Time']
                     print(f"    Found {n_results} images, using latest: {result_time}")
-                except:
+                except (KeyError, IndexError):
                     print(f"    Found {n_results} images, using latest")
 
                 with tempfile.TemporaryDirectory() as tmpdir:

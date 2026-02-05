@@ -103,7 +103,7 @@ def get_aia_colormap(wavelength: int):
         import sunpy.visualization.colormaps
         cmap_name = f"sdoaia{wavelength}"
         return plt.get_cmap(cmap_name)
-    except:
+    except (ImportError, ValueError):
         # Fallback to custom colormap based on channel color
         from matplotlib.colors import LinearSegmentedColormap
         color = AIA_COLORMAPS.get(wavelength, {}).get("color", (1, 1, 1))
