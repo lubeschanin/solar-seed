@@ -9,8 +9,12 @@ import pytest
 from solar_seed.mutual_info import (
     mutual_information,
     normalized_mutual_information,
+    conditional_entropy,
     compute_histogram_2d,
-    entropy
+    entropy,
+    EPSILON,
+    MIN_SAMPLES,
+    DEFAULT_BINS,
 )
 from solar_seed.null_model import (
     compute_null_distribution,
@@ -170,6 +174,67 @@ class TestHistogram2D:
         y = np.random.random(n)
         hist = compute_histogram_2d(x, y, bins=32)
         assert hist.sum() == n
+
+
+class TestEdgeCases:
+    """Tests for input validation and edge cases."""
+
+    def test_empty_arrays_raise(self):
+        """Empty arrays should raise ValueError."""
+        x = np.array([])
+        y = np.array([])
+        with pytest.raises(ValueError, match="empty"):
+            mutual_information(x, y)
+        with pytest.raises(ValueError, match="empty"):
+            normalized_mutual_information(x, y)
+        with pytest.raises(ValueError, match="empty"):
+            conditional_entropy(x, y)
+
+    def test_all_nan_raises(self):
+        """All-NaN arrays should raise ValueError."""
+        x = np.full(200, np.nan)
+        y = np.full(200, np.nan)
+        with pytest.raises(ValueError, match="No valid"):
+            mutual_information(x, y)
+        with pytest.raises(ValueError, match="No valid"):
+            normalized_mutual_information(x, y)
+        with pytest.raises(ValueError, match="No valid"):
+            conditional_entropy(x, y)
+
+    def test_shape_mismatch_raises(self):
+        """Different-sized arrays should raise ValueError."""
+        x = np.ones(200)
+        y = np.ones(300)
+        with pytest.raises(ValueError, match="Shape mismatch"):
+            mutual_information(x, y)
+        with pytest.raises(ValueError, match="Shape mismatch"):
+            normalized_mutual_information(x, y)
+        with pytest.raises(ValueError, match="Shape mismatch"):
+            conditional_entropy(x, y)
+
+    def test_constant_array(self):
+        """Constant values have zero entropy, so MI = 0."""
+        x = np.ones(10000)
+        y = np.ones(10000)
+        mi = mutual_information(x, y)
+        assert mi == 0.0
+
+    def test_partial_nan(self):
+        """Arrays with some NaN should work using valid subset."""
+        rng = np.random.default_rng(42)
+        x = rng.random(10000)
+        y = x + rng.random(10000) * 0.1
+        # Sprinkle NaNs into 10% of values
+        nan_idx = rng.choice(10000, size=1000, replace=False)
+        x[nan_idx] = np.nan
+        mi = mutual_information(x, y)
+        assert mi > 1.0  # Still correlated
+
+    def test_named_constants_exist(self):
+        """Named constants should be importable with expected values."""
+        assert EPSILON == 1e-10
+        assert MIN_SAMPLES == 100
+        assert DEFAULT_BINS == 64
 
 
 if __name__ == "__main__":

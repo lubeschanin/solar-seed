@@ -12,6 +12,48 @@ where H is the Shannon entropy.
 import numpy as np
 from numpy.typing import NDArray
 
+# Named constants
+EPSILON = 1e-10      # Numerical stability in histogram normalization
+MIN_SAMPLES = 100    # Minimum valid samples for MI calculation
+DEFAULT_BINS = 64    # Default histogram bins
+
+
+def _validate_inputs(
+    x: NDArray[np.float64],
+    y: NDArray[np.float64],
+) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+    """
+    Validate and filter inputs for MI calculation.
+
+    Raises:
+        ValueError: If arrays are empty, all NaN/Inf, or shape mismatch.
+
+    Returns:
+        Tuple of (x_valid, y_valid) flat arrays, or None if < MIN_SAMPLES valid.
+    """
+    x_flat = x.ravel().astype(np.float64)
+    y_flat = y.ravel().astype(np.float64)
+
+    if x_flat.size == 0 or y_flat.size == 0:
+        raise ValueError("Input arrays must not be empty")
+
+    if x_flat.size != y_flat.size:
+        raise ValueError(
+            f"Shape mismatch: x has {x_flat.size} elements, y has {y_flat.size}"
+        )
+
+    valid = np.isfinite(x_flat) & np.isfinite(y_flat)
+    x_flat = x_flat[valid]
+    y_flat = y_flat[valid]
+
+    if x_flat.size == 0:
+        raise ValueError("No valid (non-NaN/Inf) samples in input arrays")
+
+    if x_flat.size < MIN_SAMPLES:
+        return None
+
+    return x_flat, y_flat
+
 
 def compute_histogram_2d(
     x: NDArray[np.float64],
@@ -33,8 +75,8 @@ def compute_histogram_2d(
     x_min, x_max = x.min(), x.max()
     y_min, y_max = y.min(), y.max()
     
-    x_norm = (x - x_min) / (x_max - x_min + 1e-10)
-    y_norm = (y - y_min) / (y_max - y_min + 1e-10)
+    x_norm = (x - x_min) / (x_max - x_min + EPSILON)
+    y_norm = (y - y_min) / (y_max - y_min + EPSILON)
     
     x_bins = np.clip((x_norm * bins).astype(int), 0, bins - 1)
     y_bins = np.clip((y_norm * bins).astype(int), 0, bins - 1)
@@ -67,7 +109,7 @@ def entropy(p: NDArray[np.float64]) -> float:
 def mutual_information(
     x: NDArray[np.float64],
     y: NDArray[np.float64],
-    bins: int = 64
+    bins: int = DEFAULT_BINS
 ) -> float:
     """
     Computes Mutual Information between two arrays.
@@ -82,6 +124,9 @@ def mutual_information(
     Returns:
         Mutual Information in bits
 
+    Raises:
+        ValueError: If arrays are empty, all NaN/Inf, or shape mismatch.
+
     Example:
         >>> x = np.random.randn(100, 100)
         >>> y = x + np.random.randn(100, 100) * 0.1  # Strongly correlated
@@ -89,17 +134,11 @@ def mutual_information(
         >>> mi > 1.0  # Should show high MI
         True
     """
-    x_flat = x.ravel().astype(np.float64)
-    y_flat = y.ravel().astype(np.float64)
-    
-    # Remove NaN/Inf
-    valid = np.isfinite(x_flat) & np.isfinite(y_flat)
-    x_flat = x_flat[valid]
-    y_flat = y_flat[valid]
-    
-    if len(x_flat) < 100:
+    result = _validate_inputs(x, y)
+    if result is None:
         return 0.0
-    
+    x_flat, y_flat = result
+
     # 2D Histogramm
     hist_2d = compute_histogram_2d(x_flat, y_flat, bins)
     
@@ -130,7 +169,7 @@ def mutual_information(
 def normalized_mutual_information(
     x: NDArray[np.float64],
     y: NDArray[np.float64],
-    bins: int = 64
+    bins: int = DEFAULT_BINS
 ) -> float:
     """
     Normalized Mutual Information.
@@ -144,17 +183,15 @@ def normalized_mutual_information(
 
     Returns:
         NMI in range [0, 1], where 1 = perfect correlation
+
+    Raises:
+        ValueError: If arrays are empty, all NaN/Inf, or shape mismatch.
     """
-    x_flat = x.ravel().astype(np.float64)
-    y_flat = y.ravel().astype(np.float64)
-    
-    valid = np.isfinite(x_flat) & np.isfinite(y_flat)
-    x_flat = x_flat[valid]
-    y_flat = y_flat[valid]
-    
-    if len(x_flat) < 100:
+    result = _validate_inputs(x, y)
+    if result is None:
         return 0.0
-    
+    x_flat, y_flat = result
+
     hist_2d = compute_histogram_2d(x_flat, y_flat, bins)
     hist_x = hist_2d.sum(axis=1)
     hist_y = hist_2d.sum(axis=0)
@@ -183,7 +220,7 @@ def normalized_mutual_information(
 def conditional_entropy(
     x: NDArray[np.float64],
     y: NDArray[np.float64],
-    bins: int = 64
+    bins: int = DEFAULT_BINS
 ) -> float:
     """
     Conditional entropy H(X|Y).
@@ -192,17 +229,15 @@ def conditional_entropy(
 
     Returns:
         H(X|Y) in bits
+
+    Raises:
+        ValueError: If arrays are empty, all NaN/Inf, or shape mismatch.
     """
-    x_flat = x.ravel().astype(np.float64)
-    y_flat = y.ravel().astype(np.float64)
-    
-    valid = np.isfinite(x_flat) & np.isfinite(y_flat)
-    x_flat = x_flat[valid]
-    y_flat = y_flat[valid]
-    
-    if len(x_flat) < 100:
+    result = _validate_inputs(x, y)
+    if result is None:
         return 0.0
-    
+    x_flat, y_flat = result
+
     hist_2d = compute_histogram_2d(x_flat, y_flat, bins)
     hist_y = hist_2d.sum(axis=0)
     
