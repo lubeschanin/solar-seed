@@ -975,8 +975,10 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
         break_detections = {}
         robustness_checks = {}
 
-        # Determine resolution from data source
-        resolution = '4k' if data_source in ('full-res', 'vso', 'jsoc') else '1k'
+        # Determine resolution from actual data shape (not data source label)
+        first_channel = next(iter(channels.values()))
+        actual_size = max(first_channel.shape) if hasattr(first_channel, 'shape') else 0
+        resolution = '4k' if actual_size >= 4000 else '1k'
 
         pairs = [(193, 211), (193, 304), (171, 193)]
         for wl1, wl2 in pairs:
@@ -1049,7 +1051,7 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
         # Quality metadata
         results['_quality'] = {
             'data_source': data_source,
-            'resolution': '1024x1024' if data_source == 'synoptic' else '4096x4096',
+            'resolution': f'{actual_size}x{actual_size}',
             'is_good': quality_info['is_good_quality'] if quality_info else None,
             'time_spread_sec': time_spread,
             'timestamps': quality_info['timestamps'] if quality_info else {},
@@ -1968,7 +1970,7 @@ def backfill(
     try:
         from solar_seed.data_sources import load_aia_jsoc, check_jsoc_4k_availability
         from solar_seed.radial_profile import subtract_radial_geometry
-        from solar_seed.mutual_info import mutual_information
+        from solar_seed.control_tests import sector_ring_shuffle_test
     except ImportError as e:
         console.print(f"[red]Import error: {e}[/]")
         return
@@ -2009,8 +2011,9 @@ def backfill(
                 res1, _, _ = subtract_radial_geometry(channels[wl1])
                 res2, _, _ = subtract_radial_geometry(channels[wl2])
 
-                # Calculate MI
-                new_mi = mutual_information(res1, res2)
+                # Calculate delta_mi via sector-ring shuffle (same as monitoring)
+                shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
+                new_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
 
                 # Update in DB
                 db.update_measurement_backfill(

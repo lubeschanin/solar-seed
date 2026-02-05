@@ -115,6 +115,42 @@ class TestInsertOperations:
         assert row['delta_mi'] == pytest.approx(0.59)
         assert row['status'] == 'NORMAL'
 
+    def test_insert_coupling_quality_fields(self, db):
+        """Quality fields (quality_ok, robustness_score, sync_delta_s) are stored."""
+        row_id = db.insert_coupling(
+            timestamp="2026-01-10T12:00:00",
+            pair="193-211",
+            delta_mi=0.59,
+            status="NORMAL",
+            quality_ok=True,
+            robustness_score=3.5,
+            sync_delta_s=12.0,
+        )
+
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT * FROM coupling_measurements WHERE id = ?", (row_id,))
+        row = cursor.fetchone()
+        assert row['quality_ok'] == 1
+        assert row['robustness_score'] == pytest.approx(3.5)
+        assert row['sync_delta_s'] == pytest.approx(12.0)
+
+    def test_insert_coupling_quality_ok_false(self, db):
+        """quality_ok=False for failed measurements."""
+        row_id = db.insert_coupling(
+            timestamp="2026-01-10T12:05:00",
+            pair="193-304",
+            delta_mi=0.07,
+            status="DATA_ERROR",
+            quality_ok=False,
+            robustness_score=35.0,
+        )
+
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT * FROM coupling_measurements WHERE id = ?", (row_id,))
+        row = cursor.fetchone()
+        assert row['quality_ok'] == 0
+        assert row['robustness_score'] == pytest.approx(35.0)
+
     def test_insert_flare_event(self, db):
         """Insert flare event."""
         row_id = db.insert_flare_event(

@@ -20,6 +20,7 @@ from early_warning import (
     FLARE_THRESHOLDS,
     compute_registration_shift,
     detect_coupling_break,
+    store_coupling_reading,
 )
 
 
@@ -706,3 +707,135 @@ class TestValidationChecks:
         result = detect_coupling_break('193-211', 0.50, temp_monitor)
         assert result['is_break'] == False
         assert 'Insufficient' in result.get('reason', '')
+
+
+class TestStoreCouplingReading:
+    """Test store_coupling_reading quality_ok and trigger_kind logic."""
+
+    @pytest.fixture
+    def mock_db(self):
+        """Create a temp MonitoringDB and patch get_monitoring_db."""
+        from solar_seed.monitoring.db import MonitoringDB
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+            db_path = Path(f.name)
+        db = MonitoringDB(db_path=db_path)
+        with patch('early_warning.get_monitoring_db', return_value=db):
+            yield db
+        db.close()
+        db_path.unlink()
+
+    def test_trigger_kind_elevated_threshold(self, mock_db):
+        """deviation_pct between -0.10 and -0.15 gets trigger_kind=THRESHOLD."""
+        coupling = {
+            '193-211': {
+                'delta_mi': 0.53,
+                'status': 'ELEVATED',
+                'deviation_pct': -0.12,  # Between -0.10 and -0.15
+                'residual': -0.4,
+                'trend': 'STABLE',
+            },
+            '_quality': {'resolution': '1024x1024'},
+        }
+
+        store_coupling_reading("2026-01-15T12:00:00", coupling)
+
+        cursor = mock_db.conn.cursor()
+        cursor.execute("SELECT trigger_kind, trigger_value, trigger_threshold FROM predictions")
+        row = cursor.fetchone()
+        assert row['trigger_kind'] == 'THRESHOLD'
+        assert row['trigger_value'] == pytest.approx(-0.12)
+        assert row['trigger_threshold'] == pytest.approx(-0.10)
+
+    def test_trigger_kind_all_levels(self, mock_db):
+        """Each deviation_pct range maps to correct trigger_threshold."""
+        cases = [
+            (-0.30, -0.25, 'ALERT'),     # < -0.25 → THRESHOLD(-0.25)
+            (-0.18, -0.15, 'ELEVATED'),   # < -0.15 → THRESHOLD(-0.15)
+            (-0.12, -0.10, 'ELEVATED'),   # < -0.10 → THRESHOLD(-0.10)
+        ]
+        for i, (dev_pct, expected_threshold, status) in enumerate(cases):
+            ts = f"2026-01-15T{12+i}:00:00"
+            coupling = {
+                '193-211': {
+                    'delta_mi': 0.50,
+                    'status': status,
+                    'deviation_pct': dev_pct,
+                    'residual': -0.5,
+                    'trend': 'STABLE',
+                },
+                '_quality': {'resolution': '1024x1024'},
+            }
+            store_coupling_reading(ts, coupling)
+
+        cursor = mock_db.conn.cursor()
+        cursor.execute("SELECT trigger_threshold FROM predictions ORDER BY prediction_time")
+        rows = cursor.fetchall()
+        assert len(rows) == 3
+        assert rows[0]['trigger_threshold'] == pytest.approx(-0.25)
+        assert rows[1]['trigger_threshold'] == pytest.approx(-0.15)
+        assert rows[2]['trigger_threshold'] == pytest.approx(-0.10)
+
+    def test_quality_ok_stored(self, mock_db):
+        """quality_ok, robustness_score, sync_delta_s passed through to DB."""
+        coupling = {
+            '193-211': {
+                'delta_mi': 0.59,
+                'status': 'NORMAL',
+                'trend': 'STABLE',
+            },
+            '_quality': {'resolution': '1024x1024', 'time_spread_sec': 8.5},
+            '_validation': {
+                'robustness_checks': {
+                    '193-211': {'is_robust': True, 'change_pct': 2.1},
+                },
+            },
+        }
+
+        store_coupling_reading("2026-01-15T12:00:00", coupling)
+
+        cursor = mock_db.conn.cursor()
+        cursor.execute("SELECT quality_ok, robustness_score, sync_delta_s FROM coupling_measurements")
+        row = cursor.fetchone()
+        assert row['quality_ok'] == 1
+        assert row['robustness_score'] == pytest.approx(2.1)
+        assert row['sync_delta_s'] == pytest.approx(8.5)
+
+    def test_quality_ok_false_on_data_error(self, mock_db):
+        """DATA_ERROR status sets quality_ok=False."""
+        coupling = {
+            '193-211': {
+                'delta_mi': 0.0,
+                'status': 'DATA_ERROR',
+            },
+            '_quality': {'resolution': '1024x1024'},
+        }
+
+        store_coupling_reading("2026-01-15T12:00:00", coupling)
+
+        cursor = mock_db.conn.cursor()
+        cursor.execute("SELECT quality_ok FROM coupling_measurements")
+        row = cursor.fetchone()
+        assert row['quality_ok'] == 0
+
+    def test_quality_ok_false_on_failed_robustness(self, mock_db):
+        """Failed robustness check sets quality_ok=False."""
+        coupling = {
+            '193-211': {
+                'delta_mi': 0.59,
+                'status': 'NORMAL',
+            },
+            '_quality': {'resolution': '1024x1024', 'time_spread_sec': 10.0},
+            '_validation': {
+                'robustness_checks': {
+                    '193-211': {'is_robust': False, 'change_pct': 35.0},
+                },
+            },
+        }
+
+        store_coupling_reading("2026-01-15T12:00:00", coupling)
+
+        cursor = mock_db.conn.cursor()
+        cursor.execute("SELECT quality_ok, robustness_score FROM coupling_measurements")
+        row = cursor.fetchone()
+        assert row['quality_ok'] == 0
+        assert row['robustness_score'] == pytest.approx(35.0)
