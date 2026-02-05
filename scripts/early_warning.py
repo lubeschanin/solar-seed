@@ -462,6 +462,11 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
     quality = coupling.get('_quality', {})
     resolution_str = quality.get('resolution', '1024x1024')
     resolution = '1k' if '1024' in resolution_str else '4k'
+    time_spread_sec = quality.get('time_spread_sec')
+
+    # Extract validation data for quality_ok
+    validation = coupling.get('_validation', {})
+    robustness_checks = validation.get('robustness_checks', {})
 
     for pair, data in coupling.items():
         # Skip internal metadata fields
@@ -470,7 +475,29 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
 
         status = data.get('status')
 
-        # Store coupling measurement with resolution for backfill tracking
+        # Determine quality_ok from validation checks
+        quality_ok = None
+        robustness_score = None
+        sync_delta_s = time_spread_sec
+
+        rob = robustness_checks.get(pair)
+        if rob is not None:
+            robustness_score = rob.get('change_pct')
+
+        if status == 'DATA_ERROR':
+            quality_ok = False
+        elif data.get('break_vetoed'):
+            quality_ok = False
+        else:
+            # Check individual tests
+            tests_ok = True
+            if rob is not None and rob.get('is_robust') is False:
+                tests_ok = False
+            if time_spread_sec is not None and time_spread_sec > 60:
+                tests_ok = False
+            quality_ok = tests_ok
+
+        # Store coupling measurement with resolution and quality fields
         db.insert_coupling(
             timestamp=timestamp,
             pair=pair,
@@ -485,6 +512,9 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
             confidence=data.get('confidence'),
             n_points=data.get('n_points'),
             resolution=resolution,
+            quality_ok=quality_ok,
+            robustness_score=robustness_score,
+            sync_delta_s=sync_delta_s,
         )
 
         # Auto-create prediction for ALERT/ELEVATED status
@@ -521,6 +551,11 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
                 trigger_kind = 'THRESHOLD'
                 trigger_value = deviation_pct
                 trigger_threshold = -0.15
+            elif deviation_pct is not None and deviation_pct < -0.10:
+                # Elevated threshold (matches coupling.py ELEVATED status)
+                trigger_kind = 'THRESHOLD'
+                trigger_value = deviation_pct
+                trigger_threshold = -0.10
             else:
                 # Check for z-score spike (STRONG/EXTREME anomaly level)
                 residual = data.get('residual')
