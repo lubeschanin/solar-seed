@@ -50,10 +50,11 @@ def load_aia_jsoc(
     try:
         from sunpy.net import Fido, attrs as a
         from sunpy.map import Map
+        from aiapy.calibrate import register
         import astropy.units as u
         import numpy as np
     except ImportError as e:
-        print(f"    JSOC loader requires sunpy: {e}")
+        print(f"    JSOC loader requires sunpy + aiapy: {e}")
         return None, None
 
     # Parse timestamp
@@ -114,12 +115,18 @@ def load_aia_jsoc(
 
                 # Load with SunPy Map
                 smap = Map(files[0])
-                data = smap.data.astype(np.float64)
 
                 # Final validation: must be 4k
-                if data.shape[0] < 4000 or data.shape[1] < 4000:
-                    print(f"      ✗ {wl}Å: Data is {data.shape}, not 4k - skipping")
+                if smap.data.shape[0] < 4000 or smap.data.shape[1] < 4000:
+                    print(f"      ✗ {wl}Å: Data is {smap.data.shape}, not 4k - skipping")
                     continue
+
+                # Calibrate: Level 1 → 1.5 (register + exposure normalize)
+                # register() fixes per-channel pointing, rotation, plate scale
+                # Without this, channels are misaligned by 30-40px → MI ≈ 0
+                smap_reg = register(smap)
+                exptime = smap.meta.get('EXPTIME', 1.0)
+                data = smap_reg.data.astype(np.float64) / exptime
 
                 channels[wl] = data
                 timestamps[wl] = smap.date.isot
@@ -127,7 +134,7 @@ def load_aia_jsoc(
                 # Get quality info
                 quality_flags[wl] = smap.meta.get('QUALITY', 0)
 
-                print(f"      ✓ {wl}Å: {data.shape} (mean={data.mean():.1f})")
+                print(f"      ✓ {wl}Å: {data.shape} lev1.5 (mean={data.mean():.1f} DN/s)")
 
         except Exception as e:
             print(f"      ✗ {wl}Å: Error - {e}")
