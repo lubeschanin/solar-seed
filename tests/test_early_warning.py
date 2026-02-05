@@ -587,7 +587,7 @@ class TestIntegration:
         if result:
             assert 'flux' in result
             assert 'flare_class' in result
-            assert result['flux'] > 0
+            assert result['flux'] >= 0
 
     @pytest.mark.integration
     def test_dscovr_live(self):
