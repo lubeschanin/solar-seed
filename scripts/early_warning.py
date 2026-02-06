@@ -1885,7 +1885,7 @@ def backfill(
     days: int = typer.Option(7, "--days", "-d", help="Days to look back"),
     status: bool = typer.Option(False, "--status", "-s", help="Show backfill status only"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Check availability without updating"),
-    limit: int = typer.Option(100, "--limit", "-l", help="Max measurements to process"),
+    limit: int = typer.Option(0, "--limit", "-l", help="Max measurements to process (0=unlimited)"),
     check_jsoc: bool = typer.Option(False, "--check-jsoc", help="Check JSOC 4k availability"),
 ):
     """
@@ -1946,7 +1946,7 @@ def backfill(
     measurements = db.get_measurements_for_backfill(
         min_age_days=0,  # Try all, JSOC check will filter
         max_age_days=days + 30,
-        limit=limit
+        limit=limit or 0
     )
 
     if not measurements:

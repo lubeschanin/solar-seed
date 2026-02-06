@@ -2038,7 +2038,7 @@ class MonitoringDB:
         self,
         min_age_days: int = 3,
         max_age_days: int = 30,
-        limit: int = 1000
+        limit: int = 0
     ) -> list[dict]:
         """
         Get 1k measurements that could be backfilled with 4k data.
@@ -2046,7 +2046,7 @@ class MonitoringDB:
         Args:
             min_age_days: Minimum age (SDAC needs ~3 days)
             max_age_days: Maximum age to consider
-            limit: Maximum number of results
+            limit: Maximum number of results (0=unlimited)
 
         Returns:
             List of measurements with timestamp, pair, delta_mi
@@ -2055,16 +2055,27 @@ class MonitoringDB:
         cutoff_min = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
         cutoff_max = (datetime.now(timezone.utc) - timedelta(days=min_age_days)).isoformat()
 
-        cursor.execute("""
-            SELECT timestamp, pair, delta_mi, resolution
-            FROM coupling_measurements
-            WHERE (resolution = '1k' OR resolution IS NULL)
-              AND backfilled_at IS NULL
-              AND timestamp >= ?
-              AND timestamp <= ?
-            ORDER BY timestamp ASC
-            LIMIT ?
-        """, (cutoff_min, cutoff_max, limit))
+        if limit > 0:
+            cursor.execute("""
+                SELECT timestamp, pair, delta_mi, resolution
+                FROM coupling_measurements
+                WHERE (resolution = '1k' OR resolution IS NULL)
+                  AND backfilled_at IS NULL
+                  AND timestamp >= ?
+                  AND timestamp <= ?
+                ORDER BY timestamp ASC
+                LIMIT ?
+            """, (cutoff_min, cutoff_max, limit))
+        else:
+            cursor.execute("""
+                SELECT timestamp, pair, delta_mi, resolution
+                FROM coupling_measurements
+                WHERE (resolution = '1k' OR resolution IS NULL)
+                  AND backfilled_at IS NULL
+                  AND timestamp >= ?
+                  AND timestamp <= ?
+                ORDER BY timestamp ASC
+            """, (cutoff_min, cutoff_max))
 
         return [dict(row) for row in cursor.fetchall()]
 
