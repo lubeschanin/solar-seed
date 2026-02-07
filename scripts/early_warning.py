@@ -1994,6 +1994,8 @@ def backfill(
     updated = 0
     skipped = 0
     failed = 0
+    consecutive_failures = 0
+    MAX_CONSECUTIVE_FAILURES = 5
 
     for ts, pairs in sorted(by_timestamp.items()):
         # Skip timestamps beyond JSOC availability (no network call needed)
@@ -2014,9 +2016,15 @@ def backfill(
         # Load 4k data
         channels, meta = load_aia_jsoc(ts, [193, 211, 304])
         if not channels:
-            console.print(f"  [yellow]{ts}: 4k load failed (not true 4k?)[/]")
+            consecutive_failures += 1
+            console.print(f"  [yellow]{ts}: 4k load failed (not true 4k?) [{consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}][/]")
             failed += len(pairs)
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                console.print(f"\n[red bold]Aborting: {MAX_CONSECUTIVE_FAILURES} consecutive download failures — JSOC likely down[/]")
+                break
             continue
+
+        consecutive_failures = 0  # Reset on success
 
         # Calculate MI for each pair
         for m in pairs:
