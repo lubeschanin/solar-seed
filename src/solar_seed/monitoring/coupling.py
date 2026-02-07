@@ -285,7 +285,7 @@ class CouplingMonitor:
             t_first = datetime.fromisoformat(recent[0]['timestamp'].replace('Z', '+00:00'))
             t_last = datetime.fromisoformat(recent[-1]['timestamp'].replace('Z', '+00:00'))
             window_min = (t_last - t_first).total_seconds() / 60
-        except (KeyError, ValueError, AttributeError):
+        except (KeyError, ValueError, AttributeError, TypeError):
             window_min = n * 10  # Fallback: assume 10min intervals
 
         # Robust Theil-Sen slope
