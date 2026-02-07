@@ -1215,10 +1215,12 @@ class MonitoringDB:
             if not begin_time:
                 continue
 
-            # Normalize timestamps (DONKI uses 'Z' suffix sometimes)
-            begin_time = begin_time.replace('Z', '+00:00')
-            if not '+' in begin_time and not begin_time.endswith('Z'):
-                begin_time += '+00:00'
+            # Normalize timestamps to bare ISO (no timezone suffix)
+            # All DONKI times are UTC; strip Z/+00:00 for consistent DB storage
+            def _normalize_ts(ts: str) -> str:
+                return ts.replace('Z', '').replace('+00:00', '').strip()
+
+            begin_time = _normalize_ts(begin_time)
 
             # Extract new DONKI fields
             donki_flr_id = flare.get('flrID', '')
@@ -1270,8 +1272,8 @@ class MonitoringDB:
                 VALUES (?, ?, ?, ?, ?, 'DONKI', ?, ?, ?, ?, ?)
             """, (
                 begin_time,
-                peak_time.replace('Z', '+00:00') if peak_time else begin_time,
-                end_time.replace('Z', '+00:00') if end_time else None,
+                _normalize_ts(peak_time) if peak_time else begin_time,
+                _normalize_ts(end_time) if end_time else None,
                 flare_class,
                 magnitude,
                 flare.get('sourceLocation', ''),
@@ -1679,11 +1681,12 @@ class MonitoringDB:
             pred_id, pred_time, pred_class, pair = pred
 
             # Find flare within window AFTER prediction
+            # Use REPLACE to normalize datetime() output (space→T) for consistent comparison
             cursor.execute("""
                 SELECT id, start_time, class, magnitude
                 FROM flare_events
                 WHERE start_time > ?
-                AND start_time <= datetime(?, ?)
+                AND start_time <= REPLACE(datetime(?, ?), ' ', 'T')
                 AND class IN ('C', 'M', 'X')
                 ORDER BY start_time ASC
                 LIMIT 1
