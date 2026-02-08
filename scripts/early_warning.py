@@ -1880,6 +1880,68 @@ def location(
 from rich import box
 
 
+def _notify_jsoc_outage(failed_timestamps: list[str], console):
+    """Send email to JSOC support about drms_export.cgi download failures."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from datetime import datetime as _dt
+    import platform
+
+    ts_list = "\n".join(f"  - {ts}" for ts in failed_timestamps[:20])
+    if len(failed_timestamps) > 20:
+        ts_list += f"\n  ... and {len(failed_timestamps) - 20} more"
+
+    body = f"""\
+Dear JSOC team,
+
+The automated Solar Seed backfill pipeline is unable to download AIA Level 1
+FITS files from the DRMS export service.
+
+Symptoms:
+  - Fido.search() with Provider='JSOC' returns results normally
+  - Fido.fetch() times out with "Timeout on reading data from socket"
+  - Affected server: sdo7.nascom.nasa.gov (drms_export.cgi)
+
+Failed timestamps (AIA 193/211/304 Angstrom):
+{ts_list}
+
+Total failures: {len(failed_timestamps)} consecutive timestamps
+Time of report: {_dt.utcnow().isoformat()}Z
+Host: {platform.node()}
+SunPy version: see pip show sunpy
+
+The search API confirms 4k data (4096x4096, ~65 MiB) is available for these
+timestamps, but the CGI export endpoint does not respond.
+
+Is there a known outage or maintenance window for drms_export.cgi?
+
+Best regards,
+Solar Seed Backfill (automated report)
+https://github.com/lubeschanin/solar-seed
+"""
+
+    msg = MIMEText(body)
+    msg["Subject"] = f"JSOC drms_export.cgi timeout — {len(failed_timestamps)} failed downloads"
+    msg["From"] = "solar-seed@localhost"
+    msg["To"] = "jsoc@sun.stanford.edu"
+
+    # Save report to file (always)
+    report_path = Path("results/early_warning/jsoc_outage_report.txt")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(report_path, "w") as f:
+        f.write(f"To: {msg['To']}\nSubject: {msg['Subject']}\n\n{body}")
+    console.print(f"  [dim]Outage report saved: {report_path}[/]")
+
+    # Try to send via local SMTP
+    try:
+        with smtplib.SMTP("localhost", timeout=10) as smtp:
+            smtp.send_message(msg)
+        console.print(f"  [green]Outage report emailed to jsoc@sun.stanford.edu[/]")
+    except Exception:
+        console.print(f"  [yellow]Could not send email (no local SMTP). Report saved to {report_path}[/]")
+        console.print(f"  [yellow]Send manually: mail jsoc@sun.stanford.edu < {report_path}[/]")
+
+
 @app.command()
 def backfill(
     days: int = typer.Option(7, "--days", "-d", help="Days to look back"),
@@ -1995,6 +2057,7 @@ def backfill(
     skipped = 0
     failed = 0
     consecutive_failures = 0
+    failed_timestamps = []
     MAX_CONSECUTIVE_FAILURES = 5
 
     for ts, pairs in sorted(by_timestamp.items()):
@@ -2017,10 +2080,12 @@ def backfill(
         channels, meta = load_aia_jsoc(ts, [193, 211, 304])
         if not channels:
             consecutive_failures += 1
+            failed_timestamps.append(ts)
             console.print(f"  [yellow]{ts}: 4k load failed (not true 4k?) [{consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}][/]")
             failed += len(pairs)
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 console.print(f"\n[red bold]Aborting: {MAX_CONSECUTIVE_FAILURES} consecutive download failures — JSOC likely down[/]")
+                _notify_jsoc_outage(failed_timestamps, console)
                 break
             continue
 
@@ -2064,6 +2129,17 @@ def backfill(
     console.print(f"  Updated:  {updated}")
     console.print(f"  Skipped:  {skipped} (JSOC 4k not available)")
     console.print(f"  Failed:   {failed}")
+
+    if failed_timestamps and not dry_run:
+        report_path = Path("results/early_warning/jsoc_failures.log")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(report_path, "a") as f:
+            from datetime import datetime as _dt
+            f.write(f"\n--- {_dt.now().isoformat()} ---\n")
+            f.write(f"Failed timestamps ({len(failed_timestamps)}):\n")
+            for ts in failed_timestamps:
+                f.write(f"  {ts}\n")
+        console.print(f"  [dim]Failure log: {report_path}[/]")
 
 
 def main():
