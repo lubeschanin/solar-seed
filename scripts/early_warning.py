@@ -1949,6 +1949,19 @@ https://github.com/lubeschanin/solar-seed
         f.write(f"To: {msg['To']}\nSubject: {msg['Subject']}\n\n{body}")
     console.print(f"  [dim]Outage report saved: {report_path}[/]")
 
+    # Cooldown: max 1 email per 24h
+    cooldown_file = Path("results/early_warning/.jsoc_email_sent")
+    if cooldown_file.exists():
+        from datetime import datetime as _dt2
+        try:
+            last_sent = _dt2.fromisoformat(cooldown_file.read_text().strip())
+            hours_ago = (_dt2.now() - last_sent).total_seconds() / 3600
+            if hours_ago < 24:
+                console.print(f"  [dim]Email cooldown: last sent {hours_ago:.0f}h ago (next in {24 - hours_ago:.0f}h)[/]")
+                return
+        except (ValueError, OSError):
+            pass
+
     # Send via SMTP (all-inkl.com or configured provider)
     smtp_host = smtp_cfg.get("SMTP_HOST")
     smtp_user = smtp_cfg.get("SMTP_USER")
@@ -1966,6 +1979,7 @@ https://github.com/lubeschanin/solar-seed
             smtp.login(smtp_user, smtp_pass)
             smtp.send_message(msg)
         console.print(f"  [green]Outage report emailed to {to_addr} (via {smtp_host})[/]")
+        cooldown_file.write_text(_dt.now().isoformat())
     except Exception as e:
         console.print(f"  [yellow]Email failed: {e}[/]")
         console.print(f"  [yellow]Send manually: mail jsoc@sun.stanford.edu < {report_path}[/]")
