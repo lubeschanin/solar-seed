@@ -1880,6 +1880,19 @@ def location(
 from rich import box
 
 
+def _load_smtp_config() -> dict:
+    """Load SMTP config from .env file."""
+    env_path = Path(__file__).parent.parent / ".env"
+    config = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                config[key.strip()] = value.strip()
+    return config
+
+
 def _notify_jsoc_outage(failed_timestamps: list[str], console):
     """Send email to JSOC support about drms_export.cgi download failures."""
     import smtplib
@@ -1920,10 +1933,14 @@ Solar Seed Backfill (automated report)
 https://github.com/lubeschanin/solar-seed
 """
 
+    smtp_cfg = _load_smtp_config()
+    from_addr = smtp_cfg.get("SMTP_FROM", "solar-seed@localhost")
+    to_addr = "jsoc@sun.stanford.edu"
+
     msg = MIMEText(body)
     msg["Subject"] = f"JSOC drms_export.cgi timeout — {len(failed_timestamps)} failed downloads"
-    msg["From"] = "solar-seed@localhost"
-    msg["To"] = "jsoc@sun.stanford.edu"
+    msg["From"] = from_addr
+    msg["To"] = to_addr
 
     # Save report to file (always)
     report_path = Path("results/early_warning/jsoc_outage_report.txt")
@@ -1932,13 +1949,25 @@ https://github.com/lubeschanin/solar-seed
         f.write(f"To: {msg['To']}\nSubject: {msg['Subject']}\n\n{body}")
     console.print(f"  [dim]Outage report saved: {report_path}[/]")
 
-    # Try to send via local SMTP
+    # Send via SMTP (all-inkl.com or configured provider)
+    smtp_host = smtp_cfg.get("SMTP_HOST")
+    smtp_user = smtp_cfg.get("SMTP_USER")
+    smtp_pass = smtp_cfg.get("SMTP_PASSWORD")
+
+    if not smtp_host or not smtp_user or not smtp_pass or smtp_pass == "changeme":
+        console.print(f"  [yellow]SMTP not configured. Set credentials in .env[/]")
+        console.print(f"  [yellow]Send manually: mail jsoc@sun.stanford.edu < {report_path}[/]")
+        return
+
     try:
-        with smtplib.SMTP("localhost", timeout=10) as smtp:
+        smtp_port = int(smtp_cfg.get("SMTP_PORT", "587"))
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as smtp:
+            smtp.starttls()
+            smtp.login(smtp_user, smtp_pass)
             smtp.send_message(msg)
-        console.print(f"  [green]Outage report emailed to jsoc@sun.stanford.edu[/]")
-    except Exception:
-        console.print(f"  [yellow]Could not send email (no local SMTP). Report saved to {report_path}[/]")
+        console.print(f"  [green]Outage report emailed to {to_addr} (via {smtp_host})[/]")
+    except Exception as e:
+        console.print(f"  [yellow]Email failed: {e}[/]")
         console.print(f"  [yellow]Send manually: mail jsoc@sun.stanford.edu < {report_path}[/]")
 
 
