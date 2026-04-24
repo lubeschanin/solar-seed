@@ -1683,7 +1683,7 @@ class MonitoringDB:
             # Find flare within window AFTER prediction
             # Use REPLACE to normalize datetime() output (space→T) for consistent comparison
             cursor.execute("""
-                SELECT id, start_time, class, magnitude
+                SELECT id, start_time, peak_time, class, magnitude
                 FROM flare_events
                 WHERE start_time > ?
                 AND start_time <= REPLACE(datetime(?, ?), ' ', 'T')
@@ -1696,7 +1696,7 @@ class MonitoringDB:
             stats['total_checked'] += 1
 
             if flare:
-                flare_id, flare_time, flare_class, magnitude = flare
+                flare_id, flare_time, peak_time, flare_class, magnitude = flare
 
                 # Calculate lead time (handle timezone-naive vs aware)
                 from datetime import datetime, timezone as tz
@@ -1719,6 +1719,21 @@ class MonitoringDB:
                     SET verified = 1, actual_flare_id = ?, lead_time_hours = ?
                     WHERE id = ?
                 """, (flare_id, lead_time, pred_id))
+
+                # Also populate v0.6 prediction_matches table (many-to-many)
+                peak_ref = peak_time or flare_time
+                peak_dt = datetime.fromisoformat(peak_ref.replace('Z', '+00:00'))
+                if peak_dt.tzinfo is None:
+                    peak_dt = peak_dt.replace(tzinfo=tz.utc)
+                time_to_peak_min = (peak_dt - pred_dt).total_seconds() / 60.0
+                # Classify: hit if lead ≤ 2h (paper precursor definition), else near_miss
+                match_type = 'hit' if lead_time <= 2.0 else 'near_miss'
+                self.insert_prediction_match(
+                    prediction_id=pred_id,
+                    flare_event_id=flare_id,
+                    match_type=match_type,
+                    time_to_peak_min=time_to_peak_min,
+                )
 
                 stats['matched'] += 1
                 stats['lead_times'].append(lead_time)
