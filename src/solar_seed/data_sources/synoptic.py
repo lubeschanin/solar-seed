@@ -21,7 +21,9 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError
 
 # JSOC synoptic data endpoint
-SYNOPTIC_BASE_URL = "https://jsoc1.stanford.edu/data/aia/synoptic"
+from solar_seed.endpoints import endpoint
+
+SYNOPTIC_BASE_URL = endpoint('synoptic_base')
 
 
 def _parse_obs_time(value) -> Optional[datetime]:

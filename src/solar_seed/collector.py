@@ -26,7 +26,9 @@ import math
 # CONFIGURATION
 # ============================================================================
 
-SDO_LATEST_URL = "https://sdo.gsfc.nasa.gov/assets/img/latest"
+from solar_seed.endpoints import endpoint
+
+SDO_LATEST_URL = endpoint('sdo_latest')
 
 # Representative wavelengths for the test
 DEFAULT_WAVELENGTHS = ["0171", "0193", "0211", "0304"]

@@ -1,0 +1,23 @@
+# External service endpoints for Solar Seed.
+#
+# Values here override the built-in defaults in src/solar_seed/endpoints.py.
+# A user-level override can be placed at ~/.config/solar-seed/endpoints.toml
+# (same format, wins over this file). Missing keys fall back to the defaults,
+# so this file only needs to list what you want to change — it lists
+# everything for documentation purposes.
+
+[endpoints]
+# NOAA SWPC
+goes_xray     = "https://services.swpc.noaa.gov/json/goes/primary/xrays-1-day.json"
+rtsw_wind     = "https://services.swpc.noaa.gov/json/rtsw/rtsw_wind_1m.json"
+rtsw_mag      = "https://services.swpc.noaa.gov/json/rtsw/rtsw_mag_1m.json"
+noaa_alerts   = "https://services.swpc.noaa.gov/products/alerts.json"
+
+# NASA DONKI flare catalog (query params appended by callers)
+donki_flr     = "https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/FLR"
+
+# SDO latest-image browse products
+sdo_latest    = "https://sdo.gsfc.nasa.gov/assets/img/latest"
+
+# JSOC AIA synoptic (1k, near-real-time)
+synoptic_base = "https://jsoc1.stanford.edu/data/aia/synoptic"

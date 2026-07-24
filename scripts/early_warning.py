@@ -94,13 +94,13 @@ from solar_seed.data_sources import (
     load_stereo_a_latest,
 )
 
-# NOAA SWPC API endpoints
-GOES_XRAY_URL = "https://services.swpc.noaa.gov/json/goes/primary/xrays-1-day.json"
-# NOAA retired /products/solar-wind/ (DSCOVR) mid-2026; RTSW serves the active
-# L1 monitor (SWFO-L1/ACE/IMAP) as JSON objects, newest first, active=primary source
-RTSW_WIND_URL = "https://services.swpc.noaa.gov/json/rtsw/rtsw_wind_1m.json"
-RTSW_MAG_URL = "https://services.swpc.noaa.gov/json/rtsw/rtsw_mag_1m.json"
-ALERTS_URL = "https://services.swpc.noaa.gov/products/alerts.json"
+# External endpoints: defaults + config/endpoints.toml + user override
+from solar_seed.endpoints import endpoint
+
+GOES_XRAY_URL = endpoint('goes_xray')
+RTSW_WIND_URL = endpoint('rtsw_wind')
+RTSW_MAG_URL = endpoint('rtsw_mag')
+ALERTS_URL = endpoint('noaa_alerts')
 
 # Flare classification thresholds (W/m²)
 FLARE_THRESHOLDS = {
@@ -1616,10 +1616,7 @@ def import_flares(
         # import_flares_from_donki swallows network errors and returns 0, so the
         # CLI cannot distinguish "no new flares" from "DONKI unreachable".
         # Probe DONKI with a minimal request: None = network/parse failure.
-        probe_url = (
-            f"https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/FLR"
-            f"?startDate={start}&endDate={start}"
-        )
+        probe_url = f"{endpoint('donki_flr')}?startDate={start}&endDate={start}"
         if fetch_json(probe_url, timeout=30) is None:
             console.print("[red]✗ DONKI unreachable — flare import failed (exit 1 for cron)[/]")
             raise typer.Exit(1)

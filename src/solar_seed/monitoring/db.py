@@ -1209,7 +1209,9 @@ class MonitoringDB:
         import json
         from datetime import datetime
 
-        url = f"https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/FLR?startDate={start_date}&endDate={end_date}"
+        from solar_seed.endpoints import endpoint
+
+        url = f"{endpoint('donki_flr')}?startDate={start_date}&endDate={end_date}"
 
         try:
             with urllib.request.urlopen(url, timeout=30) as response:
