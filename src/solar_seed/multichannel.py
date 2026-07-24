@@ -339,7 +339,8 @@ def load_aia_multichannel(
     wavelengths: List[int] = None,
     data_dir: str = "data/aia",
     cleanup: bool = True,
-    max_retries: int = 4  # Try JSOC + 3 mirrors (ROB, SDAC, CfA)
+    max_retries: int = 4,  # Try JSOC + 3 mirrors (ROB, SDAC, CfA)
+    min_file_size: int = 5_000_000,  # Minimum FITS file size in bytes
 ) -> Tuple[Optional[Dict[int, NDArray]], dict]:
     """
     Loads real AIA data for all channels at a timepoint.
@@ -364,6 +365,7 @@ def load_aia_multichannel(
         import gc
         import time
         import warnings
+        from aiapy.calibrate import register as aia_register
 
         # Parse time
         t = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
@@ -375,149 +377,182 @@ def load_aia_multichannel(
         channels = {}
         metadata = {"timestamp": time_str, "wavelengths": wavelengths, "files": {}}
         files_to_delete = []
+        load_ok = False
 
-        for wl in wavelengths:
-            result = Fido.search(
-                a.Time(t_start.isoformat(), t_end.isoformat()),
-                a.Instrument("aia"),
-                a.Wavelength(wl * u.angstrom),
-            )
+        try:
+            for wl in wavelengths:
+                result = Fido.search(
+                    a.Time(t_start.isoformat(), t_end.isoformat()),
+                    a.Instrument("aia"),
+                    a.Wavelength(wl * u.angstrom),
+                )
 
-            if len(result) == 0 or len(result[0]) == 0:
-                print(f"    ⚠️  No data found for {wl} A")
-                # Cleanup on error
-                for f in files_to_delete:
-                    try:
-                        Path(f).unlink()
-                    except Exception:
-                        pass
-                return None, {}
-
-            # Download with retry logic and mirror fallback
-            aia_map = None
-            # Sites to try: default (JSOC), then mirrors
-            sites_to_try = [None, 'rob', 'sdac', 'cfa']  # ROB=Belgium, SDAC=NASA, CfA=Harvard
-
-            for attempt in range(max_retries):
-                site = sites_to_try[min(attempt, len(sites_to_try) - 1)]
-                try:
-                    # Load first result (with optional mirror)
-                    if site:
-                        files = Fido.fetch(result[0, 0], path=data_dir + "/{file}", site=site)
-                    else:
-                        files = Fido.fetch(result[0, 0], path=data_dir + "/{file}")
-                    if not files:
-                        continue
-
-                    file_path = files[0]
-
-                    # Check file size (AIA FITS ~7.5MB)
-                    file_size = Path(file_path).stat().st_size
-                    if file_size < 5_000_000:  # At least 5MB expected
-                        print(f"    ⚠️  File too small ({file_size/1e6:.1f}MB), Retry...")
-                        Path(file_path).unlink()
-                        time.sleep(2)
-                        continue
-
-                    # Load map - check for truncation after loading
-                    with warnings.catch_warnings(record=True) as caught_warnings:
-                        warnings.simplefilter("always")
-                        aia_map = sunpy.map.Map(file_path)
-
-                        # Check if truncation warning occurred
-                        for w in caught_warnings:
-                            if "truncat" in str(w.message).lower():
-                                print(f"    ⚠️  Truncated file, Retry...")
-                                Path(file_path).unlink()
-                                aia_map = None
-                                time.sleep(2)
-                                break
-
-                        if aia_map is None:
-                            continue
-
-                    files_to_delete.append(file_path)
-                    break  # Success!
-
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        next_site = sites_to_try[min(attempt + 1, len(sites_to_try) - 1)]
-                        mirror_info = f" (trying {next_site} mirror)" if next_site else ""
-                        print(f"    ⚠️  Retry {attempt+1}/{max_retries}{mirror_info}: {str(e)[:60]}")
-                        # Delete faulty file if present
-                        try:
-                            if 'file_path' in locals():
-                                Path(file_path).unlink()
-                        except Exception:
-                            pass
-                        time.sleep(2)
-                    else:
-                        raise
-
-            if aia_map is None:
-                print(f"    ✗ Download failed for {wl} Å after {max_retries} attempts")
-                for f in files_to_delete:
-                    try:
-                        Path(f).unlink()
-                    except Exception:
-                        pass
-                return None, {}
-
-            # Quality flag check (AIA QUALITY keyword)
-            quality = aia_map.meta.get('QUALITY', 0)
-            if quality != 0:
-                # Critical flags that should skip the image
-                CRITICAL_FLAGS = {
-                    0x80000000: "MISSING",      # Bit 31: Image missing
-                    0x00000002: "ACS_ECLP",     # Bit 1: Eclipse
-                    0x00000008: "ACS_SAFE",     # Bit 3: Safehold
-                }
-
-                critical = False
-                for flag, name in CRITICAL_FLAGS.items():
-                    if quality & flag:
-                        print(f"    ✗ Critical quality flag for {wl} Å: {name} (0x{quality:08X})")
-                        critical = True
-                        break
-
-                if critical:
-                    # Skip this entire timepoint
-                    for f in files_to_delete:
-                        try:
-                            Path(f).unlink()
-                        except Exception:
-                            pass
+                if len(result) == 0 or len(result[0]) == 0:
+                    print(f"    ⚠️  No data found for {wl} A")
                     return None, {}
 
-                # Non-critical warning
-                print(f"    ⚠️  Quality flag for {wl} Å: 0x{quality:08X}")
+                # Download with retry logic and mirror fallback
+                aia_map = None
+                file_path = None
+                # Sites to try: default (JSOC), then mirrors
+                sites_to_try = [None, 'rob', 'sdac', 'cfa']  # ROB=Belgium, SDAC=NASA, CfA=Harvard
 
-            # Store quality in metadata
-            if "quality" not in metadata:
-                metadata["quality"] = {}
-            metadata["quality"][wl] = quality
+                for attempt in range(max_retries):
+                    site = sites_to_try[min(attempt, len(sites_to_try) - 1)]
+                    # Reset per attempt so the retry-except never deletes a
+                    # file from a previous attempt/channel
+                    file_path = None
+                    try:
+                        # Load first result (with optional mirror)
+                        if site:
+                            files = Fido.fetch(result[0, 0], path=data_dir + "/{file}", site=site)
+                        else:
+                            files = Fido.fetch(result[0, 0], path=data_dir + "/{file}")
+                        if not files:
+                            continue
 
-            channels[wl] = aia_map.data.astype(np.float64)
-            metadata["files"][wl] = str(file_path)
+                        file_path = files[0]
 
-            # Explicitly release map
-            del aia_map
+                        # Check file size (AIA full-disk FITS ~7.5MB, synoptic ~0.8MB)
+                        file_size = Path(file_path).stat().st_size
+                        if file_size < min_file_size:
+                            print(f"    ⚠️  File too small ({file_size/1e6:.1f}MB), Retry...")
+                            Path(file_path).unlink()
+                            time.sleep(2)
+                            continue
 
-        # Cleanup: Delete FITS files to save disk space
-        if cleanup:
-            for f in files_to_delete:
+                        # Load map - check for truncation after loading
+                        with warnings.catch_warnings(record=True) as caught_warnings:
+                            warnings.simplefilter("always")
+                            aia_map = sunpy.map.Map(file_path)
+
+                            # Check if truncation warning occurred
+                            for w in caught_warnings:
+                                if "truncat" in str(w.message).lower():
+                                    print(f"    ⚠️  Truncated file, Retry...")
+                                    Path(file_path).unlink()
+                                    aia_map = None
+                                    time.sleep(2)
+                                    break
+
+                            if aia_map is None:
+                                continue
+
+                        files_to_delete.append(file_path)
+                        break  # Success!
+
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            next_site = sites_to_try[min(attempt + 1, len(sites_to_try) - 1)]
+                            mirror_info = f" (trying {next_site} mirror)" if next_site else ""
+                            print(f"    ⚠️  Retry {attempt+1}/{max_retries}{mirror_info}: {str(e)[:60]}")
+                            # Delete faulty file if present (this attempt only)
+                            try:
+                                if file_path is not None:
+                                    Path(file_path).unlink()
+                            except Exception:
+                                pass
+                            time.sleep(2)
+                        else:
+                            raise
+
+                if aia_map is None:
+                    print(f"    ✗ Download failed for {wl} Å after {max_retries} attempts")
+                    return None, {}
+
+                # Quality flag check (AIA QUALITY keyword)
+                quality = aia_map.meta.get('QUALITY', 0)
+                if quality != 0:
+                    # Critical flags that should skip the image
+                    CRITICAL_FLAGS = {
+                        0x80000000: "MISSING",      # Bit 31: Image missing
+                        0x00000002: "ACS_ECLP",     # Bit 1: Eclipse
+                        0x00000008: "ACS_SAFE",     # Bit 3: Safehold
+                    }
+
+                    critical = False
+                    for flag, name in CRITICAL_FLAGS.items():
+                        if quality & flag:
+                            print(f"    ✗ Critical quality flag for {wl} Å: {name} (0x{quality:08X})")
+                            critical = True
+                            break
+
+                    if critical:
+                        # Skip this entire timepoint
+                        return None, {}
+
+                    # Non-critical warning
+                    print(f"    ⚠️  Quality flag for {wl} Å: 0x{quality:08X}")
+
+                # Store quality in metadata
+                if "quality" not in metadata:
+                    metadata["quality"] = {}
+                metadata["quality"][wl] = quality
+
+                # Calibration: VSO/mirrors serve Level 1 data (misaligned pointing,
+                # raw DN). Apply register() (Level 1 → 1.5) + exposure normalization,
+                # same pipeline as jsoc.py. Synoptic/processed data (lvl_num >= 1.5
+                # or absent) is used as-is.
+                lvl_num = aia_map.meta.get('lvl_num')
                 try:
-                    Path(f).unlink()
-                except Exception:
-                    pass
+                    lvl_num = float(lvl_num) if lvl_num is not None else None
+                except (TypeError, ValueError):
+                    lvl_num = None
 
-        # Force garbage collection
-        gc.collect()
+                if lvl_num is not None and lvl_num < 1.5:
+                    try:
+                        aia_map_reg = aia_register(aia_map)
+                    except Exception as e:
+                        # Downstream pair analysis needs ALL channels; a mixed
+                        # calibrated/uncalibrated set would corrupt MI.
+                        print(f"    ✗ Calibration (register) failed for {wl} Å: {e}")
+                        return None, {}
+
+                    # Exposure normalization — missing/non-positive EXPTIME would
+                    # silently produce wrong DN/s (or inf): treat as calibration error
+                    try:
+                        exptime = float(aia_map.meta.get('EXPTIME'))
+                    except (TypeError, ValueError):
+                        exptime = None
+                    if exptime is None or exptime <= 0:
+                        print(f"    ✗ Invalid EXPTIME ({aia_map.meta.get('EXPTIME')!r}) for {wl} Å")
+                        del aia_map_reg
+                        return None, {}
+
+                    data = aia_map_reg.data.astype(np.float64) / exptime
+                    del aia_map_reg
+                else:
+                    data = aia_map.data.astype(np.float64)
+
+                channels[wl] = data
+                metadata["files"][wl] = str(file_path)
+                # Resolution ALWAYS derived from array shape, never from source labels
+                metadata["resolution"] = '4k' if min(data.shape[:2]) >= 4000 else '1k'
+
+                # Explicitly release map
+                del aia_map
+
+            load_ok = True
+
+        finally:
+            # Centralized cleanup: runs on success, early returns AND when the
+            # last retry raises (previously leaked files on that path).
+            # cleanup=False keeps files only on full success (unchanged behavior:
+            # error paths always deleted partial downloads).
+            if cleanup or not load_ok:
+                for f in files_to_delete:
+                    try:
+                        Path(f).unlink()
+                    except Exception:
+                        pass
+
+            # Force garbage collection
+            gc.collect()
 
         return channels, metadata
 
     except ImportError:
-        print("  ⚠️  SunPy not installed")
+        print("  ⚠️  SunPy/aiapy not installed")
         return None, {}
     except Exception as e:
         print(f"  ✗ Error loading: {e}")

@@ -22,12 +22,18 @@ from typing import Optional
 import tempfile
 import os
 
+from solar_seed.data_sources._timeout import run_with_timeout, FutureTimeoutError
+
+# Network timeouts (seconds)
+JSOC_SEARCH_TIMEOUT = 60
+JSOC_FETCH_TIMEOUT = 300
+
 
 def load_aia_jsoc(
     timestamp: str,
     wavelengths: list[int] = None,
     time_window_minutes: int = 3
-) -> tuple[dict, dict] | tuple[None, None]:
+) -> tuple[dict | None, dict | None]:
     """
     Load 4k AIA data from JSOC for a specific historical timestamp.
 
@@ -39,10 +45,14 @@ def load_aia_jsoc(
         time_window_minutes: Search window around timestamp (default: ±3 min)
 
     Returns:
-        (channels_dict, metadata) where:
+        Tuple[Optional[Dict[int, np.ndarray]], Optional[dict]]:
+        - (channels_dict, metadata) on success, where:
             channels_dict: {wavelength: numpy.ndarray} with 4096x4096 data
-            metadata: {'source': 'JSOC', 'resolution': '4k', 'timestamps': {...}}
-        Or (None, None) if 4k data not available
+            metadata: {'source': 'JSOC', 'resolution': '4k', 'timestamps': {...},
+                       'channels_loaded': [...], ...}
+        - (None, {'reason': 'off_point', 'requested_time': ...}) if any frame
+          is an off-point calibration maneuver (whole timestamp unusable)
+        - (None, None) if 4k data not available
     """
     if wavelengths is None:
         wavelengths = [193, 211, 304]
@@ -50,6 +60,7 @@ def load_aia_jsoc(
     try:
         from sunpy.net import Fido, attrs as a
         from sunpy.map import Map
+        from sunpy.map.maputils import contains_full_disk
         from aiapy.calibrate import register
         import astropy.units as u
         import numpy as np
@@ -74,13 +85,21 @@ def load_aia_jsoc(
 
     for wl in wavelengths:
         try:
-            # Search JSOC specifically for 4k data
-            result = Fido.search(
-                a.Time(start, end),
-                a.Instrument.aia,
-                a.Wavelength(wl * u.Angstrom),
-                a.Provider('JSOC')
-            )
+            # Search JSOC specifically for 4k data (with hard timeout)
+            try:
+                result = run_with_timeout(
+                    lambda: Fido.search(
+                        a.Time(start, end),
+                        a.Instrument.aia,
+                        a.Wavelength(wl * u.Angstrom),
+                        a.Provider('JSOC')
+                    ),
+                    timeout=JSOC_SEARCH_TIMEOUT,
+                    label=f"jsoc-search-{wl}",
+                )
+            except FutureTimeoutError:
+                print(f"      ✗ {wl}Å: JSOC search timeout (>{JSOC_SEARCH_TIMEOUT}s)")
+                continue
 
             if len(result) == 0 or len(result[0]) == 0:
                 print(f"      ✗ {wl}Å: No JSOC data available")
@@ -106,8 +125,16 @@ def load_aia_jsoc(
                     pass
 
             with tempfile.TemporaryDirectory() as tmpdir:
-                # Fetch the first (closest) result
-                files = Fido.fetch(result[0, 0], path=tmpdir, progress=False)
+                # Fetch the first (closest) result (with hard timeout)
+                try:
+                    files = run_with_timeout(
+                        lambda: Fido.fetch(result[0, 0], path=tmpdir, progress=False),
+                        timeout=JSOC_FETCH_TIMEOUT,
+                        label=f"jsoc-fetch-{wl}",
+                    )
+                except FutureTimeoutError:
+                    print(f"      ✗ {wl}Å: JSOC download timeout (>{JSOC_FETCH_TIMEOUT}s)")
+                    continue
 
                 if not files:
                     print(f"      ✗ {wl}Å: Download failed")
@@ -119,13 +146,38 @@ def load_aia_jsoc(
                 # Final validation: must be 4k
                 if smap.data.shape[0] < 4000 or smap.data.shape[1] < 4000:
                     print(f"      ✗ {wl}Å: Data is {smap.data.shape}, not 4k - skipping")
+                    del smap
                     continue
+
+                # Off-point detection: SDO calibration maneuvers move the Sun off-center,
+                # cutting off part of the disk. register() rejects these. Detect early and
+                # mark the whole timestamp as off-point so the caller can skip cleanly.
+                if not contains_full_disk(smap):
+                    crpix = (smap.meta.get('CRPIX1'), smap.meta.get('CRPIX2'))
+                    print(f"      ⊘ {wl}Å: Off-point frame (CRPIX={crpix}) - skipping timestamp")
+                    del smap
+                    return None, {'reason': 'off_point', 'requested_time': dt.isoformat()}
 
                 # Calibrate: Level 1 → 1.5 (register + exposure normalize)
                 # register() fixes per-channel pointing, rotation, plate scale
                 # Without this, channels are misaligned by 30-40px → MI ≈ 0
-                smap_reg = register(smap)
-                exptime = smap.meta.get('EXPTIME', 1.0)
+                try:
+                    smap_reg = register(smap)
+                except Exception as e:
+                    print(f"      ✗ {wl}Å: Calibration failed - {e}")
+                    del smap
+                    continue
+                # Exposure normalization — a missing or non-positive EXPTIME
+                # would silently produce wrong DN/s (or inf), so treat it as
+                # a calibration error and skip the channel.
+                try:
+                    exptime = float(smap.meta.get('EXPTIME'))
+                except (TypeError, ValueError):
+                    exptime = None
+                if exptime is None or exptime <= 0:
+                    print(f"      ✗ {wl}Å: Invalid EXPTIME ({smap.meta.get('EXPTIME')!r}) - skipping")
+                    del smap, smap_reg
+                    continue
                 data = smap_reg.data.astype(np.float64) / exptime
 
                 channels[wl] = data
@@ -135,6 +187,9 @@ def load_aia_jsoc(
                 quality_flags[wl] = smap.meta.get('QUALITY', 0)
 
                 print(f"      ✓ {wl}Å: {data.shape} lev1.5 (mean={data.mean():.1f} DN/s)")
+
+                # Free SunPy maps to reduce memory (4k maps are ~128MB each)
+                del smap, smap_reg
 
         except Exception as e:
             print(f"      ✗ {wl}Å: Error - {e}")
@@ -155,6 +210,7 @@ def load_aia_jsoc(
         'timestamps': timestamps,
         'quality_flags': quality_flags,
         'requested_time': dt.isoformat(),
+        'channels_loaded': sorted(channels.keys()),  # partial success visible
     }
 
     return channels, metadata
@@ -179,12 +235,20 @@ def check_jsoc_4k_availability(timestamp: str, wavelength: int = 193) -> bool:
         start = dt - timedelta(minutes=2)
         end = dt + timedelta(minutes=2)
 
-        result = Fido.search(
-            a.Time(start, end),
-            a.Instrument.aia,
-            a.Wavelength(wavelength * u.Angstrom),
-            a.Provider('JSOC')
-        )
+        try:
+            result = run_with_timeout(
+                lambda: Fido.search(
+                    a.Time(start, end),
+                    a.Instrument.aia,
+                    a.Wavelength(wavelength * u.Angstrom),
+                    a.Provider('JSOC')
+                ),
+                timeout=JSOC_SEARCH_TIMEOUT,
+                label="jsoc-check",
+            )
+        except FutureTimeoutError:
+            print(f"    JSOC availability check: search timeout (>{JSOC_SEARCH_TIMEOUT}s)")
+            return False
 
         if len(result) == 0 or len(result[0]) == 0:
             return False
@@ -199,7 +263,10 @@ def check_jsoc_4k_availability(timestamp: str, wavelength: int = 193) -> bool:
                 size = float(result[0][0]['Size'])
                 return size > 50  # 4k is ~65 MiB
             except (KeyError, TypeError, ValueError):
-                return True  # Assume 4k if we can't check
+                # Conservative: unverifiable = not available.
+                # Callers (backfill) just skip the timestamp — no retries wasted.
+                print("    JSOC availability check: cannot verify 4k (no extent/size) - assuming unavailable")
+                return False
 
     except Exception:
         return False

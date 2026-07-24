@@ -9,6 +9,8 @@ STEREO-A is ~51° ahead of Earth, providing ~3.9 days advance warning.
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+from solar_seed.data_sources._timeout import run_with_timeout, FutureTimeoutError
+
 
 # STEREO-A position info (updated periodically)
 STEREO_A_INFO = {
@@ -28,7 +30,9 @@ EUVI_TO_AIA = {
 
 def load_stereo_a_latest(
     wavelengths: Optional[list[int]] = None,
-    max_age_minutes: int = 120
+    max_age_minutes: int = 120,
+    search_timeout: int = 60,
+    download_timeout: int = 240
 ) -> tuple[dict, str, dict] | tuple[None, None, None]:
     """
     Load most recent STEREO-A EUVI data.
@@ -38,6 +42,8 @@ def load_stereo_a_latest(
     Args:
         wavelengths: EUVI wavelengths to load [171, 195, 284, 304]
         max_age_minutes: How far back to search (STEREO data may be delayed)
+        search_timeout: Timeout in seconds for VSO search (default: 60s)
+        download_timeout: Timeout in seconds for FITS download (default: 240s)
 
     Returns:
         (channels_dict, timestamp, metadata) or (None, None, None)
@@ -63,13 +69,24 @@ def load_stereo_a_latest(
         for wl in wavelengths:
             print(f"    Searching EUVI {wl} Å (last {max_age_minutes} min)...")
 
-            # Search STEREO-A EUVI data
-            result = Fido.search(
-                a.Time(start, now),
-                a.Source('STEREO_A'),
-                a.Instrument('EUVI'),
-                a.Wavelength(wl * u.Angstrom)
-            )
+            # Search STEREO-A EUVI data (with hard timeout)
+            try:
+                result = run_with_timeout(
+                    lambda: Fido.search(
+                        a.Time(start, now),
+                        a.Source('STEREO_A'),
+                        a.Instrument('EUVI'),
+                        a.Wavelength(wl * u.Angstrom)
+                    ),
+                    timeout=search_timeout,
+                    label=f"euvi-search-{wl}",
+                )
+            except FutureTimeoutError:
+                print(f"    ⚠ Timeout searching EUVI {wl} Å (>{search_timeout}s)")
+                continue
+            except Exception as e:
+                print(f"    ⚠ Error searching EUVI {wl} Å: {e}")
+                continue
 
             if len(result) > 0 and len(result[0]) > 0:
                 n_results = len(result[0])
@@ -81,17 +98,38 @@ def load_stereo_a_latest(
                 except (KeyError, IndexError):
                     print(f"    Found {n_results} images, using latest")
 
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    files = Fido.fetch(result[0, latest_idx], path=tmpdir, progress=False)
-                    if files:
-                        smap = Map(files[0])
-                        channels[wl] = smap.data
+                def _fetch_euvi():
+                    """Fetch FITS file and copy data out of the temp dir."""
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        files = Fido.fetch(result[0, latest_idx], path=tmpdir, progress=False)
+                        if files:
+                            smap = Map(files[0])
+                            # .copy() is essential: smap.data may be memmap-backed
+                            # and would point to a deleted file after cleanup
+                            data = smap.data.copy()
+                            date_isot = smap.date.isot
+                            os.remove(files[0])
+                            return data, date_isot
+                    return None, None
 
-                        if actual_timestamp is None:
-                            actual_timestamp = smap.date.isot
-                            print(f"    Actual image time: {actual_timestamp}")
+                try:
+                    data, date_isot = run_with_timeout(
+                        _fetch_euvi,
+                        timeout=download_timeout,
+                        label=f"euvi-fetch-{wl}",
+                    )
+                except FutureTimeoutError:
+                    print(f"    ⚠ Timeout downloading EUVI {wl} Å (>{download_timeout}s)")
+                    continue
+                except Exception as e:
+                    print(f"    ⚠ Error downloading EUVI {wl} Å: {e}")
+                    continue
 
-                        os.remove(files[0])
+                if data is not None:
+                    channels[wl] = data
+                    if actual_timestamp is None:
+                        actual_timestamp = date_isot
+                        print(f"    Actual image time: {actual_timestamp}")
             else:
                 print(f"    No EUVI {wl} Å images found")
 

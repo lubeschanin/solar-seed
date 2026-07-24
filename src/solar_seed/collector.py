@@ -152,8 +152,8 @@ class SolarCollector:
             url = f"{SDO_LATEST_URL}/{filename}"
             
             try:
-                response = urllib.request.urlopen(url, timeout=30)
-                data = response.read()
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    data = response.read()
                 
                 data_hash = compute_hash(data)
                 entropy = compute_entropy(data)

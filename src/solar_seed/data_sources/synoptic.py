@@ -24,6 +24,32 @@ from urllib.error import URLError
 SYNOPTIC_BASE_URL = "https://jsoc1.stanford.edu/data/aia/synoptic"
 
 
+def _parse_obs_time(value) -> Optional[datetime]:
+    """Parse a FITS T_OBS/DATE-OBS header value (e.g. '2026-01-11T11:46:04.84Z')."""
+    try:
+        s = str(value).strip().replace('Z', '+00:00')
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (TypeError, ValueError):
+        return None
+
+
+def _compute_time_spread_sec(timestamps: dict) -> Optional[float]:
+    """
+    Compute max-min spread (seconds) of per-channel observation times.
+
+    Returns None if any timestamp cannot be parsed (no false '0' assurance).
+    """
+    if len(timestamps) < 2:
+        return 0.0
+    parsed = [_parse_obs_time(v) for v in timestamps.values()]
+    if any(p is None for p in parsed):
+        return None
+    return (max(parsed) - min(parsed)).total_seconds()
+
+
 def load_aia_synoptic(
     wavelengths: Optional[list[int]] = None
 ) -> tuple[dict, str, dict] | tuple[None, None, None]:
@@ -96,27 +122,30 @@ def load_aia_synoptic(
                     tmp.write(fits_data)
                     tmp_path = tmp.name
 
-                with fits.open(tmp_path) as hdul:
-                    # Synoptic FITS uses compressed images in HDU[1]
-                    data = None
-                    header = None
-                    if len(hdul) > 1 and hdul[1].data is not None:
-                        data = hdul[1].data
-                        header = hdul[1].header
-                    elif hdul[0].data is not None:
-                        data = hdul[0].data
-                        header = hdul[0].header
+                try:
+                    with fits.open(tmp_path) as hdul:
+                        # Synoptic FITS uses compressed images in HDU[1]
+                        data = None
+                        header = None
+                        if len(hdul) > 1 and hdul[1].data is not None:
+                            data = hdul[1].data
+                            header = hdul[1].header
+                        elif hdul[0].data is not None:
+                            data = hdul[0].data
+                            header = hdul[0].header
 
-                    if data is not None:
-                        channels[wl] = data.astype(np.float64)
-                        # Get timestamp from header if available
-                        obs_time = header.get('T_OBS', header.get('DATE-OBS', iso_timestamp))
-                        timestamps[wl] = obs_time
-                        print(f"      ✓ {wl} Å: {data.shape} loaded")
-                    else:
-                        print(f"      ✗ {wl} Å: No data in FITS")
-
-                os.remove(tmp_path)
+                        if data is not None:
+                            channels[wl] = data.astype(np.float64)
+                            # Get timestamp from header if available
+                            obs_time = header.get('T_OBS', header.get('DATE-OBS', iso_timestamp))
+                            timestamps[wl] = obs_time
+                            print(f"      ✓ {wl} Å: {data.shape} loaded")
+                        else:
+                            print(f"      ✗ {wl} Å: No data in FITS")
+                finally:
+                    # Always remove the temp file, even if FITS parsing fails
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
 
             except URLError as e:
                 print(f"      ✗ {wl} Å: Network error - {e}")
@@ -128,14 +157,26 @@ def load_aia_synoptic(
             return None, None, None
 
         # Quality info
+        # Resolution: always derived from actual array shape, never from labels
+        first_shape = next(iter(channels.values())).shape
+        resolution = f"{first_shape[1]}x{first_shape[0]}"
+
+        # Real time spread between channels (None if headers unparseable)
+        time_spread_sec = _compute_time_spread_sec(timestamps)
+
         quality_info = {
             'source': 'synoptic',
-            'resolution': '1024x1024',
+            'resolution': resolution,
             'is_good_quality': len(channels) == len(wavelengths),
-            'time_spread_sec': 0,  # All same timestamp in synoptic
+            'time_spread_sec': time_spread_sec,
             'timestamps': timestamps,
             'warnings': [],
         }
+
+        if time_spread_sec is None:
+            # Unknown sync is a quality issue, not a silent pass
+            quality_info['warnings'].append("Time spread unknown (T_OBS unparseable)")
+            quality_info['is_good_quality'] = False
 
         if len(channels) < len(wavelengths):
             missing = [wl for wl in wavelengths if wl not in channels]

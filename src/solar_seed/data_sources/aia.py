@@ -11,7 +11,8 @@ provides 1024x1024 resolution with direct access (no queue).
 
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+
+from solar_seed.data_sources._timeout import run_with_timeout, FutureTimeoutError
 
 
 def load_aia_latest(
@@ -72,9 +73,11 @@ def load_aia_latest(
 
             # Search with timeout
             try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_load_single_channel, wl)
-                    result = future.result(timeout=search_timeout)
+                result = run_with_timeout(
+                    lambda: _load_single_channel(wl),
+                    timeout=search_timeout,
+                    label=f"vso-search-{wl}",
+                )
             except FutureTimeoutError:
                 print(f"    ⚠ Timeout searching {wl} Å (>{search_timeout}s)")
                 warnings.append(f"{wl}Å: VSO search timeout (>{search_timeout}s)")
@@ -112,10 +115,12 @@ def load_aia_latest(
                 # Fetch with timeout
                 print(f"    Downloading {wl} Å (timeout={download_timeout}s)...")
                 try:
-                    with ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(_fetch_file)
-                        fetch_result = future.result(timeout=download_timeout)
-                        data, meta, date = fetch_result
+                    fetch_result = run_with_timeout(
+                        _fetch_file,
+                        timeout=download_timeout,
+                        label=f"vso-fetch-{wl}",
+                    )
+                    data, meta, date = fetch_result
                 except FutureTimeoutError:
                     print(f"    ⚠ Timeout downloading {wl} Å (>{download_timeout}s)")
                     warnings.append(f"{wl}Å: VSO download timeout (>{download_timeout}s)")
@@ -236,12 +241,14 @@ def load_aia_direct(timestamp: str, wavelengths: list[int], timeout_per_channel:
         for wl in wavelengths:
             print(f"    Fetching {wl} Å...")
             try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_load_channel, wl)
-                    data = future.result(timeout=timeout_per_channel)
-                    if data is not None:
-                        channels[wl] = data
-                        print(f"    ✓ {wl} Å loaded successfully")
+                data = run_with_timeout(
+                    lambda: _load_channel(wl),
+                    timeout=timeout_per_channel,
+                    label=f"vso-direct-{wl}",
+                )
+                if data is not None:
+                    channels[wl] = data
+                    print(f"    ✓ {wl} Å loaded successfully")
             except FutureTimeoutError:
                 print(f"    ⚠ Timeout loading {wl} Å (>{timeout_per_channel}s)")
             except Exception as e:
