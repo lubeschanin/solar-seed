@@ -78,3 +78,9 @@ CLAUDE.md
 
 # Logs
 results/early_warning/cron.log
+results/early_warning/backfill.log
+results/early_warning/jsoc_failures.log
+
+# SQLite WAL sidecar files (never commit; push-db.sh checkpoints before committing the .db)
+results/early_warning/monitoring.db-wal
+results/early_warning/monitoring.db-shm
