@@ -16,12 +16,15 @@ During major flares, this organization undergoes **regime switching**: coupling 
 
 ## Key Results
 
+All values measured on real AIA synoptic data (193–211 Å validation interval, 15 Jan 2024, 12:00–18:00 UTC, 30 timepoints):
+
 | Metric | Value | Interpretation |
 |--------|-------|----------------|
-| MI Ratio | 30.8% ± 0.7% | ~31% of MI survives geometry removal |
-| ΔMI_sector | 0.17 bits | Local structure coupling |
-| Z-Score | 1252 ± 146 | p < 10⁻¹⁰⁰ (highly significant) |
-| Time-shift control | >95% reduction | Confirms temporal coherence |
+| MI Ratio | 110% ± 5% | Radial normalization leaves global MI unchanged — MI is not an artifact of shared radial gradients |
+| Null-model hierarchy | 0.001 < 0.056 < 0.38 < 1.29 bits | global < ring < sector < original: geometry explains only a minority of MI |
+| ΔMI_sector | 0.91 ± 0.12 bits (6h, active period) / 0.59 ± 0.12 bits (8-day mean) | Local structure coupling |
+| Z-Score | (4.3 ± 0.8) × 10⁴ | vs global-shuffle null; empirical p < 0.01 (floor set by 100 permutations) |
+| Time-shift control | >99.9% reduction | Confirms temporal coherence |
 
 ### Temperature-Ordered Coupling
 
@@ -386,7 +389,7 @@ Divergences are logged to the database for correlation analysis with subsequent 
 
 **Data Sources:**
 - GOES X-ray flux (NOAA SWPC) — flare classification
-- DSCOVR solar wind plasma & magnetic field (L1 point)
+- RTSW L1 solar wind plasma & magnetic field (SWFO-L1/ACE/IMAP via NOAA)
 - SDO/AIA multichannel coupling — pre-flare detection
 - STEREO-A EUVI (51° ahead) — 2-4 day advance warning
 - NOAA Space Weather Alerts

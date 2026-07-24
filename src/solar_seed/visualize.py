@@ -352,7 +352,7 @@ def plot_spatial_distribution(
     else:
         fig.suptitle(
             'Spatial Distribution of Mutual Information\n'
-            '(Limb bias removed after geometric normalization)',
+            '(193-211 Å, before and after geometric normalization)',
             fontsize=13, fontweight='bold'
         )
 

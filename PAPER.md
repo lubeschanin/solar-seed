@@ -52,7 +52,7 @@ The synoptic data are free of JPEG compression and visualization artefacts and a
 
 ### 2.3 Time Windows
 
-We analyze multiple temporal windows, including (i) a 6-hour interval (30 timepoints, 12-minute cadence) used for detailed method validation, (ii) a 24-hour interval used for multi-channel coupling analysis, and (iii) an 8-day interval (960 timepoints, 12-minute cadence) covering approximately one-third of a solar rotation period for temporal stability analysis. All timestamps are handled in UTC. Frames with missing data or quality flags are excluded. Run parameters are logged to ensure reproducibility.
+We analyze multiple temporal windows, including (i) a 6-hour interval (15 January 2024, 12:00–18:00 UTC; 30 timepoints, 12-minute cadence) used for detailed method validation, (ii) a 24-hour interval used for multi-channel coupling analysis, and (iii) an 8-day interval (960 timepoints, 12-minute cadence) covering approximately one-third of a solar rotation period for temporal stability analysis. All timestamps are handled in UTC. Frames with missing data or quality flags are excluded. Run parameters are logged to ensure reproducibility.
 
 ### 2.4 Preprocessing
 
@@ -133,13 +133,13 @@ Higher entropy indicates variance spread across many dimensions; lower entropy i
 
 ### 4.1 Global versus Geometry-Controlled Coupling
 
-We compute MI on original images and on geometry-normalized residuals. Across a 6-hour interval (30 timepoints), the ratio MI_residual/MI_original remains stable at **30.8% ± 0.7%** (CV = 2.3%), indicating that most apparent coupling is geometric, while a consistent residual component remains after removal.
+We compute MI on original images and on geometry-normalized residuals. Across a 6-hour validation interval (15 January 2024, 12:00–18:00 UTC; 30 timepoints, 12-minute cadence, 193–211 Å), the global MI is 1.37 ± 0.16 bits on original images and 1.50 ± 0.19 bits on residuals (ratio MI_residual/MI_original = 1.10 ± 0.05). Radial profile normalization thus leaves global MI essentially unchanged: for this channel pair, global MI is not dominated by shared radial intensity gradients. The geometric and coarse-structural contributions are instead quantified explicitly by the null-model hierarchy (Section 4.3), where geometry-preserving shuffles retain only a minority of the original MI.
 
-The residual coupling is extremely significant relative to shuffle-based null models, with minimum Z-scores exceeding Z = 986 and mean Z = 1252 ± 146 (p < 10⁻¹⁰⁰).
+The residual coupling is extremely significant relative to shuffle-based null models, with per-timepoint Z-scores relative to the global-shuffle null of (4.3 ± 0.8) × 10⁴ (minimum 3.3 × 10⁴). With 100 permutations per test, the empirical p-value is bounded below by 1/(N+1) ≈ 0.0099 (Phipson & Smyth 2010); every timepoint attains this floor. Under a Gaussian tail approximation the observed Z-scores would correspond to vanishingly small p-values, but we report the empirical bound as the primary result.
 
 ### 4.2 Spatial Localization of Residual Coupling
 
-Spatial MI maps (8×8 grid) show strong limb domination in original images. After geometric normalization, limb bias is removed and localized hotspots remain. Mean spatial MI decreases by ~42%, while local maxima persist and collapse under time-shift controls.
+Spatial MI maps (8×8 grid) computed on the validation interval show elevated MI toward the limb in the original images (limb cells reach 2.7–2.8 bits versus 0.9–1.5 bits near disk center). Geometric normalization leaves the grid-mean spatial MI nearly unchanged (−2.4%) while redistributing weight between cells; localized hotspots persist in the residual maps, and the disk-integrated coupling collapses under time-shift controls (>99% reduction, Section 4.5).
 
 ### 4.3 Hierarchy of Null Models and Structure Decomposition
 
@@ -147,7 +147,7 @@ Applying the hierarchy of null models yields the consistent ordering:
 
 MI_global < MI_ring < MI_sector < MI_residual
 
-This enables decomposition into radial, azimuthal, and local structure contributions, with a typical local contribution ΔMI_sector ≈ 0.17 bits.
+This enables decomposition into radial, azimuthal, and local structure contributions. For a representative timepoint of the validation interval (193–211 Å), the measured hierarchy is MI_global = 0.001 < MI_ring = 0.056 < MI_sector ≈ 0.38 < MI_original = 1.29 bits. Over the full interval, the local contribution is ΔMI_sector = 0.91 ± 0.12 bits; over the 8-day multichannel analysis, the corresponding mean for 193–211 Å is 0.59 ± 0.12 bits, reflecting the activity dependence of the local component.
 
 ### 4.4 Temperature-Ordered Coupling Across EUV Channels
 
@@ -155,7 +155,7 @@ Extending to seven EUV channels (21 pairs), we find temperature-ordered local co
 
 ### 4.5 Robustness and Temporal Stability
 
-Time-shift controls reduce coupling by >95%, alignment checks peak at (0,0), and scale-response tests indicate coupling dominated by mid-to-large spatial scales.
+Time-shift controls reduce coupling by >99.9%, and alignment checks peak at (0,0). Scale-response tests (Gaussian blur, σ = 2 px) *increase* MI by ~35% at 1024² resolution, indicating that fine-scale pixel noise partially decorrelates the channels and that the coupling is dominated by mid-to-large spatial scales; this exceeds the ±20% stability criterion and is consistent with the known aliasing sensitivity of the 1k synoptic product (see Limitations).
 
 ### 4.6 Coupling Dynamics During Major Solar Flares
 
@@ -451,19 +451,19 @@ Beyond solar physics, the methodology is directly applicable to other multichann
 
 ![Figure 1](figures/figure1_geometric_normalization.png)
 
-*Global mutual information (MI) between AIA EUV channels before and after geometric normalization. Left: MI computed on original images, dominated by disk geometry and limb brightening. Right: MI computed on residual images after radial profile normalization. Approximately 70% of apparent MI is removed, while a stable residual component remains.*
+*Global mutual information (MI) between AIA EUV channels before and after geometric normalization, for all 21 channel pairs of the 24-hour multichannel analysis. Left: MI computed on original images. Right: MI computed on residual images after radial profile normalization. The 21-pair mean MI decreases moderately (~12%), showing that global MI is not primarily an artifact of shared radial gradients; the geometric contribution is quantified explicitly by the null-model hierarchy (Figure 3).*
 
 ### Figure 2 — Spatial Distribution
 
 ![Figure 2](figures/figure2_spatial_distribution.png)
 
-*Spatial maps of mutual information between 193 Å and 211 Å channels on an 8×8 grid. Left: Original MI showing strong limb bias. Right: Residual MI after geometric normalization. Stars indicate top residual MI cells, corresponding to active regions.*
+*Spatial maps of mutual information between 193 Å and 211 Å channels on an 8×8 grid, measured on the validation interval (15 January 2024, 12:00 UTC). Left: Original MI with elevated values toward the limb. Right: Residual MI after geometric normalization; the grid mean is nearly unchanged (−2.4%) while weight is redistributed between cells. Stars indicate the top residual MI cells.*
 
 ### Figure 3 — Null Model Decomposition
 
 ![Figure 3](figures/figure3_null_model_decomposition.png)
 
-*Mutual information values under progressively restrictive null models: global shuffle (destroys all structure), ring shuffle (preserves radial statistics), sector shuffle (preserves coarse geometry). The difference ΔMI_sector quantifies local coupling beyond geometry. Error bars indicate standard deviation over time.*
+*Mutual information values under progressively restrictive null models, measured on a representative timepoint of the validation interval (193–211 Å): global shuffle (destroys all structure, 0.001 bits), ring shuffle (preserves radial statistics, 0.056 bits), sector shuffle (preserves coarse geometry, ≈0.38 bits, estimated from the interval-mean ΔMI_sector), original (1.29 bits). The difference ΔMI_sector = 0.91 ± 0.12 bits quantifies local coupling beyond geometry.*
 
 ### Figure 4 — Coupling Matrix
 

@@ -539,13 +539,39 @@ def run_real_analysis(
             seed=config.seed
         )
     else:
-        # Fail hard instead of silently degrading to synthetic data:
-        # results would otherwise be mislabeled as real AIA measurements.
-        print("  ✗ ERROR: Real AIA data loading is not implemented in real_run.")
-        print("    Options:")
-        print("      • Use synthetic data:  python -m solar_seed.real_run --synthetic")
-        print("      • Use real AIA data:   python -m solar_seed.multichannel --real")
-        sys.exit(1)
+        # Real AIA data: dated JSOC synoptic archive (1024x1024, 2-min cadence),
+        # the data product described in PAPER.md section 2.1.
+        from datetime import timedelta
+        from solar_seed.data_sources.synoptic import load_aia_synoptic_archive
+
+        if not config.start_time:
+            print("  ✗ ERROR: Real data requires --start (e.g. --start 2024-01-15T12:00)")
+            sys.exit(1)
+
+        start_dt = datetime.fromisoformat(config.start_time)
+        if verbose:
+            print(f"  🛰️  Loading real AIA synoptic data from {start_dt:%Y-%m-%d %H:%M} UTC...")
+
+        data_pairs = []
+        for i in range(n_points):
+            t = start_dt + timedelta(minutes=i * config.cadence_minutes)
+            channels, iso_ts, quality = load_aia_synoptic_archive(
+                t, [config.wavelength_1, config.wavelength_2]
+            )
+            if channels and config.wavelength_1 in channels and config.wavelength_2 in channels:
+                data_pairs.append(
+                    (channels[config.wavelength_1], channels[config.wavelength_2], iso_ts)
+                )
+                if verbose:
+                    spread = quality.get('time_spread_sec')
+                    spread_s = f"{spread:.0f}s" if spread is not None else "?"
+                    print(f"    ✓ {i+1}/{n_points} {iso_ts} (sync {spread_s})")
+            else:
+                print(f"    ✗ {i+1}/{n_points} {t:%Y-%m-%dT%H:%M}: skipped (data unavailable)")
+
+        if len(data_pairs) < max(3, n_points // 2):
+            print(f"  ✗ ERROR: only {len(data_pairs)}/{n_points} timepoints loaded - aborting")
+            sys.exit(1)
 
     # Analyze each timepoint
     timeseries = []
@@ -641,6 +667,8 @@ Examples:
                         help="Output directory")
     parser.add_argument("--synthetic", action="store_true",
                         help="Use synthetic data")
+    parser.add_argument("--start", type=str, default=None,
+                        help="Start time (UTC, ISO) for real data, e.g. 2024-01-15T12:00")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
 
@@ -652,7 +680,8 @@ Examples:
         hours=args.hours,
         cadence_minutes=args.cadence,
         output_dir=args.output,
-        seed=args.seed
+        seed=args.seed,
+        start_time=args.start
     )
 
     run_real_analysis(config, use_synthetic=args.synthetic)

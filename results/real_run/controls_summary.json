@@ -1,27 +1,27 @@
 {
   "c1_time_shift": {
-    "mi_original": 0.7364664020575216,
-    "mi_shifted": 0.029895868317577623,
-    "reduction_percent": 95.94063378396417,
+    "mi_original": 1.2893286767439767,
+    "mi_shifted": 0.00047149342350572,
+    "reduction_percent": 99.96343109154321,
     "passed": true
   },
   "c2_ring_shuffle": {
-    "mi_original": 0.7364664020575216,
-    "mi_ring_shuffled": 0.5614966837413045,
-    "mi_global_shuffled": 0.024222999176330973,
-    "ring_reduction_percent": 23.758004143487206,
-    "global_reduction_percent": 96.71091592112589
+    "mi_original": 1.2893286767439767,
+    "mi_ring_shuffled": 0.05639154439877281,
+    "mi_global_shuffled": 0.0005355195340319696,
+    "ring_reduction_percent": 95.62628634451985,
+    "global_reduction_percent": 99.95846524290576
   },
   "c3_blur_match": {
-    "mi_original": 0.7364664020575216,
-    "mi_blurred": 0.8952226364371283,
-    "change_percent": 21.55648023264571,
+    "mi_original": 1.2893286767439767,
+    "mi_blurred": 1.7380976003077002,
+    "change_percent": 34.8064020957812,
     "blur_sigma": 2.0,
     "stable": false
   },
   "c4_co_alignment": {
-    "mi_at_zero": 0.7364664020575216,
-    "mi_at_max": 0.7364664020575216,
+    "mi_at_zero": 1.2893286767439767,
+    "mi_at_max": 1.2893286767439767,
     "max_shift": [
       0,
       0
