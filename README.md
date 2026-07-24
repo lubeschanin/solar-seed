@@ -69,19 +69,19 @@ Chromospheric (304 Å) and flare channels (94, 131 Å) show weaker, activity-dep
 
 ![Figure 1 — Effect of geometric normalization on multichannel MI](figures/figure1_geometric_normalization.png)
 
-*Global mutual information (MI) between AIA EUV channels before and after geometric normalization. Left: MI on original images; Right: MI on residual images after radial profile normalization. Approximately 70% of apparent MI is removed, while a stable residual component remains.*
+*Global mutual information (MI) between AIA EUV channels before and after geometric normalization, for all 21 channel pairs. Left: MI on original images; Right: MI on residual images after radial profile normalization. The 21-pair mean MI decreases moderately (~12%) — global MI is not primarily an artifact of shared radial gradients; the geometric contribution is quantified by the null-model hierarchy (Figure 3).*
 
 ### Figure 2 — Spatial Distribution
 
 ![Figure 2 — Spatial MI maps](figures/figure2_spatial_distribution.png)
 
-*Spatial maps of mutual information between 193 Å and 211 Å channels on an 8×8 grid. Left: Original MI showing strong limb bias. Right: Residual MI after geometric normalization. Stars indicate top residual MI cells, corresponding to active regions.*
+*Spatial maps of mutual information between 193 Å and 211 Å channels on an 8×8 grid, measured on the validation interval (15 January 2024, 12:00 UTC). Left: Original MI with elevated values toward the limb. Right: Residual MI after geometric normalization; the grid mean is nearly unchanged (−2.4%) while weight is redistributed between cells. Stars indicate the top residual MI cells.*
 
 ### Figure 3 — Null Model Decomposition
 
 ![Figure 3 — Null model decomposition](figures/figure3_null_model_decomposition.png)
 
-*Mutual information values under progressively restrictive null models: global shuffle (destroys all structure), ring shuffle (preserves radial statistics), sector shuffle (preserves coarse geometry). The difference ΔMI_sector quantifies local coupling beyond geometry. Error bars indicate standard deviation over time.*
+*Mutual information values under progressively restrictive null models, measured on a representative timepoint of the validation interval (193–211 Å): global shuffle (destroys all structure, 0.001 bits), ring shuffle (preserves radial statistics, 0.056 bits), sector shuffle (preserves coarse geometry, ≈0.38 bits, estimated from the interval-mean ΔMI_sector), original (1.29 bits). The difference ΔMI_sector = 0.91 ± 0.12 bits quantifies local coupling beyond geometry.*
 
 ### Figure 4 — Coupling Matrix
 
@@ -269,7 +269,10 @@ Features:
 # Hypothesis test with controls
 uv run python -m solar_seed.hypothesis_test --spatial --controls
 
-# Reproducible run with reports
+# Reproducible run with reports (real AIA synoptic data, dated archive)
+uv run python -m solar_seed.real_run --hours 6 --start 2024-01-15T12:00
+
+# Same pipeline on synthetic data (fast, for testing)
 uv run python -m solar_seed.real_run --hours 6 --synthetic
 
 # Multi-channel analysis (7 channels, 21 pairs)
@@ -467,6 +470,7 @@ scripts/
 ```
 src/solar_seed/
 ├── cli.py               # Interactive CLI menu
+├── endpoints.py         # External URLs (override via config/endpoints.toml)
 ├── render_sun.py        # Sun image rendering with timezone
 ├── mutual_info.py       # MI computation (pure NumPy)
 ├── null_model.py        # Shuffle-based null models
