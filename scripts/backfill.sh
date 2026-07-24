@@ -10,5 +10,21 @@
 # Cron (täglich 07:00, nach Flare-Import):
 #   0 7 * * * /Users/vl/git/4free/solar-seed-project/scripts/backfill.sh --days 14 >> /Users/vl/git/4free/solar-seed-project/results/early_warning/backfill.log 2>&1
 
-cd "$(dirname "$0")/.."
-uv run python scripts/early_warning.py backfill --days 14 "$@"
+set -euo pipefail
+
+# Lock against concurrent runs (macOS has no flock; mkdir is atomic)
+LOCKDIR="/tmp/solar-backfill.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    echo "backfill.sh: another instance is already running (lock: $LOCKDIR) — exiting"
+    exit 0
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
+
+cd "$(dirname "$0")/.." || { echo "backfill.sh: cd to project root failed" >&2; exit 1; }
+
+# Default --days 14 only when no args were given (avoid duplicate/conflicting flags)
+if [ $# -eq 0 ]; then
+    set -- --days 14
+fi
+
+uv run python scripts/early_warning.py backfill "$@"

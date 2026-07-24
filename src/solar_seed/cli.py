@@ -129,11 +129,14 @@ def check_checkpoint() -> dict:
 
     # Get progress from checkpoint
     if checkpoint_path.exists():
-        with open(checkpoint_path) as f:
-            data = json.load(f)
-        info["exists"] = True
-        info["processed"] = data.get("last_index", 0)
-        info["timestamps"] = len(data.get("timestamps", []))
+        try:
+            with open(checkpoint_path) as f:
+                data = json.load(f)
+            info["exists"] = True
+            info["processed"] = data.get("last_index", 0)
+            info["timestamps"] = len(data.get("timestamps", []))
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
 
     return info
 

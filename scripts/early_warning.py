@@ -34,11 +34,13 @@ import sys
 import json
 import time
 import signal
+import sqlite3
+import statistics
+import http.client
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from urllib.request import urlopen, Request
 from urllib.error import URLError
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -74,17 +76,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from solar_seed.monitoring import (
     MonitoringDB,
     CouplingMonitor,
-    MIN_MI_THRESHOLD,
-    MIN_ROI_STD,
     validate_roi_variance,
-    validate_mi_measurement,
     AnomalyStatus,
     BreakType,
     detect_artifact,
     detect_coupling_break,
     compute_registration_shift,
     compute_robustness_check,
-    classify_break_type,
     classify_anomaly_status,
     classify_phase_parallel,
     classify_divergence_type,
@@ -93,11 +91,7 @@ from solar_seed.monitoring import (
 from solar_seed.data_sources import (
     load_aia_synoptic,
     load_aia_latest,
-    load_aia_direct,
     load_stereo_a_latest,
-    STEREO_A_INFO,
-    EUVI_TO_AIA,
-    SYNOPTIC_BASE_URL,
 )
 
 # NOAA SWPC API endpoints
@@ -121,7 +115,10 @@ def fetch_json(url: str, timeout: int = 30) -> dict | list | None:
         req = Request(url, headers={'User-Agent': 'SolarSeed/1.0'})
         with urlopen(req, timeout=timeout) as response:
             return json.loads(response.read().decode())
-    except URLError as e:
+    except (URLError, TimeoutError, OSError, http.client.HTTPException) as e:
+        # URLError/TimeoutError are OSError subclasses; kept explicit for clarity.
+        # A timeout during response.read() raises a bare TimeoutError, and
+        # ConnectionResetError/IncompleteRead/RemoteDisconnected are possible too.
         print(f"  Network error: {e}")
         return None
     except json.JSONDecodeError as e:
@@ -185,26 +182,32 @@ def get_dscovr_solar_wind() -> dict | None:
     if plasma and len(plasma) > 1:
         # Skip header row, get latest
         for row in reversed(plasma[1:]):
-            if row[1] is not None:  # density
-                result['plasma'] = {
-                    'timestamp': row[0],
-                    'density': float(row[1]) if row[1] else None,  # p/cm³
-                    'speed': float(row[2]) if row[2] else None,    # km/s
-                    'temperature': float(row[3]) if row[3] else None  # K
-                }
-                break
+            try:
+                if row[1] is not None:  # density
+                    result['plasma'] = {
+                        'timestamp': row[0],
+                        'density': float(row[1]) if row[1] else None,  # p/cm³
+                        'speed': float(row[2]) if row[2] else None,    # km/s
+                        'temperature': float(row[3]) if row[3] else None  # K
+                    }
+                    break
+            except (ValueError, TypeError, IndexError):
+                continue  # malformed row - try next one
 
     if mag and len(mag) > 1:
         for row in reversed(mag[1:]):
-            if row[3] is not None:  # Bz
-                result['mag'] = {
-                    'timestamp': row[0],
-                    'bx': float(row[1]) if row[1] else None,
-                    'by': float(row[2]) if row[2] else None,
-                    'bz': float(row[3]) if row[3] else None,  # nT (negative = geoeffective)
-                    'bt': float(row[6]) if row[6] else None   # total field
-                }
-                break
+            try:
+                if row[3] is not None:  # Bz
+                    result['mag'] = {
+                        'timestamp': row[0],
+                        'bx': float(row[1]) if row[1] else None,
+                        'by': float(row[2]) if row[2] else None,
+                        'bz': float(row[3]) if row[3] else None,  # nT (negative = geoeffective)
+                        'bt': float(row[6]) if row[6] else None   # total field
+                    }
+                    break
+            except (ValueError, TypeError, IndexError):
+                continue  # malformed row - try next one
 
     return result if result else None
 
@@ -452,6 +455,30 @@ def store_solar_wind_reading(solar_wind: dict, risk: str, risk_level: int):
         )
 
 
+def compute_goes_rising(current_flux: float | None = None) -> bool:
+    """
+    Determine whether GOES X-ray flux is currently rising.
+
+    Robust and simple: compare the latest flux against the median of the
+    last hour of stored GOES readings. A factor of 1.5 above the median
+    marks a genuine rise (flare onset), not noise.
+
+    Returns False when there is not enough data to decide.
+    """
+    try:
+        rows = get_monitoring_db().get_recent_goes(hours=1)
+    except Exception:
+        return False
+
+    fluxes = [r['flux'] for r in rows if r.get('flux') is not None]
+    if len(fluxes) < 3:
+        return False
+
+    latest = current_flux if current_flux is not None else fluxes[0]  # rows are DESC
+    median = statistics.median(fluxes)
+    return median > 0 and latest > 1.5 * median
+
+
 def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
     """Store coupling measurements in database."""
     if not coupling:
@@ -517,8 +544,9 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
             sync_delta_s=sync_delta_s,
         )
 
-        # Auto-create prediction for ALERT/ELEVATED status
-        if status in ('ALERT', 'ELEVATED'):
+        # Auto-create prediction for ALERT/WARNING/ELEVATED status
+        # (hierarchy: ALERT > WARNING > ELEVATED)
+        if status in ('ALERT', 'WARNING', 'ELEVATED'):
             predicted_class = 'M' if status == 'ALERT' else 'C'
 
             # Determine trigger_kind based on what caused the alert
@@ -600,8 +628,14 @@ def check_and_log_divergence(timestamp: str, coupling: dict, xray: dict, db: Mon
     """
     # Extract GOES info
     goes_flux = xray.get('flux') if xray else None
-    goes_rising = xray.get('rising', False) if xray else None
     goes_class = xray.get('flare_class') if xray else None
+    if xray:
+        goes_rising = xray.get('rising')
+        if goes_rising is None:
+            goes_rising = compute_goes_rising(current_flux=goes_flux)
+            xray['rising'] = goes_rising
+    else:
+        goes_rising = None
 
     # Build pairs data for phase classification
     pairs_data = {k: v for k, v in coupling.items() if not k.startswith('_')}
@@ -631,18 +665,21 @@ def check_and_log_divergence(timestamp: str, coupling: dict, xray: dict, db: Mon
     phase_exp, reason_exp = comparison['experimental']
 
     # Check for recent flare activity (query last 24h from DB)
+    # Note: MonitoringDB has no get_recent_flares(); get_flare_events() is the actual API.
     recent_flare_hours = None
     try:
-        recent_flares = db.get_recent_flares(hours=24, min_class='C')
+        recent_flares = db.get_flare_events(days=1, min_class='C')
         if recent_flares:
-            # Hours since most recent flare
-            from datetime import datetime, timezone
+            # Hours since most recent flare (list is ordered start_time DESC)
             latest = recent_flares[0]
             flare_time = datetime.fromisoformat(latest['start_time'].replace('Z', '+00:00'))
+            if flare_time.tzinfo is None:
+                # DONKI timestamps are normalized to naive UTC in the DB
+                flare_time = flare_time.replace(tzinfo=timezone.utc)
             now = datetime.now(timezone.utc)
             recent_flare_hours = (now - flare_time).total_seconds() / 3600
-    except Exception:
-        pass  # DB query failed, proceed without flare context
+    except (KeyError, ValueError, TypeError, sqlite3.Error):
+        pass  # DB query/parse failed, proceed without flare context
 
     div_type = classify_divergence_type(
         phase_goes=phase_goes,
@@ -918,7 +955,12 @@ def _build_goes_context(xray: dict) -> dict | None:
 
     flux = xray.get('flux', 0)
     flare_class = xray.get('flare_class', 'A0')
-    goes_rising = False
+
+    # Real trend from recent GOES DB readings (was hardcoded False)
+    goes_rising = xray.get('rising')
+    if goes_rising is None:
+        goes_rising = compute_goes_rising(current_flux=xray.get('flux'))
+        xray['rising'] = goes_rising  # cache so check_and_log_divergence sees the same value
 
     if flare_class.startswith(('A', 'B')):
         goes_phase = 'quiet_or_decay'
@@ -1050,6 +1092,7 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
 
         # Quality metadata
         results['_quality'] = {
+            'data_timestamp': timestamp,  # actual AIA observation time (not wallclock)
             'data_source': data_source,
             'resolution': f'{actual_size}x{actual_size}',
             'is_good': quality_info['is_good_quality'] if quality_info else None,
@@ -1098,6 +1141,28 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
         return None
 
 
+def coupling_storage_timestamp(coupling: dict | None) -> str:
+    """
+    Timestamp under which a coupling reading is stored in the DB.
+
+    Prefer the actual AIA data timestamp (from _quality.data_timestamp) over
+    wallclock: AIA data may be up to 30 min old, and the JSOC backfill later
+    matches 4k data against this exact timestamp. Falls back to wallclock UTC.
+
+    Format: naive ISO, YYYY-MM-DDTHH:MM:SS (DB convention).
+    """
+    ts = (coupling or {}).get('_quality', {}).get('data_timestamp')
+    if ts:
+        try:
+            dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt.strftime("%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def print_status_report(xray: dict, solar_wind: dict, alerts: list, coupling: dict = None, stereo: dict = None):
     """Print formatted status report using Rich StatusFormatter."""
     fmt = StatusFormatter()
@@ -1138,57 +1203,76 @@ def monitor_loop(interval: int = 60, with_coupling: bool = False, with_stereo: b
     stereo_interval = 1800   # Run STEREO every 30 minutes (data updates less frequently)
     last_coupling = 0
     last_stereo = 0
+    error_count = 0
 
     while not _shutdown_requested:
-        xray = get_goes_xray()
-        if _shutdown_requested:
-            break
+        # Guard the whole iteration: a single failure (malformed NOAA data,
+        # sqlite3 "database is locked", ...) must not kill the long-runner.
+        # KeyboardInterrupt is NOT caught (except Exception excludes it) and
+        # SIGINT is handled via _shutdown_requested — graceful shutdown intact.
+        try:
+            xray = get_goes_xray()
+            if _shutdown_requested:
+                break
 
-        solar_wind = get_dscovr_solar_wind()
-        if _shutdown_requested:
-            break
+            solar_wind = get_dscovr_solar_wind()
+            if _shutdown_requested:
+                break
 
-        alerts = get_noaa_alerts()
-        if _shutdown_requested:
-            break
+            alerts = get_noaa_alerts()
+            if _shutdown_requested:
+                break
 
-        # Store in database
-        if store_db:
-            store_goes_reading(xray)
-            if solar_wind:
-                risk, risk_level = assess_geomagnetic_risk(solar_wind)
-                store_solar_wind_reading(solar_wind, risk, risk_level)
-            if alerts:
-                store_noaa_alerts(alerts)
+            # Store in database
+            if store_db:
+                store_goes_reading(xray)
+                if solar_wind:
+                    risk, risk_level = assess_geomagnetic_risk(solar_wind)
+                    store_solar_wind_reading(solar_wind, risk, risk_level)
+                if alerts:
+                    store_noaa_alerts(alerts)
 
-        coupling = None
-        if with_coupling and (time.time() - last_coupling) > coupling_interval:
-            if not _shutdown_requested:
-                coupling = run_coupling_analysis(xray=xray)
-                last_coupling = time.time()
-                # Store coupling and check for divergence
-                if store_db and coupling:
-                    now = datetime.now(timezone.utc)
-                    store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling, xray)
+            coupling = None
+            if with_coupling and (time.time() - last_coupling) > coupling_interval:
+                if not _shutdown_requested:
+                    coupling = run_coupling_analysis(xray=xray)
+                    last_coupling = time.time()
+                    # Store coupling and check for divergence
+                    # (under the AIA data timestamp, not wallclock - backfill
+                    # matches JSOC 4k data against this timestamp)
+                    if store_db and coupling:
+                        store_coupling_reading(coupling_storage_timestamp(coupling), coupling, xray)
 
-        if _shutdown_requested:
-            break
+            if _shutdown_requested:
+                break
 
-        # STEREO-A analysis (less frequent due to data latency)
-        stereo = None
-        if with_stereo and (time.time() - last_stereo) > stereo_interval:
-            if not _shutdown_requested:
-                stereo = run_stereo_coupling_analysis()
-                last_stereo = time.time()
+            # STEREO-A analysis (less frequent due to data latency)
+            stereo = None
+            if with_stereo and (time.time() - last_stereo) > stereo_interval:
+                if not _shutdown_requested:
+                    stereo = run_stereo_coupling_analysis()
+                    last_stereo = time.time()
 
-        if _shutdown_requested:
-            break
+            if _shutdown_requested:
+                break
 
-        print_status_report(xray, solar_wind, alerts, coupling, stereo)
+            print_status_report(xray, solar_wind, alerts, coupling, stereo)
 
-        # Alert on significant events
-        if xray and xray['severity'] >= 3:
-            print(f"\a")  # Terminal bell
+            # Alert on significant events
+            if xray and xray['severity'] >= 3:
+                print(f"\a")  # Terminal bell
+
+        except Exception as e:
+            error_count += 1
+            console.print(f"[red]⚠ Monitor iteration failed (error #{error_count}): "
+                          f"{type(e).__name__}: {e}[/]")
+            console.print("[dim]Continuing after short backoff...[/]")
+            # Short interruptible backoff, then continue monitoring
+            for _ in range(min(30, interval)):
+                if _shutdown_requested:
+                    break
+                time.sleep(1)
+            continue
 
         # Interruptible sleep (check every second)
         for _ in range(interval):
@@ -1331,8 +1415,7 @@ def check(
             progress.add_task("Running coupling analysis...", total=None)
             coupling_data = run_coupling_analysis(xray=xray)
             if store_db and coupling_data:
-                now = datetime.now(timezone.utc)
-                store_coupling_reading(now.strftime("%Y-%m-%dT%H:%M:%S"), coupling_data, xray)
+                store_coupling_reading(coupling_storage_timestamp(coupling_data), coupling_data, xray)
 
         stereo_data = None
         if stereo and not minimal:
@@ -1521,6 +1604,16 @@ def import_flares(
     count = db.import_flares_from_donki(start_date=start, end_date=end, min_class=min_class)
 
     if count == 0:
+        # import_flares_from_donki swallows network errors and returns 0, so the
+        # CLI cannot distinguish "no new flares" from "DONKI unreachable".
+        # Probe DONKI with a minimal request: None = network/parse failure.
+        probe_url = (
+            f"https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/FLR"
+            f"?startDate={start}&endDate={start}"
+        )
+        if fetch_json(probe_url, timeout=30) is None:
+            console.print("[red]✗ DONKI unreachable — flare import failed (exit 1 for cron)[/]")
+            raise typer.Exit(1)
         console.print("[yellow]No new flares imported.[/]")
     else:
         console.print(f"[green]✓ Imported {count} flares[/]\n")
@@ -2101,7 +2194,10 @@ def backfill(
     failed = 0
     consecutive_failures = 0
     failed_timestamps = []
+    aborted = False
     MAX_CONSECUTIVE_FAILURES = 5
+
+    import gc
 
     for ts, pairs in sorted(by_timestamp.items()):
         # Skip timestamps beyond JSOC availability (no network call needed)
@@ -2122,13 +2218,21 @@ def backfill(
         # Load 4k data
         channels, meta = load_aia_jsoc(ts, [193, 211, 304])
         if not channels:
+            # Off-point maneuver (SDO calibration): skip cleanly, do NOT count as JSOC failure
+            if meta and meta.get('reason') == 'off_point':
+                console.print(f"  [dim]{ts}: SDO off-point - skipping[/]")
+                skipped += len(pairs)
+                consecutive_failures = 0  # off-point is not a download failure
+                continue
             consecutive_failures += 1
             failed_timestamps.append(ts)
             console.print(f"  [yellow]{ts}: 4k load failed (not true 4k?) [{consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}][/]")
             failed += len(pairs)
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 console.print(f"\n[red bold]Aborting: {MAX_CONSECUTIVE_FAILURES} consecutive download failures — JSOC likely down[/]")
-                _notify_jsoc_outage(failed_timestamps, console)
+                # Email disabled — JSOC outages too frequent
+                # _notify_jsoc_outage(failed_timestamps, console)
+                aborted = True
                 break
             continue
 
@@ -2163,9 +2267,16 @@ def backfill(
                 console.print(f"  [green]✓[/] {ts} {pair}: {m['delta_mi']:.3f} → {new_mi:.3f} ({change_pct:+.0f}%)")
                 updated += 1
 
+                # Free intermediate arrays
+                del res1, res2, shuffle_result
+
             except Exception as e:
                 console.print(f"  [red]✗[/] {ts} {pair}: {e}")
                 failed += 1
+
+        # Free 4k channel data after processing all pairs for this timestamp
+        del channels, meta
+        gc.collect()
 
     # Summary
     console.print(f"\n[bold]Summary:[/]")
@@ -2183,6 +2294,10 @@ def backfill(
             for ts in failed_timestamps:
                 f.write(f"  {ts}\n")
         console.print(f"  [dim]Failure log: {report_path}[/]")
+
+    # Non-zero exit for cron when the run aborted (JSOC down)
+    if aborted:
+        raise typer.Exit(1)
 
 
 def main():
