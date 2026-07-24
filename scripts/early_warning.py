@@ -96,8 +96,10 @@ from solar_seed.data_sources import (
 
 # NOAA SWPC API endpoints
 GOES_XRAY_URL = "https://services.swpc.noaa.gov/json/goes/primary/xrays-1-day.json"
-DSCOVR_PLASMA_URL = "https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json"
-DSCOVR_MAG_URL = "https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json"
+# NOAA retired /products/solar-wind/ (DSCOVR) mid-2026; RTSW serves the active
+# L1 monitor (SWFO-L1/ACE/IMAP) as JSON objects, newest first, active=primary source
+RTSW_WIND_URL = "https://services.swpc.noaa.gov/json/rtsw/rtsw_wind_1m.json"
+RTSW_MAG_URL = "https://services.swpc.noaa.gov/json/rtsw/rtsw_mag_1m.json"
 ALERTS_URL = "https://services.swpc.noaa.gov/products/alerts.json"
 
 # Flare classification thresholds (W/m²)
@@ -171,43 +173,50 @@ def get_goes_xray() -> dict | None:
 
 
 def get_dscovr_solar_wind() -> dict | None:
-    """Fetch current DSCOVR solar wind data."""
-    print("  Fetching DSCOVR solar wind data...")
+    """Fetch current L1 solar wind data (NOAA RTSW feed)."""
+    print("  Fetching solar wind data (RTSW)...")
 
-    plasma = fetch_json(DSCOVR_PLASMA_URL)
-    mag = fetch_json(DSCOVR_MAG_URL)
+    wind = fetch_json(RTSW_WIND_URL)
+    mag = fetch_json(RTSW_MAG_URL)
 
     result = {}
 
-    if plasma and len(plasma) > 1:
-        # Skip header row, get latest
-        for row in reversed(plasma[1:]):
+    if wind:
+        # Newest first; prefer records from the active (primary) source
+        for rec in [r for r in wind if r.get('active')] + wind:
             try:
-                if row[1] is not None:  # density
+                if rec.get('proton_density') is not None:
                     result['plasma'] = {
-                        'timestamp': row[0],
-                        'density': float(row[1]) if row[1] else None,  # p/cm³
-                        'speed': float(row[2]) if row[2] else None,    # km/s
-                        'temperature': float(row[3]) if row[3] else None  # K
+                        'timestamp': rec.get('time_tag'),
+                        'source': rec.get('source'),
+                        'density': float(rec['proton_density']),               # p/cm³
+                        'speed': float(rec['proton_speed'])
+                            if rec.get('proton_speed') is not None else None,  # km/s
+                        'temperature': float(rec['proton_temperature'])
+                            if rec.get('proton_temperature') is not None else None  # K
                     }
                     break
-            except (ValueError, TypeError, IndexError):
-                continue  # malformed row - try next one
+            except (ValueError, TypeError):
+                continue  # malformed record - try next one
 
-    if mag and len(mag) > 1:
-        for row in reversed(mag[1:]):
+    if mag:
+        for rec in [r for r in mag if r.get('active')] + mag:
             try:
-                if row[3] is not None:  # Bz
+                if rec.get('bz_gsm') is not None:
                     result['mag'] = {
-                        'timestamp': row[0],
-                        'bx': float(row[1]) if row[1] else None,
-                        'by': float(row[2]) if row[2] else None,
-                        'bz': float(row[3]) if row[3] else None,  # nT (negative = geoeffective)
-                        'bt': float(row[6]) if row[6] else None   # total field
+                        'timestamp': rec.get('time_tag'),
+                        'source': rec.get('source'),
+                        'bx': float(rec['bx_gsm'])
+                            if rec.get('bx_gsm') is not None else None,
+                        'by': float(rec['by_gsm'])
+                            if rec.get('by_gsm') is not None else None,
+                        'bz': float(rec['bz_gsm']),  # nT (negative = geoeffective)
+                        'bt': float(rec['bt'])
+                            if rec.get('bt') is not None else None  # total field
                     }
                     break
-            except (ValueError, TypeError, IndexError):
-                continue  # malformed row - try next one
+            except (ValueError, TypeError):
+                continue  # malformed record - try next one
 
     return result if result else None
 
