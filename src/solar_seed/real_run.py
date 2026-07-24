@@ -3,11 +3,16 @@
 Real-Data Run for Solar Seed
 ============================
 
-Reproducible, citable analysis run on real AIA data.
+Reproducible, citable analysis pipeline (currently synthetic data only).
 
 Execution:
-    python -m solar_seed.real_run --hours 6
-    python -m solar_seed.real_run --start "2024-01-15T00:00:00" --hours 6
+    python -m solar_seed.real_run --hours 6 --synthetic
+    python -m solar_seed.real_run --hours 1 --synthetic --wavelengths 171 193
+
+Note:
+    Real AIA data loading is NOT implemented in this module.
+    Running without --synthetic aborts with an error.
+    For real AIA data use: python -m solar_seed.multichannel --real
 
 Output:
     results/real_run/
@@ -20,6 +25,7 @@ Output:
 import argparse
 import json
 import csv
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from dataclasses import dataclass, asdict, field
@@ -108,67 +114,6 @@ class RunResult:
 # ============================================================================
 # DATA LOADING
 # ============================================================================
-
-def load_aia_pair_sunpy(
-    wavelength_1: int,
-    wavelength_2: int,
-    time_str: str
-) -> Tuple[Optional[NDArray], Optional[NDArray], dict]:
-    """
-    Loads an AIA image pair via SunPy/Fido.
-
-    Args:
-        wavelength_1: First wavelength (e.g. 193)
-        wavelength_2: Second wavelength (e.g. 211)
-        time_str: Timestamp (ISO format)
-
-    Returns:
-        (image_1, image_2, metadata) or (None, None, {}) on error
-    """
-    try:
-        from sunpy.net import Fido, attrs as a
-        import sunpy.map
-        import astropy.units as u
-        from datetime import datetime, timedelta
-
-        # Parse time and create search window (±5 min)
-        t = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
-        t_start = t - timedelta(minutes=5)
-        t_end = t + timedelta(minutes=5)
-
-        images = []
-        metadata = {"timestamp": time_str, "wavelengths": [wavelength_1, wavelength_2]}
-
-        for wl in [wavelength_1, wavelength_2]:
-            result = Fido.search(
-                a.Time(t_start.isoformat(), t_end.isoformat()),
-                a.Instrument("aia"),
-                a.Wavelength(wl * u.angstrom),
-            )
-
-            if len(result) == 0 or len(result[0]) == 0:
-                return None, None, {}
-
-            # Load first result
-            files = Fido.fetch(result[0, 0], path="data/aia/{file}")
-            if not files:
-                return None, None, {}
-
-            aia_map = sunpy.map.Map(files[0])
-            images.append(aia_map.data.astype(np.float64))
-
-            metadata[f"file_{wl}"] = str(files[0])
-            metadata[f"date_{wl}"] = str(aia_map.date)
-
-        return images[0], images[1], metadata
-
-    except ImportError:
-        print("  ⚠️  SunPy not installed")
-        return None, None, {}
-    except Exception as e:
-        print(f"  ✗ Error: {e}")
-        return None, None, {}
-
 
 def generate_synthetic_timeseries(
     n_points: int,
@@ -298,9 +243,12 @@ def run_spatial_analysis(
         "residual_mi_mean": result.residual.mi_mean,
         "residual_mi_std": result.residual.mi_std,
         "mean_reduction_percent": float(np.nanmean(result.mi_reduction_percent)),
-        "hotspot": result.residual.hotspot_idx,
-        "hotspot_mi": result.residual.hotspot_value,
-        "top_5_hotspots": [(list(idx), val) for idx, val in hotspots],
+        "hotspot": [int(i) for i in result.residual.hotspot_idx],
+        "hotspot_mi": float(result.residual.hotspot_value),
+        "top_5_hotspots": [([int(i) for i in idx], float(val)) for idx, val in hotspots],
+        # Machine-readable numeric maps (NaN preserved; used by visualize.py)
+        "original_map": result.original.mi_map.tolist(),
+        "residual_map": result.residual.mi_map.tolist(),
         "original_map_ascii": mi_map_to_ascii(result.original.mi_map),
         "residual_map_ascii": mi_map_to_ascii(result.residual.mi_map)
     }
@@ -426,14 +374,53 @@ def save_spatial_maps(
             f.write(f"  {i}. Cell {idx}: MI={val:.4f}\n")
 
 
+def save_spatial_json(
+    spatial: dict,
+    filepath: Path
+) -> None:
+    """Saves spatial analysis in machine-readable JSON (for visualize.py)."""
+    data = {k: v for k, v in spatial.items() if not k.endswith("_ascii")}
+    with open(filepath, 'w') as f:
+        json.dump(
+            data, f, indent=2,
+            default=lambda o: o.item() if hasattr(o, "item") else str(o)
+        )
+
+
+def _get_git_commit() -> Optional[str]:
+    """Returns the current git commit hash, or None if unavailable."""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def save_run_metadata(
     result: RunResult,
     filepath: Path
 ) -> None:
     """Saves run metadata for reproducibility."""
+    import platform
+    import scipy
 
     metadata = {
         "run_timestamp": result.run_timestamp,
+        "environment": {
+            "git_commit": _get_git_commit(),
+            "python_version": platform.python_version(),
+            "numpy_version": np.__version__,
+            "scipy_version": scipy.__version__,
+        },
         "duration_seconds": result.duration_seconds,
         "config": asdict(result.config),
         "summary": {
@@ -552,17 +539,13 @@ def run_real_analysis(
             seed=config.seed
         )
     else:
-        if verbose:
-            print("  📡 Loading real AIA data...")
-        # TODO: Implement real data loading
-        # For now: Fallback to synthetic
-        print("  ⚠️  Real data not yet implemented, using synthetic")
-        data_pairs = generate_synthetic_timeseries(
-            n_points=n_points,
-            shape=(256, 256),
-            extra_correlation=0.3,
-            seed=config.seed
-        )
+        # Fail hard instead of silently degrading to synthetic data:
+        # results would otherwise be mislabeled as real AIA measurements.
+        print("  ✗ ERROR: Real AIA data loading is not implemented in real_run.")
+        print("    Options:")
+        print("      • Use synthetic data:  python -m solar_seed.real_run --synthetic")
+        print("      • Use real AIA data:   python -m solar_seed.multichannel --real")
+        sys.exit(1)
 
     # Analyze each timepoint
     timeseries = []
@@ -622,6 +605,7 @@ def run_real_analysis(
     save_timeseries_csv(timeseries, output_dir / "timeseries.csv")
     save_controls_json(controls, output_dir / "controls_summary.json")
     save_spatial_maps(spatial, output_dir / "spatial_maps.txt")
+    save_spatial_json(spatial, output_dir / "spatial_maps.json")
     save_run_metadata(result, output_dir / "run_metadata.json")
 
     if verbose:

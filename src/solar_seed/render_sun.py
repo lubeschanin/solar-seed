@@ -13,7 +13,7 @@ Usage:
 
 import numpy as np
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Tuple
 
@@ -319,6 +319,7 @@ def load_and_render(
         timestamp,
         data_dir="data/aia",
         cleanup=False,  # Keep FITS for potential re-rendering
+        min_file_size=100_000,  # Accept synoptic 1k files (~0.8MB)
     )
 
     if channels is None:
@@ -426,8 +427,10 @@ Timezones:
     utc_timestamp = None
 
     if args.date is None:
-        # Default to 24 hours ago
-        utc_timestamp = (datetime.now() - timedelta(hours=24)).isoformat()
+        # Default to 24 hours ago (UTC; naive datetime keeps the timestamp
+        # string format expected by the AIA loaders)
+        utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        utc_timestamp = (utc_now - timedelta(hours=24)).isoformat()
     elif args.timezone:
         # Parse local time and convert to UTC
         local_dt, utc_dt = parse_local_datetime(args.date, args.time, args.timezone)

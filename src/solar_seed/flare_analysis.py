@@ -301,12 +301,13 @@ def analyze_flare_phase(
         intensities_94.append(float(np.mean(channels[94][channels[94] > 0])))
 
         # Analyze all pairs
-        for wl1, wl2 in combinations(WAVELENGTHS, 2):
+        for pair_idx, (wl1, wl2) in enumerate(combinations(WAVELENGTHS, 2)):
             result = analyze_pair(
                 channels[wl1], channels[wl2],
                 wl1, wl2,
                 bins=64,
-                seed=seed + t_idx
+                # Collision-free: each (timepoint, pair) gets a unique seed
+                seed=seed + t_idx * 100 + pair_idx
             )
             pair_values[(wl1, wl2)].append(result.delta_mi_sector)
 
@@ -328,6 +329,7 @@ def run_flare_analysis(
     cadence_minutes: int = 2,
     use_real_data: bool = False,
     output_dir: str = "results/flare",
+    seed: int = 42,
     verbose: bool = True
 ) -> FlareAnalysisResult:
     """
@@ -340,6 +342,7 @@ def run_flare_analysis(
         cadence_minutes: Time interval
         use_real_data: Use real AIA data
         output_dir: Output directory
+        seed: Random seed (synthetic data + shuffle tests)
         verbose: Verbose output
 
     Returns:
@@ -390,7 +393,8 @@ def run_flare_analysis(
             n_before=n_before,
             n_during=n_during,
             n_after=n_after,
-            flare_intensity=3.0
+            flare_intensity=3.0,
+            seed=seed
         )
 
     if len(timeseries) == 0:
@@ -408,9 +412,9 @@ def run_flare_analysis(
         print(f"     Before: {len(before_data)}, During: {len(during_data)}, After: {len(after_data)}")
 
     # Analyze each phase
-    before_result = analyze_flare_phase(before_data, "before")
-    during_result = analyze_flare_phase(during_data, "during")
-    after_result = analyze_flare_phase(after_data, "after")
+    before_result = analyze_flare_phase(before_data, "before", seed=seed)
+    during_result = analyze_flare_phase(during_data, "during", seed=seed)
+    after_result = analyze_flare_phase(after_data, "after", seed=seed)
 
     # Calculate changes
     coupling_change = {}
@@ -621,6 +625,8 @@ Examples:
                         help="Use real AIA data")
     parser.add_argument("--output", type=str, default="results/flare",
                         help="Output directory")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed (default: 42)")
     parser.add_argument("--list", action="store_true",
                         help="List known flares")
 
@@ -642,6 +648,7 @@ Examples:
         cadence_minutes=args.cadence,
         use_real_data=args.real,
         output_dir=args.output,
+        seed=args.seed,
         verbose=True
     )
 

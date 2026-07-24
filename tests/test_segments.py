@@ -125,7 +125,9 @@ class TestAggregateSegments:
 
         assert result is not None
         assert result.n_points == 30  # 3 segments * 10 points
-        assert result.hours == 72  # 3 days * 24 hours
+        # hours is now derived from actual timestamps (first: 12-01T00:00,
+        # last: 12-03T09:00 -> 57h span), no longer len(segments) * 24
+        assert result.hours == pytest.approx(57.0)
         assert (304, 171) in result.pair_means
 
     def test_aggregate_empty_dir(self, tmp_path):

@@ -24,13 +24,14 @@ try:
 except RuntimeError:
     pass  # Already set
 
+import os
 import numpy as np
 from numpy.typing import NDArray
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Dict, List, Tuple, Optional
 from itertools import combinations
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 from scipy import stats
@@ -40,6 +41,30 @@ from solar_seed.multichannel import (
     generate_multichannel_sun, analyze_pair, PairResult,
     load_aia_multichannel_timeseries, AIA_DATA_SOURCE
 )
+
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+
+def _utcnow_naive() -> datetime:
+    """Current UTC time as naive datetime (consistent with AIA timestamp strings).
+
+    AIA loaders expect UTC timestamps; using datetime.now() would silently
+    pass local wall-clock time as UTC.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _atomic_write_json(path: Path, data: dict, indent: Optional[int] = None) -> None:
+    """Writes JSON atomically: write to temp file in same dir, then os.replace.
+
+    Prevents corrupt/truncated files when the process is killed mid-write.
+    """
+    tmp = path.parent / (path.name + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=indent)
+    os.replace(tmp, path)
 
 
 # ============================================================================
@@ -206,7 +231,7 @@ def analyze_timescale(
     # Generate or load data
     if use_real_data:
         if start_time_str is None:
-            start_time_str = (datetime.now() - timedelta(hours=n_hours + 24)).isoformat()
+            start_time_str = (_utcnow_naive() - timedelta(hours=n_hours + 24)).isoformat()
 
         timeseries = load_aia_multichannel_timeseries(
             start_time=start_time_str,
@@ -224,12 +249,13 @@ def analyze_timescale(
     }
 
     for t_idx, (channels, _) in enumerate(timeseries):
-        for wl1, wl2 in combinations(WAVELENGTHS, 2):
+        for pair_idx, (wl1, wl2) in enumerate(combinations(WAVELENGTHS, 2)):
             result = analyze_pair(
                 channels[wl1], channels[wl2],
                 wl1, wl2,
                 bins=64,
-                seed=seed + t_idx
+                # Collision-free: each (timepoint, pair) gets a unique seed
+                seed=seed + t_idx * 100 + pair_idx
             )
             pair_values[(wl1, wl2)].append(result.delta_mi_sector)
 
@@ -504,7 +530,7 @@ def run_activity_conditioning(
 
     # Generate or load data
     if use_real_data:
-        start_time_str = (datetime.now() - timedelta(hours=n_hours + 24)).isoformat()
+        start_time_str = (_utcnow_naive() - timedelta(hours=n_hours + 24)).isoformat()
         timeseries = load_aia_multichannel_timeseries(
             start_time=start_time_str,
             n_points=n_points,
@@ -527,12 +553,13 @@ def run_activity_conditioning(
 
         # Analyze all pairs
         pair_results = {}
-        for wl1, wl2 in combinations(WAVELENGTHS, 2):
+        for pair_idx, (wl1, wl2) in enumerate(combinations(WAVELENGTHS, 2)):
             result = analyze_pair(
                 channels[wl1], channels[wl2],
                 wl1, wl2,
                 bins=64,
-                seed=seed + t_idx
+                # Collision-free: each (timepoint, pair) gets a unique seed
+                seed=seed + t_idx * 100 + pair_idx
             )
             pair_results[(wl1, wl2)] = result.delta_mi_sector
 
@@ -797,8 +824,13 @@ def _compute_interim_result(
 def load_checkpoint(checkpoint_path: Path) -> Tuple[Dict, List[str], int]:
     """Loads checkpoint if present."""
     if checkpoint_path.exists():
-        with open(checkpoint_path) as f:
-            data = json.load(f)
+        try:
+            with open(checkpoint_path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"  ⚠️  Corrupt checkpoint {checkpoint_path}: {e}")
+            print(f"     Starting fresh (delete or fix the file to silence this warning)")
+            return {}, [], 0
         # Convert string keys back to tuples
         pair_timeseries = {}
         for key, values in data.get("pair_timeseries", {}).items():
@@ -829,8 +861,7 @@ def save_checkpoint(
         "timestamps": timestamps,
         "last_index": last_index
     }
-    with open(checkpoint_path, "w") as f:
-        json.dump(data, f)
+    _atomic_write_json(checkpoint_path, data)
 
     if auto_push:
         git_push_checkpoint(checkpoint_path, last_index, len(timestamps))
@@ -962,8 +993,8 @@ def run_rotation_analysis(
 
     # Determine start and end time
     if start_time_str is None:
-        # Default: 27 days before now
-        start_time = datetime.now() - timedelta(hours=hours)
+        # Default: 27 days before now (UTC, naive — AIA loaders expect UTC)
+        start_time = _utcnow_naive() - timedelta(hours=hours)
         start_time_str = start_time.isoformat()
     else:
         start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
@@ -1091,35 +1122,10 @@ def run_rotation_analysis(
     if verbose:
         print("\n  📈 Computing statistics...")
 
-    # Calculate means, standard deviations
-    pair_means = {pair: float(np.mean(vals)) for pair, vals in pair_timeseries.items()}
-    pair_stds = {pair: float(np.std(vals)) for pair, vals in pair_timeseries.items()}
-
-    # Temporal autocorrelation (lag-1)
-    temporal_correlations = {}
-    for pair, values in pair_timeseries.items():
-        if len(values) > 2:
-            vals = np.array(values)
-            corr = np.corrcoef(vals[:-1], vals[1:])[0, 1]
-            temporal_correlations[pair] = float(corr) if not np.isnan(corr) else 0.0
-        else:
-            temporal_correlations[pair] = 0.0
-
-    # Rankings by mean ΔMI_sector
-    sorted_pairs = sorted(pair_means.items(), key=lambda x: -x[1])
-    pair_rankings = {pair: rank + 1 for rank, (pair, _) in enumerate(sorted_pairs)}
-
-    result = RotationAnalysisResult(
-        hours=hours,
-        n_points=len(timestamps),
-        cadence_minutes=cadence_minutes,
-        start_time=start_time_str,
-        end_time=end_time.isoformat(),
-        pair_timeseries=pair_timeseries,
-        pair_means=pair_means,
-        pair_stds=pair_stds,
-        temporal_correlations=temporal_correlations,
-        pair_rankings=pair_rankings
+    # Same computation as the per-timepoint interim results
+    result = _compute_interim_result(
+        pair_timeseries, timestamps, hours, cadence_minutes,
+        start_time_str, end_time.isoformat()
     )
 
     # Save results
@@ -1295,8 +1301,16 @@ class SegmentResult:
     pair_stds: Dict[str, float]
 
 
-def _load_partial_checkpoint(partial_file: Path) -> Tuple[Dict[str, List[float]], List[str], int]:
-    """Load partial day checkpoint if exists."""
+def _load_partial_checkpoint(
+    partial_file: Path
+) -> Tuple[Dict[str, List[float]], List[str], int, List[int]]:
+    """Load partial day checkpoint if exists.
+
+    Returns:
+        (pair_values, timestamps, last_index, failed_indices)
+        failed_indices lists timepoint indices that failed previously and
+        should be retried on resume (empty for old-format checkpoints).
+    """
     if partial_file.exists():
         try:
             with open(partial_file) as f:
@@ -1304,27 +1318,30 @@ def _load_partial_checkpoint(partial_file: Path) -> Tuple[Dict[str, List[float]]
             return (
                 data.get("pair_values", {}),
                 data.get("timestamps", []),
-                data.get("last_index", 0)
+                data.get("last_index", 0),
+                data.get("failed_indices", [])
             )
-        except Exception:
-            pass
-    return {}, [], 0
+        except Exception as e:
+            print(f"  ⚠️  Could not load partial checkpoint {partial_file}: {e}")
+            print(f"     Restarting this segment from the beginning")
+    return {}, [], 0, []
 
 
 def _save_partial_checkpoint(
     partial_file: Path,
     pair_values: Dict[str, List[float]],
     timestamps: List[str],
-    last_index: int
+    last_index: int,
+    failed_indices: Optional[List[int]] = None
 ) -> None:
-    """Save partial day checkpoint."""
+    """Save partial day checkpoint (atomic write)."""
     data = {
         "pair_values": pair_values,
         "timestamps": timestamps,
-        "last_index": last_index
+        "last_index": last_index,
+        "failed_indices": sorted(failed_indices) if failed_indices else []
     }
-    with open(partial_file, "w") as f:
-        json.dump(data, f)
+    _atomic_write_json(partial_file, data)
 
 
 def run_segment_analysis(
@@ -1373,22 +1390,28 @@ def run_segment_analysis(
     partial_file = out_path / f"{date}.partial.json"
     pair_keys = [f"{a}-{b}" for a, b in combinations(WAVELENGTHS, 2)]
 
-    pair_values, timestamps, start_index = _load_partial_checkpoint(partial_file)
+    pair_values, timestamps, start_index, failed_list = _load_partial_checkpoint(partial_file)
+    failed_indices = set(failed_list)
 
     # Initialize missing pair keys
     if not pair_values:
         pair_values = {key: [] for key in pair_keys}
 
     if start_index > 0 and verbose:
-        print(f"\n  📅 Segment {date}: resuming from {start_index}/{n_points}")
+        retry_info = f" (+{len(failed_indices)} failed to retry)" if failed_indices else ""
+        print(f"\n  📅 Segment {date}: resuming from {start_index}/{n_points}{retry_info}")
     elif verbose:
         print(f"\n  📅 Segment {date}: {n_points} timepoints")
 
     failed_count = 0
 
-    # Analyze each timepoint (starting from checkpoint)
-    t = start_time + timedelta(minutes=cadence_minutes * start_index)
-    for i in range(start_index, n_points):
+    # Analyze each timepoint: everything from start_index onwards,
+    # plus previously failed indices (retry instead of skipping forever)
+    for i in range(n_points):
+        if i < start_index and i not in failed_indices:
+            continue
+
+        t = start_time + timedelta(minutes=cadence_minutes * i)
         timestamp = t.isoformat()
 
         if verbose:
@@ -1410,32 +1433,38 @@ def run_segment_analysis(
 
             timestamps.append(timestamp)
             failed_count = 0
+            failed_indices.discard(i)  # Successful retry
 
             if verbose:
                 print("✓")
 
             # Save partial checkpoint every 5 successful timepoints
             if (len(timestamps) % 5) == 0:
-                _save_partial_checkpoint(partial_file, pair_values, timestamps, i + 1)
+                _save_partial_checkpoint(
+                    partial_file, pair_values, timestamps, max(i + 1, start_index),
+                    sorted(failed_indices)
+                )
 
             # Garbage Collection
             if (i + 1) % 10 == 0:
                 gc.collect()
         else:
             failed_count += 1
+            failed_indices.add(i)  # Remember for retry on resume
             if verbose:
                 print("⚠️")
 
             # Save checkpoint on failure too (to preserve progress)
             if len(timestamps) > 0:
-                _save_partial_checkpoint(partial_file, pair_values, timestamps, i + 1)
+                _save_partial_checkpoint(
+                    partial_file, pair_values, timestamps, max(i + 1, start_index),
+                    sorted(failed_indices)
+                )
 
             if failed_count >= 10:
                 if verbose:
                     print(f"    ✗ Abort: 10 consecutive failures (progress saved)")
                 return None  # Return None but progress is saved
-
-        t += timedelta(minutes=cadence_minutes)
 
     # No data?
     if not timestamps:
@@ -1491,15 +1520,31 @@ def save_segment(result: SegmentResult, path: Path) -> None:
         "pair_means": result.pair_means,
         "pair_stds": result.pair_stds
     }
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2)
+    _atomic_write_json(path, data, indent=2)
 
 
 def load_segment(path: Path) -> SegmentResult:
-    """Loads a segment from JSON."""
-    with open(path) as f:
-        data = json.load(f)
-    return SegmentResult(**data)
+    """Loads a segment from JSON.
+
+    Raises:
+        ValueError: If the file is not valid JSON or misses required keys
+                    (with the filename in the message).
+    """
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Corrupt segment file {path}: {e}") from e
+
+    required = {f.name for f in fields(SegmentResult)}
+    if not isinstance(data, dict):
+        raise ValueError(f"Segment file {path}: expected JSON object, got {type(data).__name__}")
+    missing = required - set(data)
+    if missing:
+        raise ValueError(f"Segment file {path} is missing required keys: {sorted(missing)}")
+
+    # Ignore unknown keys (forward compatibility)
+    return SegmentResult(**{k: v for k, v in data.items() if k in required})
 
 
 def aggregate_segments(
@@ -1522,8 +1567,11 @@ def aggregate_segments(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # Find all segment files
-    segment_files = sorted(seg_path.glob("*.json"))
+    # Find all segment files (exclude intra-day partial checkpoints)
+    segment_files = sorted(
+        f for f in seg_path.glob("*.json")
+        if not f.name.endswith(".partial.json")
+    )
 
     if not segment_files:
         if verbose:
@@ -1533,13 +1581,22 @@ def aggregate_segments(
     if verbose:
         print(f"\n  📊 Aggregating {len(segment_files)} segments...")
 
-    # Load all segments
+    # Load all segments (skip corrupt/foreign files with a warning)
     segments: List[SegmentResult] = []
     for sf in segment_files:
-        seg = load_segment(sf)
+        try:
+            seg = load_segment(sf)
+        except ValueError as e:
+            print(f"    ⚠️  Skipping {sf.name}: {e}")
+            continue
         segments.append(seg)
         if verbose:
             print(f"    ✓ {seg.date}: {seg.n_points} points")
+
+    if not segments:
+        if verbose:
+            print("  ✗ No valid segments found")
+        return None
 
     # Combine data
     all_timestamps: List[str] = []
@@ -1554,8 +1611,20 @@ def aggregate_segments(
             pair_timeseries[(a, b)].extend(values)
 
     # Calculate total statistics
-    total_hours = len(segments) * 24
     cadence = segments[0].cadence_minutes if segments else 12
+
+    # Total hours from actual timestamps (segments may have gaps/partial days)
+    if all_timestamps:
+        try:
+            ts_parsed = [
+                datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                for ts in all_timestamps
+            ]
+            total_hours = (max(ts_parsed) - min(ts_parsed)).total_seconds() / 3600.0
+        except (ValueError, TypeError):
+            total_hours = float(len(segments) * 24)  # Fallback
+    else:
+        total_hours = 0.0
 
     # Create RotationAnalysisResult
     pair_means = {pair: float(np.mean(vals)) if vals else 0.0
@@ -1563,16 +1632,27 @@ def aggregate_segments(
     pair_stds = {pair: float(np.std(vals)) if vals else 0.0
                  for pair, vals in pair_timeseries.items()}
 
-    # Autocorrelation
+    # Lag-1 autocorrelation, computed per segment to avoid pairing values
+    # across segment boundaries/gaps; combined as weighted mean (weight = n-1 lags)
     temporal_correlations = {}
-    for pair, vals in pair_timeseries.items():
-        if len(vals) > 1:
-            arr = np.array(vals)
-            if np.std(arr) > 0:
-                corr = np.corrcoef(arr[:-1], arr[1:])[0, 1]
-                temporal_correlations[pair] = float(corr) if not np.isnan(corr) else 0.0
-            else:
-                temporal_correlations[pair] = 0.0
+    for pair in pair_timeseries:
+        key = f"{pair[0]}-{pair[1]}"
+        seg_corrs: List[float] = []
+        seg_weights: List[int] = []
+        for seg in segments:
+            vals = seg.pair_values.get(key, [])
+            if len(vals) > 2:
+                arr = np.array(vals)
+                if np.std(arr) > 0:
+                    # errstate: near-constant segments can still hit 0/0 inside
+                    # corrcoef (float rounding); NaN results are discarded below
+                    with np.errstate(invalid='ignore', divide='ignore'):
+                        corr = np.corrcoef(arr[:-1], arr[1:])[0, 1]
+                    if not np.isnan(corr):
+                        seg_corrs.append(float(corr))
+                        seg_weights.append(len(vals) - 1)
+        if seg_corrs:
+            temporal_correlations[pair] = float(np.average(seg_corrs, weights=seg_weights))
         else:
             temporal_correlations[pair] = 0.0
 

@@ -54,7 +54,7 @@ def plot_null_model_decomposition(
     """
     import matplotlib.pyplot as plt
 
-    # Load control test data if available, otherwise use representative values
+    # Fallback: representative example values (used only if no results found)
     mi_values = {
         'Global\nShuffle': 0.024,
         'Ring\nShuffle': 0.561,
@@ -62,7 +62,8 @@ def plot_null_model_decomposition(
         'Original': 0.736,
     }
 
-    # Standard deviations (representative)
+    # Standard deviations: representative example values, only shown in
+    # schematic mode (no measured stds are stored in controls_summary.json)
     mi_std = {
         'Global\nShuffle': 0.008,
         'Ring\nShuffle': 0.045,
@@ -71,20 +72,50 @@ def plot_null_model_decomposition(
     }
 
     # Try to load real data
+    is_schematic = True       # No measured values loaded at all
+    sector_estimated = False  # Sector value derived, not directly measured
     if results_dir:
-        controls_path = Path(results_dir).parent / "real_run" / "controls_summary.json"
+        real_run_dir = Path(results_dir).parent / "real_run"
+        controls_path = real_run_dir / "controls_summary.json"
         if controls_path.exists():
             with open(controls_path) as f:
                 controls = json.load(f)
-                mi_values['Original'] = controls['c1_time_shift']['mi_original']
-                mi_values['Ring\nShuffle'] = controls['c2_ring_shuffle']['mi_ring_shuffled']
-                mi_values['Global\nShuffle'] = controls['c2_ring_shuffle']['mi_global_shuffled']
-                # Sector shuffle estimated from delta_mi_sector
-                mi_values['Sector\nShuffle'] = mi_values['Original'] - 0.17
+            mi_values['Original'] = controls['c1_time_shift']['mi_original']
+            mi_values['Ring\nShuffle'] = controls['c2_ring_shuffle']['mi_ring_shuffled']
+            mi_values['Global\nShuffle'] = controls['c2_ring_shuffle']['mi_global_shuffled']
+            is_schematic = False
+
+            if 'c2_sector_shuffle' in controls:
+                mi_values['Sector\nShuffle'] = controls['c2_sector_shuffle']['mi_sector_shuffled']
+            else:
+                # No directly measured sector-shuffle MI available:
+                # estimate from mean ΔMI_sector in run_metadata.json if present
+                sector_estimated = True
+                delta_sector = None
+                metadata_path = real_run_dir / "run_metadata.json"
+                if metadata_path.exists():
+                    try:
+                        with open(metadata_path) as f:
+                            run_meta = json.load(f)
+                        delta_sector = run_meta.get("summary", {}).get("mean_delta_mi_sector")
+                    except (json.JSONDecodeError, OSError):
+                        delta_sector = None
+                if delta_sector is None:
+                    delta_sector = 0.17  # Documented fallback constant
+                mi_values['Sector\nShuffle'] = mi_values['Original'] - delta_sector
+
+    if is_schematic:
+        print("  WARNING: No controls_summary.json found - "
+              "figure 3 uses SCHEMATIC example values, not measured data")
+    elif sector_estimated:
+        print("  Note: Sector shuffle MI in figure 3 is estimated "
+              "(Original - mean delta_mi_sector), not directly measured")
 
     labels = list(mi_values.keys())
     values = list(mi_values.values())
-    errors = list(mi_std.values())
+    # Error bars only in schematic mode (representative example spread);
+    # measured runs store single values without stds
+    errors = list(mi_std.values()) if is_schematic else None
 
     # Colors: gradient from light to dark
     colors = ['#bdc3c7', '#95a5a6', '#7f8c8d', '#2c3e50']
@@ -148,8 +179,12 @@ def plot_null_model_decomposition(
                label=f'ΔMI_sector = {values[3] - values[2]:.2f} bits')
     ax.legend(loc='upper left', fontsize=10)
 
-    ax.set_title('Null Model Decomposition of Mutual Information',
-                fontsize=13, fontweight='bold')
+    title = 'Null Model Decomposition of Mutual Information'
+    if is_schematic:
+        title += '\nSchematic illustration (synthetic example values, no measured data)'
+    elif sector_estimated:
+        title += '\n(Sector shuffle estimated from mean ΔMI_sector)'
+    ax.set_title(title, fontsize=13, fontweight='bold')
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
@@ -164,71 +199,108 @@ def plot_spatial_distribution(
     """Figure 2: Spatial MI maps showing localized coupling.
 
     Shows 8x8 grid of MI values before and after geometric normalization.
+
+    Loads measured maps from results/real_run/spatial_maps.json if available.
+    If no machine-readable data exists, renders a clearly labeled SCHEMATIC
+    figure with synthetic example data.
     """
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     from matplotlib.patches import Circle
 
-    # Try to load real spatial data, otherwise use representative values
-    # Based on results/real_run/spatial_maps.txt statistics
-    np.random.seed(42)
+    # Try to load measured spatial data (machine-readable JSON from real_run)
+    original_mi = None
+    residual_mi = None
+    hotspots = None
+    is_schematic = True
 
-    # Create representative 8x8 grids based on observed statistics
-    # Original: mean=1.472, std=0.453, range=[0.524, 2.154]
-    # Residual: mean=0.765, std=0.337, range=[0.185, 1.412]
+    if results_dir:
+        spatial_json = Path(results_dir).parent / "real_run" / "spatial_maps.json"
+        if spatial_json.exists():
+            try:
+                with open(spatial_json) as f:
+                    spatial = json.load(f)
+                original_mi = np.array(spatial["original_map"], dtype=float)
+                residual_mi = np.array(spatial["residual_map"], dtype=float)
+                hotspots = [tuple(idx) for idx, _ in spatial.get("top_5_hotspots", [])]
+                is_schematic = False
+                print(f"  Loaded measured spatial MI maps from {spatial_json}")
+            except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
+                print(f"  Warning: could not load {spatial_json}: {e}")
+                original_mi = None
+                residual_mi = None
 
-    # Original MI map - shows strong limb brightening pattern
-    y, x = np.ogrid[:8, :8]
-    center = 3.5
-    r = np.sqrt((x - center)**2 + (y - center)**2)
-    r_normalized = r / r.max()
+    if original_mi is None:
+        # SCHEMATIC fallback: synthetic example data, clearly labeled as such.
+        print("  WARNING: No machine-readable spatial data found "
+              "(results/real_run/spatial_maps.json missing) - "
+              "figure 2 is a SCHEMATIC ILLUSTRATION with synthetic example data")
+        np.random.seed(42)
 
-    # Limb brightening: higher MI at edges
-    original_mi = 0.8 + 1.2 * r_normalized + 0.3 * np.random.randn(8, 8)
-    original_mi = np.clip(original_mi, 0.5, 2.2)
+        # Synthetic 8x8 grids mimicking typical statistics
+        y, x = np.ogrid[:8, :8]
+        center = 3.5
+        r = np.sqrt((x - center)**2 + (y - center)**2)
+        r_normalized = r / r.max()
 
-    # Residual MI map - limb bias removed, shows localized hotspots
-    residual_mi = 0.4 + 0.3 * np.random.randn(8, 8)
-    # Add hotspots at active region locations
-    residual_mi[0, 7] = 1.41  # Hotspot 1
-    residual_mi[2, 2] = 1.33  # Hotspot 2
-    residual_mi[0, 0] = 1.32  # Hotspot 3
-    residual_mi[7, 7] = 1.27  # Hotspot 4
-    residual_mi[0, 1] = 1.26  # Hotspot 5
-    residual_mi = np.clip(residual_mi, 0.18, 1.42)
+        # Limb brightening: higher MI at edges
+        original_mi = 0.8 + 1.2 * r_normalized + 0.3 * np.random.randn(8, 8)
+        original_mi = np.clip(original_mi, 0.5, 2.2)
+
+        # Residual map with hand-placed example hotspots
+        residual_mi = 0.4 + 0.3 * np.random.randn(8, 8)
+        residual_mi[0, 7] = 1.41
+        residual_mi[2, 2] = 1.33
+        residual_mi[0, 0] = 1.32
+        residual_mi[7, 7] = 1.27
+        residual_mi[0, 1] = 1.26
+        residual_mi = np.clip(residual_mi, 0.18, 1.42)
+        hotspots = [(0, 7), (2, 2), (0, 0), (7, 7), (0, 1)]
+
+    n_rows, n_cols = original_mi.shape
 
     # Create figure with space for colorbar
     fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
     plt.subplots_adjust(right=0.88, top=0.88, wspace=0.25)
 
-    # Common colormap settings
+    # Common colormap settings (NaN-safe)
     cmap = 'YlOrRd'
-    vmax = max(original_mi.max(), residual_mi.max())
+    vmax = max(np.nanmax(original_mi), np.nanmax(residual_mi))
+
+    center_x = (n_cols - 1) / 2
+    center_y = (n_rows - 1) / 2
+    disk_radius = min(n_rows, n_cols) / 2 - 0.2
+
+    schematic_suffix = ' — schematic example' if is_schematic else ''
 
     # Left: Original MI
     ax1 = axes[0]
     im1 = ax1.imshow(original_mi, cmap=cmap, vmin=0, vmax=vmax, aspect='equal')
 
     # Add grid lines
-    for i in range(9):
+    for i in range(max(n_rows, n_cols) + 1):
         ax1.axhline(i - 0.5, color='white', linewidth=0.5, alpha=0.5)
         ax1.axvline(i - 0.5, color='white', linewidth=0.5, alpha=0.5)
 
     # Add values
-    for i in range(8):
-        for j in range(8):
+    for i in range(n_rows):
+        for j in range(n_cols):
+            if np.isnan(original_mi[i, j]):
+                continue
             color = 'white' if original_mi[i, j] > 1.2 else 'black'
             ax1.text(j, i, f'{original_mi[i, j]:.2f}', ha='center', va='center',
                     fontsize=8, color=color)
 
-    ax1.set_title('Original MI (193-211 Å)', fontsize=12, fontweight='bold')
+    ax1.set_title(f'Original MI (193-211 Å){schematic_suffix}',
+                  fontsize=12, fontweight='bold')
     ax1.set_xlabel('Grid Column', fontsize=10)
     ax1.set_ylabel('Grid Row', fontsize=10)
-    ax1.set_xticks(range(8))
-    ax1.set_yticks(range(8))
+    ax1.set_xticks(range(n_cols))
+    ax1.set_yticks(range(n_rows))
 
     # Add disk outline
-    circle1 = Circle((3.5, 3.5), 3.8, fill=False, color='cyan', linewidth=2, linestyle='--')
+    circle1 = Circle((center_x, center_y), disk_radius, fill=False, color='cyan',
+                     linewidth=2, linestyle='--')
     ax1.add_patch(circle1)
 
     # Right: Residual MI
@@ -236,30 +308,33 @@ def plot_spatial_distribution(
     im2 = ax2.imshow(residual_mi, cmap=cmap, vmin=0, vmax=vmax, aspect='equal')
 
     # Add grid lines
-    for i in range(9):
+    for i in range(max(n_rows, n_cols) + 1):
         ax2.axhline(i - 0.5, color='white', linewidth=0.5, alpha=0.5)
         ax2.axvline(i - 0.5, color='white', linewidth=0.5, alpha=0.5)
 
     # Add values
-    for i in range(8):
-        for j in range(8):
+    for i in range(n_rows):
+        for j in range(n_cols):
+            if np.isnan(residual_mi[i, j]):
+                continue
             color = 'white' if residual_mi[i, j] > 1.2 else 'black'
             ax2.text(j, i, f'{residual_mi[i, j]:.2f}', ha='center', va='center',
                     fontsize=8, color=color)
 
-    ax2.set_title('Residual MI (after normalization)', fontsize=12, fontweight='bold')
+    ax2.set_title(f'Residual MI (after normalization){schematic_suffix}',
+                  fontsize=12, fontweight='bold')
     ax2.set_xlabel('Grid Column', fontsize=10)
     ax2.set_ylabel('Grid Row', fontsize=10)
-    ax2.set_xticks(range(8))
-    ax2.set_yticks(range(8))
+    ax2.set_xticks(range(n_cols))
+    ax2.set_yticks(range(n_rows))
 
     # Add disk outline
-    circle2 = Circle((3.5, 3.5), 3.8, fill=False, color='cyan', linewidth=2, linestyle='--')
+    circle2 = Circle((center_x, center_y), disk_radius, fill=False, color='cyan',
+                     linewidth=2, linestyle='--')
     ax2.add_patch(circle2)
 
-    # Mark hotspots
-    hotspots = [(0, 7), (2, 2), (0, 0), (7, 7), (0, 1)]
-    for idx, (row, col) in enumerate(hotspots[:3]):
+    # Mark top hotspots
+    for row, col in (hotspots or [])[:3]:
         ax2.plot(col, row, 'c*', markersize=15, markeredgecolor='white', markeredgewidth=1)
 
     # Colorbar - positioned manually to avoid overlap
@@ -268,11 +343,18 @@ def plot_spatial_distribution(
     cbar.set_label('Mutual Information (bits)', fontsize=10)
 
     # Main title
-    fig.suptitle(
-        'Spatial Distribution of Mutual Information\n'
-        '(Limb bias removed after geometric normalization)',
-        fontsize=13, fontweight='bold'
-    )
+    if is_schematic:
+        fig.suptitle(
+            'Spatial Distribution of Mutual Information\n'
+            'SCHEMATIC ILLUSTRATION (synthetic example data — no measured maps available)',
+            fontsize=13, fontweight='bold', color='#c0392b'
+        )
+    else:
+        fig.suptitle(
+            'Spatial Distribution of Mutual Information\n'
+            '(Limb bias removed after geometric normalization)',
+            fontsize=13, fontweight='bold'
+        )
 
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
@@ -970,10 +1052,15 @@ def plot_stereo_validation(
     ax_c.legend(loc='upper left', fontsize=8)
     ax_c.grid(True, alpha=0.3)
 
-    # Add correlation annotation
-    ax_c.text(0.95, 0.05, f'ρ = {correlation:.3f}\n(p < 0.05)',
+    # Add correlation annotation.
+    # No p-value is quoted: with only n=3 directly comparable pairs in this
+    # panel a significance claim is not meaningful, so we state the rank
+    # correlation and the panel sample size only.
+    n_common = len(common_pairs)
+    ax_c.text(0.95, 0.05,
+              f'ρ = {correlation:.3f} (rank corr.)\n{n_common} pairs shown, no p-value',
               transform=ax_c.transAxes, ha='right', va='bottom',
-              fontsize=12, fontweight='bold', color='#27ae60',
+              fontsize=11, fontweight='bold', color='#27ae60',
               bbox=dict(boxstyle='round', facecolor='#e8f8f5', edgecolor='#27ae60', alpha=0.9))
 
     ax_c.set_title('(c) Cross-Instrument ΔMI_sector Comparison', fontsize=12, fontweight='bold')
