@@ -82,8 +82,7 @@ def compute_histogram_2d(
     y_bins = np.clip((y_norm * bins).astype(int), 0, bins - 1)
     
     # 2D histogram (faster variant with bincount)
-    hist = np.zeros((bins, bins), dtype=np.float64)
-    indices = x_bins.ravel() * bins + y_bins.ravel()
+    indices = (x_bins * bins + y_bins).ravel()
     counts = np.bincount(indices, minlength=bins * bins)
     hist = counts.reshape((bins, bins)).astype(np.float64)
     

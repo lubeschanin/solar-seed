@@ -93,8 +93,12 @@ def compute_z_score(
         Z-score (standard deviations above null model)
     """
     if mi_null_std < 1e-10:
-        return float('inf') if mi_real > mi_null_mean else 0.0
-    
+        if mi_real > mi_null_mean:
+            return float('inf')
+        elif mi_real < mi_null_mean:
+            return float('-inf')
+        return 0.0
+
     return (mi_real - mi_null_mean) / mi_null_std
 
 
@@ -105,20 +109,23 @@ def compute_p_value(
     """
     Computes empirical p-value.
 
-    p = proportion of null MI values >= MI_real
+    p = (k + 1) / (n + 1), where k is the number of null MI values >= MI_real.
+
+    The +1 correction (Phipson & Smyth 2010) ensures a permutation test
+    never returns p = 0: the smallest possible p is 1 / (n_shuffles + 1).
 
     Args:
         mi_real: Observed MI
         mi_null_distribution: List of MI values from null model
 
     Returns:
-        p-value (one-sided, right-tailed)
+        p-value (one-sided, right-tailed), always > 0
     """
     if not mi_null_distribution:
         return 1.0
-    
+
     n_greater = sum(1 for mi in mi_null_distribution if mi >= mi_real)
-    return n_greater / len(mi_null_distribution)
+    return (n_greater + 1) / (len(mi_null_distribution) + 1)
 
 
 def interpret_result(

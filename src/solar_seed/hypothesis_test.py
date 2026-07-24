@@ -69,6 +69,7 @@ class TestResult:
     mi_null_std: float
     z_score: float
     p_value: float
+    p_value_normal_approx: float
     status: str
     interpretation: str
 
@@ -112,25 +113,28 @@ def run_single_test(
     
     # Null model
     print(f"  🎲 Null model ({config.n_shuffles} shuffles)...")
-    mi_null_mean, mi_null_std, _ = compute_null_distribution(
-        data_1, data_2, 
-        n_shuffles=config.n_shuffles, 
+    mi_null_mean, mi_null_std, mi_null_dist = compute_null_distribution(
+        data_1, data_2,
+        n_shuffles=config.n_shuffles,
         bins=config.n_bins,
         seed=config.seed,
         verbose=True
     )
     print(f"     MI_null  = {mi_null_mean:.6f} ± {mi_null_std:.6f}")
-    
+
     # Statistics
     z_score = compute_z_score(mi_real, mi_null_mean, mi_null_std)
-    p_value = compute_p_value(mi_real, [])  # Simplified
-    
-    # Empirical p-value from Z-score (normal approximation)
+
+    # Primary: empirical p-value with (k+1)/(n+1) correction (Phipson & Smyth)
+    p_value = compute_p_value(mi_real, mi_null_dist)
+
+    # Secondary: normal approximation from Z-score (for reference)
     from math import erfc, sqrt
-    p_value = 0.5 * erfc(z_score / sqrt(2)) if z_score > 0 else 1.0
+    p_value_normal_approx = 0.5 * erfc(z_score / sqrt(2))
 
     print(f"  📈 Z-Score  = {z_score:.2f}")
-    print(f"     p-value  = {p_value:.4f}")
+    print(f"     p-value  = {p_value:.4f} (empirical, min = {1/(len(mi_null_dist)+1):.4f})")
+    print(f"     p-value  = {p_value_normal_approx:.4g} (normal approx.)")
     
     status, interpretation = interpret_result(z_score, p_value)
     print(f"     Status   = {status}")
@@ -143,6 +147,7 @@ def run_single_test(
         mi_null_std=mi_null_std,
         z_score=z_score,
         p_value=p_value,
+        p_value_normal_approx=p_value_normal_approx,
         status=status,
         interpretation=interpretation
     )

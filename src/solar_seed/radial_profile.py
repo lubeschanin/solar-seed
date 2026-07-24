@@ -94,15 +94,19 @@ def compute_radial_profile(
     bin_edges = np.linspace(0, max_radius, n_bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-    # Calculate mean per bin
-    intensities = np.zeros(n_bins, dtype=np.float64)
-    counts = np.zeros(n_bins, dtype=np.int64)
+    # Calculate mean per bin (vectorized via digitize + bincount)
+    # digitize with right-open intervals matches the previous per-bin masks
+    # (r >= bin_edges[i]) & (r < bin_edges[i+1]); pixels with r >= max_radius
+    # fall outside all bins and are excluded, exactly as before.
+    idx = np.digitize(r.ravel(), bin_edges) - 1
+    valid = (idx >= 0) & (idx < n_bins)
+    idx_valid = idx[valid]
 
-    for i in range(n_bins):
-        mask = (r >= bin_edges[i]) & (r < bin_edges[i + 1])
-        counts[i] = mask.sum()
-        if counts[i] > 0:
-            intensities[i] = image[mask].mean()
+    counts = np.bincount(idx_valid, minlength=n_bins).astype(np.int64)
+    sums = np.bincount(
+        idx_valid, weights=image.ravel()[valid], minlength=n_bins
+    )
+    intensities = sums / np.maximum(counts, 1)
 
     return RadialProfile(
         radii=bin_centers,
@@ -135,8 +139,11 @@ def reconstruct_from_profile(
     y, x = np.ogrid[:shape[0], :shape[1]]
     r = np.sqrt((x - center_x)**2 + (y - center_y)**2)
 
-    # Bin edges
-    max_radius = profile.radii[-1] + (profile.radii[1] - profile.radii[0]) / 2
+    # Bin edges (bin centers are equidistant, first center = bin_width / 2)
+    if profile.n_bins > 1:
+        max_radius = profile.radii[-1] + (profile.radii[1] - profile.radii[0]) / 2
+    else:
+        max_radius = 2 * profile.radii[0]
     bin_width = max_radius / profile.n_bins
 
     # Assign each pixel to its bin

@@ -20,7 +20,10 @@ from scipy import ndimage
 from solar_seed.mutual_info import mutual_information
 from solar_seed.radial_profile import (
     prepare_pair_for_residual_mi,
-    find_disk_center
+    find_disk_center,
+    compute_radial_profile,
+    reconstruct_from_profile,
+    compute_residual
 )
 
 
@@ -106,7 +109,21 @@ class RingShuffleResult:
     mi_global_shuffled: float
     ring_reduction_percent: float
     global_reduction_percent: float
-    ring_stronger: bool  # True if ring-shuffle reduces more
+    ring_stronger: bool  # True if ring-shuffle reduces more (normally False)
+
+    @property
+    def hierarchy_confirmed(self) -> bool:
+        """Shuffle hierarchy holds: MI_global <= MI_ring <= MI_original.
+
+        Global shuffle destroys the most structure (lowest MI), ring shuffle
+        preserves radial statistics (intermediate MI). Small tolerance for
+        numerical noise.
+        """
+        tol = 1e-9
+        return (
+            self.mi_global_shuffled <= self.mi_ring_shuffled + tol and
+            self.mi_ring_shuffled <= self.mi_original + tol
+        )
 
 
 @dataclass
@@ -122,9 +139,23 @@ class SectorRingShuffleResult:
     global_reduction_percent: float
 
     # What explains what?
-    radial_contribution: float  # MI_global - MI_ring
-    azimuthal_contribution: float  # MI_ring - MI_sector
-    local_structure: float  # MI_sector (what remains after everything)
+    radial_contribution: float  # MI_ring - MI_global
+    azimuthal_contribution: float  # MI_sector - MI_ring
+    local_structure: float  # MI_original - MI_sector (what remains after everything)
+
+    @property
+    def hierarchy_confirmed(self) -> bool:
+        """Shuffle hierarchy holds: MI_global <= MI_ring <= MI_sector <= MI_original.
+
+        Each shuffle level preserves more structure than the previous one,
+        so MI must increase monotonically. Small tolerance for numerical noise.
+        """
+        tol = 1e-9
+        return (
+            self.mi_global_shuffled <= self.mi_ring_shuffled + tol and
+            self.mi_ring_shuffled <= self.mi_sector_shuffled + tol and
+            self.mi_sector_shuffled <= self.mi_original + tol
+        )
 
 
 def create_radial_bins(
@@ -200,8 +231,9 @@ def ring_wise_shuffle_test(
     Compares ring-shuffle with global shuffle.
     Ring-shuffle preserves radial statistics but destroys azimuthal structure.
 
-    Expectation: Ring-shuffle reduces MI more than global shuffle,
-    because it specifically destroys structural correlation.
+    Expectation: Global shuffle destroys MORE MI than ring-shuffle, because
+    it additionally destroys the radial statistics that ring-shuffle preserves
+    (MI_global <= MI_ring). `ring_stronger` is therefore normally False.
 
     Args:
         image_1: First image
@@ -402,7 +434,8 @@ def sector_ring_shuffle_test(
     # Analyze contributions
     # MI_global is baseline (nearly 0)
     # MI_ring - MI_global = radial contribution
-    # MI_sector - MI_ring = azimuthal contribution (negative, since ring > sector)
+    # MI_sector - MI_ring = azimuthal contribution (>= 0, since sector-shuffle
+    #                        preserves more structure than ring-shuffle)
     # MI_original - MI_sector = local structure
     radial_contribution = mi_ring_shuffled - mi_global_shuffled
     azimuthal_contribution = mi_sector_shuffled - mi_ring_shuffled
@@ -591,15 +624,34 @@ def co_alignment_check(
     n_shifts = 2 * max_offset + 1
     mi_map = np.zeros((n_shifts, n_shifts), dtype=np.float64)
 
+    # Fixed shared center from the unshifted pair; image_1's residual is
+    # computed once and reused for all shifts. The centroid change caused by
+    # shifting image_2 by +/-max_offset px is negligible: MI at (0,0) is
+    # bit-identical to the previous per-shift recomputation, off-center values
+    # differ only by a few percent (the old code re-derived the center from
+    # the shifted image, partly compensating the very misalignment under test)
+    # and the location of the maximum is unaffected.
+    center_1 = find_disk_center(image_1)
+    center_2 = find_disk_center(image_2)
+    center = (
+        (center_1[0] + center_2[0]) / 2,
+        (center_1[1] + center_2[1]) / 2
+    )
+
+    profile_1 = compute_radial_profile(image_1, center=center)
+    model_1 = reconstruct_from_profile(profile_1, image_1.shape)
+    res_1 = compute_residual(image_1, model_1)
+
     for dy in range(-max_offset, max_offset + 1):
         for dx in range(-max_offset, max_offset + 1):
             # Shift image 2
             image_2_shifted = shift_image(image_2, (dy, dx))
 
-            # Calculate Residual-MI
-            res_1, res_2, _ = prepare_pair_for_residual_mi(
-                image_1, image_2_shifted
-            )
+            # Residualize only image 2 (image 1's residual is cached)
+            profile_2 = compute_radial_profile(image_2_shifted, center=center)
+            model_2 = reconstruct_from_profile(profile_2, image_2_shifted.shape)
+            res_2 = compute_residual(image_2_shifted, model_2)
+
             mi = mutual_information(res_1, res_2, bins=bins)
 
             # Store in map
@@ -646,6 +698,7 @@ class AllControlsResult:
         """All controls passed?"""
         return (
             self.c1_time_shift.passed and
+            self.c2_ring_shuffle.hierarchy_confirmed and
             self.c3_blur_match.stable and
             self.c4_co_alignment.centered
         )
@@ -725,6 +778,7 @@ def print_control_results(result: AllControlsResult) -> None:
     # C2: Ring-Shuffle
     c2 = result.c2_ring_shuffle
     ring_vs_global = "more" if c2.ring_stronger else "less"
+    hierarchy_status = "CONFIRMED" if c2.hierarchy_confirmed else "VIOLATED"
     print(f"""  C2: RING-WISE SHUFFLE
   ─────────────────────────────────────────────────────────────────────
   Question: Is azimuthal structure more important than radial statistics?
@@ -734,6 +788,7 @@ def print_control_results(result: AllControlsResult) -> None:
     MI (global-shuffle): {c2.mi_global_shuffled:.4f} bits  (Reduction: {c2.global_reduction_percent:.1f}%)
 
     Ring-shuffle reduces {ring_vs_global} than global shuffle.
+    Hierarchy (global <= ring <= original): {hierarchy_status}
 """)
 
     # C3: Blur Matching
@@ -755,7 +810,8 @@ def print_control_results(result: AllControlsResult) -> None:
     # C4: Co-alignment
     c4 = result.c4_co_alignment
     status = "CENTERED" if c4.centered else f"OFFSET at {c4.max_shift}"
-    print(f"""  C4: CO-ALIGNMENT CHECK (+/-3 px)
+    max_offset = (c4.mi_map.shape[0] - 1) // 2
+    print(f"""  C4: CO-ALIGNMENT CHECK (+/-{max_offset} px)
   ─────────────────────────────────────────────────────────────────────
   Question: Is the spatial registration correct?
 
@@ -774,15 +830,19 @@ def print_control_results(result: AllControlsResult) -> None:
     chars = " .:+=*#"
 
     print("         dx")
-    print("       -3-2-1 0+1+2+3")
-    for i, dy in enumerate(range(-3, 4)):
+    header = "".join(
+        f"{dx:+d}" if dx != 0 else " 0"
+        for dx in range(-max_offset, max_offset + 1)
+    )
+    print("       " + header)
+    for i, dy in enumerate(range(-max_offset, max_offset + 1)):
         row = "    " + (f"{dy:+d} " if dy != 0 else " 0 ") + "|"
         for j in range(mi_map.shape[1]):
             val = (mi_map[i, j] - mi_min) / (mi_max - mi_min) if mi_max > mi_min else 0
             char_idx = int(val * (len(chars) - 1))
             row += chars[char_idx]
         # Mark maximum
-        if i == c4.max_shift[0] + 3:
+        if i == c4.max_shift[0] + max_offset:
             row += f"| <- max"
         else:
             row += "|"
