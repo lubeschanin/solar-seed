@@ -357,12 +357,14 @@ class TestCouplingMonitor:
 
     def test_transfer_state_detection(self, monitor):
         """Detect TRANSFER_STATE when 304 rises and 211 falls."""
-        # Add readings with diverging trends
+        # Add readings with diverging trends at realistic 10-min cadence
+        # (slope normalization uses the ACTUAL timestamp spacing)
         # 193-304: rising (0.07 -> 0.10)
         # 193-211: falling (0.59 -> 0.50)
         for i in range(8):
+            minutes = i * 10
             monitor.add_reading(
-                f"2026-01-01T{10+i}:00:00",
+                f"2026-01-01T{10 + minutes // 60}:{minutes % 60:02d}:00",
                 {
                     '193-304': {'delta_mi': 0.07 + i * 0.005},  # Rising
                     '193-211': {'delta_mi': 0.59 - i * 0.015}   # Falling

@@ -10,6 +10,10 @@ Physical thresholds and constants for anomaly detection.
 # Physical minimum thresholds to detect data errors BEFORE break detection.
 # ΔMI = 0.0 or very low values indicate data pipeline failures, not real breaks.
 
+# Fallback quality gate when no baseline is known for a pair.
+# When a baseline IS known, validate_mi_measurement uses the baseline-relative
+# threshold max(0.02, 0.3 * baseline_mean) instead - a fixed 0.05 would discard
+# genuine 193-304 breaks at 1k resolution (baseline 0.07 ± 0.02).
 MIN_MI_THRESHOLD = 0.05  # bits - below this is DATA_ERROR (not a real measurement)
 MIN_ROI_STD = 0.5        # DN - minimum std dev in residual ROI (after geometry subtraction)
 
@@ -305,9 +309,11 @@ def classify_phase_experimental(
                         if not p.startswith('_') and d.get('residual', 0) < -2)
 
     # Rule 1: ACTIVE - high GOES activity (ongoing energy release)
-    if goes_flux and goes_flux >= 1e-5:
+    # NOTE: 'is not None' instead of truthiness - flux 0.0 is a valid
+    # (quiet) measurement, not missing data.
+    if goes_flux is not None and goes_flux >= 1e-5:
         return Phase.ACTIVE, f"M/X-class active ({goes_class})"
-    if goes_flux and goes_flux >= 5e-6 and goes_rising:
+    if goes_flux is not None and goes_flux >= 5e-6 and goes_rising:
         return Phase.ACTIVE, f"C-class flare ({goes_class})"
 
     # Rule 2: PRE-FLARE - destabilization signature
@@ -318,7 +324,7 @@ def classify_phase_experimental(
 
     # Rule 3: POST-EVENT - GOES quiet but ΔMI still elevated (reorganizing)
     # Key hypothesis: we see magnetic restructuring that GOES doesn't
-    if goes_flux and goes_flux < 1e-6:  # GOES says quiet (B-class)
+    if goes_flux is not None and goes_flux < 1e-6:  # GOES says quiet (B-class or lower, incl. 0.0)
         if max_z > 5:
             # Identify trigger pair (which channel drives the anomaly)
             trigger_pair = "193-211" if abs(z_211) >= abs(z_304) else "193-304"
@@ -343,7 +349,7 @@ def classify_phase_experimental(
             return Phase.ELEVATED_QUIET, f"Active, {direction} trend ({max_z:.1f}σ)"
 
     # Rule 5: RECOVERY - decaying from elevated
-    if goes_flux and 1e-6 < goes_flux < 5e-6 and not goes_rising:
+    if goes_flux is not None and 1e-6 < goes_flux < 5e-6 and not goes_rising:
         return Phase.RECOVERY, f"Post-flare decay ({goes_class})"
 
     # Rule 6: BASELINE - thermal & structural quiet

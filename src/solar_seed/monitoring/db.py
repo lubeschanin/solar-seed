@@ -45,6 +45,48 @@ class MonitoringDB:
         self.conn.row_factory = sqlite3.Row  # Enable dict-like access
         # Enable foreign keys
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # WAL mode: readers don't block the writer and vice versa.
+        # Needed because cron jobs (import-flares, backfill, extract-predictions)
+        # and the monitor loop can access the DB concurrently.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        # Wait up to 30s for a lock instead of failing immediately
+        self.conn.execute("PRAGMA busy_timeout=30000")
+
+    @staticmethod
+    def _sql_dt(base: str = "'now'", offset: str = "?") -> str:
+        """Build a SQL datetime expression normalized to stored timestamp format.
+
+        Stored timestamps use the ISO 'T' separator ('YYYY-MM-DDTHH:MM:SS'),
+        but SQLite's datetime() emits a space separator. SQLite compares
+        datetimes as plain strings and ASCII 'T' > ' ', so an un-normalized
+        datetime() in a comparison silently shifts results.
+
+        Args:
+            base: SQL expression for the base time (default "'now'").
+            offset: SQL expression for the modifier (default '?' placeholder,
+                    bind e.g. '-24 hours' as a parameter).
+
+        Returns:
+            SQL snippet like "REPLACE(datetime('now', ?), ' ', 'T')".
+        """
+        return f"REPLACE(datetime({base}, {offset}), ' ', 'T')"
+
+    @staticmethod
+    def _add_missing_columns(cursor, table: str, columns: list) -> None:
+        """Add columns to a table if they don't exist yet (idempotent migration).
+
+        Checks PRAGMA table_info first instead of catching OperationalError,
+        so unrelated OperationalErrors (locked DB, malformed schema) are not
+        silently swallowed.
+
+        Args:
+            columns: list of (column_name, column_type_sql) tuples.
+        """
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cursor.fetchall()}
+        for col, dtype in columns:
+            if col not in existing:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {dtype}")
 
     def _create_tables(self):
         """Create database schema."""
@@ -331,26 +373,24 @@ class MonitoringDB:
             )
         """)
 
-        # Add new columns to existing table (migration for existing DBs)
-        try:
-            cursor.execute("ALTER TABLE phase_divergence ADD COLUMN divergence_type TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
-        try:
-            cursor.execute("ALTER TABLE phase_divergence ADD COLUMN goes_rising INTEGER")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE phase_divergence ADD COLUMN validated INTEGER")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE phase_divergence ADD COLUMN validation_type TEXT")
-        except sqlite3.OperationalError:
-            pass
+        # Add new columns to existing tables (migration for existing DBs).
+        # Missing columns are detected via PRAGMA table_info instead of
+        # swallowing OperationalErrors, so real errors (locked DB, malformed
+        # schema, typos) propagate instead of being silently ignored.
+        self._add_missing_columns(cursor, 'phase_divergence', [
+            ('divergence_type', 'TEXT'),
+            ('goes_rising', 'INTEGER'),
+            ('validated', 'INTEGER'),
+            ('validation_type', 'TEXT'),
+            # Trigger quality fields (v0.5)
+            ('trigger_was_vetoed', 'BOOLEAN'),
+            ('trigger_robustness_score', 'REAL'),
+            ('trigger_quality_ok', 'BOOLEAN'),
+            ('run_id', 'INTEGER'),
+        ])
 
         # Add new columns to coupling_measurements
-        for col, dtype in [
+        self._add_missing_columns(cursor, 'coupling_measurements', [
             ('sudden_drop_pct', 'REAL'),
             ('sudden_drop_severity', 'TEXT'),
             ('pipeline_version', 'TEXT'),
@@ -366,14 +406,10 @@ class MonitoringDB:
             ('resolution', 'TEXT'),           # '1k' or '4k'
             ('backfilled_at', 'DATETIME'),    # when 4k data was backfilled
             ('original_delta_mi', 'REAL'),    # original 1k value before backfill
-        ]:
-            try:
-                cursor.execute(f"ALTER TABLE coupling_measurements ADD COLUMN {col} {dtype}")
-            except sqlite3.OperationalError:
-                pass
+        ])
 
         # Add columns to predictions (v0.6 - enhanced prediction tracking)
-        for col, dtype in [
+        self._add_missing_columns(cursor, 'predictions', [
             ('pipeline_version', "TEXT DEFAULT 'v0.5'"),
             ('run_id', 'INTEGER'),
             ('issued_at', 'DATETIME'),
@@ -384,46 +420,24 @@ class MonitoringDB:
             ('trigger_kind', 'TEXT'),
             ('trigger_value', 'REAL'),
             ('trigger_threshold', 'REAL'),
-        ]:
-            try:
-                cursor.execute(f"ALTER TABLE predictions ADD COLUMN {col} {dtype}")
-            except sqlite3.OperationalError:
-                pass
+        ])
 
         # Migrate existing pair strings to pair_id (one-time migration)
-        try:
-            cursor.execute("""
-                UPDATE coupling_measurements
-                SET pair_id = (SELECT p.id FROM pairs p WHERE p.pair_name = coupling_measurements.pair)
-                WHERE pair_id IS NULL AND pair IS NOT NULL
-            """)
-        except sqlite3.OperationalError:
-            pass
+        cursor.execute("""
+            UPDATE coupling_measurements
+            SET pair_id = (SELECT p.id FROM pairs p WHERE p.pair_name = coupling_measurements.pair)
+            WHERE pair_id IS NULL AND pair IS NOT NULL
+        """)
 
         # Migrate predictions trigger_pair to trigger_pair_id
-        try:
-            cursor.execute("""
-                UPDATE predictions
-                SET trigger_pair_id = (SELECT p.id FROM pairs p WHERE p.pair_name = predictions.trigger_pair)
-                WHERE trigger_pair_id IS NULL AND trigger_pair IS NOT NULL
-            """)
-        except sqlite3.OperationalError:
-            pass
-
-        # Add trigger quality fields to phase_divergence (v0.5)
-        for col, dtype in [
-            ('trigger_was_vetoed', 'BOOLEAN'),
-            ('trigger_robustness_score', 'REAL'),
-            ('trigger_quality_ok', 'BOOLEAN'),
-            ('run_id', 'INTEGER'),
-        ]:
-            try:
-                cursor.execute(f"ALTER TABLE phase_divergence ADD COLUMN {col} {dtype}")
-            except sqlite3.OperationalError:
-                pass
+        cursor.execute("""
+            UPDATE predictions
+            SET trigger_pair_id = (SELECT p.id FROM pairs p WHERE p.pair_name = predictions.trigger_pair)
+            WHERE trigger_pair_id IS NULL AND trigger_pair IS NOT NULL
+        """)
 
         # Add new columns to noaa_alerts (migration for existing DBs)
-        noaa_new_cols = [
+        self._add_missing_columns(cursor, 'noaa_alerts', [
             ('message_code', 'TEXT'),
             ('kp_observed', 'REAL'),
             ('kp_predicted', 'REAL'),
@@ -435,25 +449,15 @@ class MonitoringDB:
             ('r_scale', 'INTEGER'),
             ('source_region', 'TEXT'),
             ('raw_json', 'TEXT'),
-        ]
-        for col, dtype in noaa_new_cols:
-            try:
-                cursor.execute(f"ALTER TABLE noaa_alerts ADD COLUMN {col} {dtype}")
-            except sqlite3.OperationalError:
-                pass
+        ])
 
         # Add new columns to flare_events for DONKI data
-        flare_new_cols = [
+        self._add_missing_columns(cursor, 'flare_events', [
             ('active_region_num', 'INTEGER'),
             ('linked_cme_ids', 'TEXT'),  # JSON array of CME IDs
             ('donki_link', 'TEXT'),
             ('donki_flr_id', 'TEXT'),    # DONKI flare ID for deduplication
-        ]
-        for col, dtype in flare_new_cols:
-            try:
-                cursor.execute(f"ALTER TABLE flare_events ADD COLUMN {col} {dtype}")
-            except sqlite3.OperationalError:
-                pass
+        ])
 
         # Create indices for fast queries
         # Time series: timestamp is primary query axis
@@ -613,19 +617,48 @@ class MonitoringDB:
                 pair_id = row[0]
 
         try:
+            # Upsert instead of INSERT OR REPLACE: REPLACE deletes the row and
+            # re-inserts it with a NEW id, breaking existing FK references
+            # (predictions.trigger_measurement_id). DO UPDATE keeps the id.
             cursor.execute("""
-                INSERT OR REPLACE INTO coupling_measurements
+                INSERT INTO coupling_measurements
                 (timestamp, pair, pair_id, delta_mi, mi_original, residual, deviation_pct,
                  status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
                  sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version,
                  quality_ok, robustness_score, sync_delta_s, run_id, resolution)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(timestamp, pair) DO UPDATE SET
+                    pair_id = excluded.pair_id,
+                    delta_mi = excluded.delta_mi,
+                    mi_original = excluded.mi_original,
+                    residual = excluded.residual,
+                    deviation_pct = excluded.deviation_pct,
+                    status = excluded.status,
+                    trend = excluded.trend,
+                    slope_pct_per_hour = excluded.slope_pct_per_hour,
+                    acceleration = excluded.acceleration,
+                    confidence = excluded.confidence,
+                    n_points = excluded.n_points,
+                    sudden_drop_pct = excluded.sudden_drop_pct,
+                    sudden_drop_severity = excluded.sudden_drop_severity,
+                    veto_reason = excluded.veto_reason,
+                    pipeline_version = excluded.pipeline_version,
+                    quality_ok = excluded.quality_ok,
+                    robustness_score = excluded.robustness_score,
+                    sync_delta_s = excluded.sync_delta_s,
+                    run_id = excluded.run_id,
+                    resolution = excluded.resolution
             """, (timestamp, pair, pair_id, delta_mi, mi_original, residual, deviation_pct,
                   status, trend, slope_pct_per_hour, acceleration, confidence, n_points,
                   sudden_drop_pct, sudden_drop_severity, veto_reason, pipeline_version,
                   quality_ok, robustness_score, sync_delta_s, run_id, resolution))
             self.conn.commit()
-            return cursor.lastrowid
+            # lastrowid is unreliable after DO UPDATE - fetch the stable row id
+            cursor.execute(
+                "SELECT id FROM coupling_measurements WHERE timestamp = ? AND pair = ?",
+                (timestamp, pair))
+            row = cursor.fetchone()
+            return row[0] if row else cursor.lastrowid
         except sqlite3.Error as e:
             print(f"Error inserting coupling data: {e}")
             return -1
@@ -976,9 +1009,9 @@ class MonitoringDB:
     def get_recent_goes(self, hours: int = 24) -> list[dict]:
         """Get recent GOES X-ray data."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT * FROM goes_xray
-            WHERE timestamp >= datetime('now', ?)
+            WHERE timestamp >= {self._sql_dt()}
             ORDER BY timestamp DESC
         """, (f'-{hours} hours',))
         return [dict(row) for row in cursor.fetchall()]
@@ -986,9 +1019,9 @@ class MonitoringDB:
     def get_recent_solar_wind(self, hours: int = 24) -> list[dict]:
         """Get recent solar wind data."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT * FROM solar_wind
-            WHERE timestamp >= datetime('now', ?)
+            WHERE timestamp >= {self._sql_dt()}
             ORDER BY timestamp DESC
         """, (f'-{hours} hours',))
         return [dict(row) for row in cursor.fetchall()]
@@ -997,16 +1030,16 @@ class MonitoringDB:
         """Get recent coupling measurements."""
         cursor = self.conn.cursor()
         if pair:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM coupling_measurements
-                WHERE timestamp >= datetime('now', ?)
+                WHERE timestamp >= {self._sql_dt()}
                 AND pair = ?
                 ORDER BY timestamp DESC
             """, (f'-{hours} hours', pair))
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT * FROM coupling_measurements
-                WHERE timestamp >= datetime('now', ?)
+                WHERE timestamp >= {self._sql_dt()}
                 ORDER BY timestamp DESC
             """, (f'-{hours} hours',))
         return [dict(row) for row in cursor.fetchall()]
@@ -1017,9 +1050,9 @@ class MonitoringDB:
         min_order = class_order.get(min_class, 0)
 
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT * FROM flare_events
-            WHERE start_time >= datetime('now', ?)
+            WHERE start_time >= {self._sql_dt()}
             ORDER BY start_time DESC
         """, (f'-{days} days',))
 
@@ -1033,7 +1066,7 @@ class MonitoringDB:
     def get_coupling_before_flares(self, hours_before: int = 6) -> list[dict]:
         """Get coupling measurements in the hours before each flare."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 f.id as flare_id,
                 f.class as flare_class,
@@ -1048,7 +1081,7 @@ class MonitoringDB:
                 (julianday(f.start_time) - julianday(c.timestamp)) * 24 as hours_before_flare
             FROM flare_events f
             JOIN coupling_measurements c
-                ON c.timestamp BETWEEN datetime(f.start_time, ?)
+                ON c.timestamp BETWEEN {self._sql_dt('f.start_time')}
                                    AND f.start_time
             ORDER BY f.start_time DESC, hours_before_flare ASC
         """, (f'-{hours_before} hours',))
@@ -1290,9 +1323,9 @@ class MonitoringDB:
     def get_recent_divergences(self, hours: int = 24) -> list[dict]:
         """Get recent phase divergence events."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT * FROM phase_divergence
-            WHERE timestamp >= datetime('now', ?)
+            WHERE timestamp >= {self._sql_dt()}
             ORDER BY timestamp DESC
         """, (f'-{hours} hours',))
         return [dict(row) for row in cursor.fetchall()]
@@ -1306,39 +1339,39 @@ class MonitoringDB:
         cursor = self.conn.cursor()
 
         # Overall counts
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 COUNT(*) as total_divergences,
                 COUNT(DISTINCT date(timestamp)) as days_with_divergence,
                 SUM(CASE WHEN flare_within_24h = 1 THEN 1 ELSE 0 END) as followed_by_flare,
                 SUM(CASE WHEN flare_within_24h = 0 THEN 1 ELSE 0 END) as no_flare
             FROM phase_divergence
-            WHERE timestamp >= datetime('now', ?)
+            WHERE timestamp >= {self._sql_dt()}
         """, (f'-{days} days',))
         overall = dict(cursor.fetchone())
 
         # By divergence type (PRECURSOR, POST_EVENT, UNCONFIRMED)
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 COALESCE(divergence_type, 'UNKNOWN') as divergence_type,
                 COUNT(*) as count,
                 SUM(CASE WHEN flare_within_24h = 1 THEN 1 ELSE 0 END) as followed_by_flare
             FROM phase_divergence
-            WHERE timestamp >= datetime('now', ?)
+            WHERE timestamp >= {self._sql_dt()}
             GROUP BY divergence_type
             ORDER BY count DESC
         """, (f'-{days} days',))
         by_divergence_type = [dict(row) for row in cursor.fetchall()]
 
         # By phase pair (which phases disagreed)
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 phase_goes,
                 phase_experimental,
                 COUNT(*) as count,
                 SUM(CASE WHEN flare_within_24h = 1 THEN 1 ELSE 0 END) as followed_by_flare
             FROM phase_divergence
-            WHERE timestamp >= datetime('now', ?)
+            WHERE timestamp >= {self._sql_dt()}
             GROUP BY phase_goes, phase_experimental
             ORDER BY count DESC
         """, (f'-{days} days',))
@@ -1358,7 +1391,7 @@ class MonitoringDB:
         This is the KEY analysis: do divergences predict flares?
         """
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 d.id as divergence_id,
                 d.timestamp as divergence_time,
@@ -1374,7 +1407,7 @@ class MonitoringDB:
             FROM phase_divergence d
             JOIN flare_events f
                 ON f.start_time BETWEEN d.timestamp
-                                    AND datetime(d.timestamp, ?)
+                                    AND {self._sql_dt('d.timestamp')}
             WHERE f.class IN ('C', 'M', 'X')
             ORDER BY d.timestamp DESC
         """, (f'+{hours_before} hours',))
@@ -1466,7 +1499,7 @@ class MonitoringDB:
     def get_coupling_statistics(self, pair: str, days: int = 7) -> dict:
         """Calculate coupling statistics for a pair."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 COUNT(*) as n_measurements,
                 AVG(delta_mi) as mean_delta_mi,
@@ -1477,7 +1510,7 @@ class MonitoringDB:
                 SUM(CASE WHEN status = 'WARNING' THEN 1 ELSE 0 END) as n_warnings
             FROM coupling_measurements
             WHERE pair = ?
-            AND timestamp >= datetime('now', ?)
+            AND timestamp >= {self._sql_dt()}
         """, (pair, f'-{days} days'))
         return dict(cursor.fetchone())
 
@@ -1504,7 +1537,7 @@ class MonitoringDB:
     def get_alert_rate(self, days: int = 7) -> dict:
         """Calculate alert rates over time."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 date(timestamp) as date,
                 COUNT(*) as total_measurements,
@@ -1512,7 +1545,7 @@ class MonitoringDB:
                 SUM(CASE WHEN status = 'WARNING' THEN 1 ELSE 0 END) as warnings,
                 AVG(residual) as avg_residual
             FROM coupling_measurements
-            WHERE timestamp >= datetime('now', ?)
+            WHERE timestamp >= {self._sql_dt()}
             GROUP BY date(timestamp)
             ORDER BY date DESC
         """, (f'-{days} days',))
@@ -1591,17 +1624,20 @@ class MonitoringDB:
         """
         Extract predictions from coupling_measurements into predictions table.
 
-        Converts ALERT/ELEVATED coupling entries into prediction records
-        for separate tracking and validation.
+        Converts ALERT/WARNING/ELEVATED coupling entries into prediction
+        records for separate tracking and validation.
 
         Args:
-            statuses: List of statuses to extract (default: ['ALERT', 'ELEVATED'])
+            statuses: List of statuses to extract
+                      (default: ['ALERT', 'WARNING', 'ELEVATED'])
 
         Returns:
             Number of predictions extracted
         """
         if statuses is None:
-            statuses = ['ALERT', 'ELEVATED']
+            # Status hierarchy is ALERT > WARNING > ELEVATED - all three are
+            # anomalous and must produce prediction records
+            statuses = ['ALERT', 'WARNING', 'ELEVATED']
 
         cursor = self.conn.cursor()
 
@@ -1681,12 +1717,12 @@ class MonitoringDB:
             pred_id, pred_time, pred_class, pair = pred
 
             # Find flare within window AFTER prediction
-            # Use REPLACE to normalize datetime() output (space→T) for consistent comparison
-            cursor.execute("""
+            # _sql_dt normalizes datetime() output (space→T) for consistent comparison
+            cursor.execute(f"""
                 SELECT id, start_time, peak_time, class, magnitude
                 FROM flare_events
                 WHERE start_time > ?
-                AND start_time <= REPLACE(datetime(?, ?), ' ', 'T')
+                AND start_time <= {self._sql_dt('?')}
                 AND class IN ('C', 'M', 'X')
                 ORDER BY start_time ASC
                 LIMIT 1
@@ -1778,11 +1814,11 @@ class MonitoringDB:
                 lead_times.append(lead_time)
             else:
                 # Check if this prediction is AFTER a recent flare (post-flare effect)
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT id, peak_time, class, magnitude
                     FROM flare_events
                     WHERE peak_time < ?
-                    AND peak_time >= datetime(?, '-2 hours')
+                    AND peak_time >= {self._sql_dt('?', "'-2 hours'")}
                     ORDER BY peak_time DESC
                     LIMIT 1
                 """, (pred_time, pred_time))
@@ -1812,12 +1848,12 @@ class MonitoringDB:
         time_range = cursor.fetchone()
 
         if time_range[0]:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT COUNT(DISTINCT f.id) as missed_flares
                 FROM flare_events f
                 WHERE f.class IN ('C', 'M', 'X')
                 AND f.start_time >= ?
-                AND f.start_time <= datetime(?, '+1 day')
+                AND f.start_time <= {self._sql_dt('?', "'+1 day'")}
                 AND NOT EXISTS (
                     SELECT 1 FROM predictions p
                     WHERE p.actual_flare_id = f.id
@@ -1891,24 +1927,24 @@ class MonitoringDB:
             div_id, div_time, current_type = div
 
             # Find flares BEFORE this divergence (within window)
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT timestamp, flare_class, magnitude
                 FROM goes_xray
                 WHERE flux >= 1e-6
                 AND timestamp < ?
-                AND timestamp >= datetime(?, ?)
+                AND timestamp >= {self._sql_dt('?')}
                 ORDER BY timestamp DESC
                 LIMIT 1
             """, (div_time, div_time, f'-{window_hours} hours'))
             flare_before = cursor.fetchone()
 
             # Find flares AFTER this divergence (within window)
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT timestamp, flare_class, magnitude
                 FROM goes_xray
                 WHERE flux >= 1e-6
                 AND timestamp > ?
-                AND timestamp <= datetime(?, ?)
+                AND timestamp <= {self._sql_dt('?')}
                 ORDER BY timestamp ASC
                 LIMIT 1
             """, (div_time, div_time, f'+{window_hours} hours'))
@@ -1996,7 +2032,10 @@ class MonitoringDB:
             ts_col = 'timestamp' if table != 'predictions' else 'prediction_time'
             if table == 'flare_events':
                 ts_col = 'start_time'
-            query = f"SELECT * FROM {table} WHERE {ts_col} >= datetime('now', '-{days} days') ORDER BY {ts_col}"
+            offset_sql = f"'-{days} days'"
+            query = (f"SELECT * FROM {table} "
+                     f"WHERE {ts_col} >= {self._sql_dt(offset=offset_sql)} "
+                     f"ORDER BY {ts_col}")
         else:
             query = f"SELECT * FROM {table}"
 
@@ -2144,12 +2183,12 @@ class MonitoringDB:
         """)
         row = cursor.fetchone()
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT COUNT(DISTINCT timestamp) as unique_timestamps
             FROM coupling_measurements
             WHERE (resolution = '1k' OR resolution IS NULL)
               AND backfilled_at IS NULL
-              AND timestamp <= datetime('now', '-3 days')
+              AND timestamp <= {self._sql_dt(offset="'-3 days'")}
         """)
         eligible = cursor.fetchone()[0]
 

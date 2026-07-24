@@ -62,12 +62,21 @@ def validate_roi_variance(img1, img2, pair: str = None) -> dict:
     }
 
 
-def validate_mi_measurement(delta_mi: float, pair: str = None) -> dict:
+def validate_mi_measurement(delta_mi: float, pair: str = None,
+                            baseline_mean: float = None) -> dict:
     """
     Validate MI measurement before it enters break detection.
 
     This gate runs BEFORE MAD/baseline calculation to prevent
     data errors from contaminating statistics.
+
+    Args:
+        delta_mi: Measured ΔMI value
+        pair: Channel pair name (for reporting)
+        baseline_mean: Baseline mean ΔMI for this pair, if known. When given,
+            the low-MI gate becomes baseline-relative: max(0.02, 0.3*baseline).
+            A fixed threshold of 0.05 would discard genuine breaks in
+            weak-coupling pairs (e.g. 193-304 at 1k: baseline 0.07 ± 0.02).
 
     Returns:
         dict with 'is_valid', 'error_type', 'error_reason'
@@ -81,11 +90,15 @@ def validate_mi_measurement(delta_mi: float, pair: str = None) -> dict:
         }
 
     # Check for suspiciously low MI (indicates data pipeline failure)
-    if delta_mi < MIN_MI_THRESHOLD:
+    if baseline_mean is not None and baseline_mean > 0:
+        threshold = max(0.02, 0.3 * baseline_mean)
+    else:
+        threshold = MIN_MI_THRESHOLD
+    if delta_mi < threshold:
         return {
             'is_valid': False,
             'error_type': 'BELOW_THRESHOLD',
-            'error_reason': f'ΔMI={delta_mi:.4f} < {MIN_MI_THRESHOLD} (likely data error)',
+            'error_reason': f'ΔMI={delta_mi:.4f} < {threshold:.4f} (likely data error)',
         }
 
     return {'is_valid': True, 'error_type': None, 'error_reason': None}

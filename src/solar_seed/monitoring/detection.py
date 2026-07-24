@@ -144,18 +144,21 @@ def compute_registration_shift(img1, img2, max_shift: int = 10) -> dict:
         }
 
     except Exception as e:
+        # Fail-closed: is_centered=None marks "test did not run" (analogous to
+        # is_robust=None). It must NOT count as a passed check downstream.
         return {
             'dx': 0,
             'dy': 0,
             'shift_pixels': 0,
             'peak_correlation': 0,
-            'is_centered': True,
+            'is_centered': None,
             'error': str(e),
         }
 
 
 def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonitor',
-                          window_minutes: int = 60, k: float = 2.0) -> dict:
+                          window_minutes: int = 60, k: float = 2.0,
+                          resolution: str = '1k') -> dict:
     """
     Formal "Coupling Break" detection using rolling median and MAD.
 
@@ -173,12 +176,22 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
         monitor: CouplingMonitor instance
         window_minutes: Rolling window size
         k: MAD multiplier (default 2.0 = ~95% interval)
+        resolution: Data resolution ('1k' or '4k') - selects the baseline used
+            for the baseline-relative low-MI quality gate
 
     Returns:
         dict with break detection result and metadata
     """
     # === DATA QUALITY GATE (runs before any statistics) ===
-    mi_validation = validate_mi_measurement(current_mi, pair)
+    # Baseline-relative threshold: for weak-coupling pairs (193-304 at 1k,
+    # baseline 0.07 ± 0.02) the fixed MIN_MI_THRESHOLD=0.05 would discard
+    # genuine breaks. Use max(0.02, 0.3*baseline) when a baseline is known.
+    baseline_mean = None
+    try:
+        baseline_mean = monitor.get_baselines(resolution).get(pair, {}).get('mean')
+    except AttributeError:
+        pass  # Monitor without baselines (e.g. test double) - use fixed fallback
+    mi_validation = validate_mi_measurement(current_mi, pair, baseline_mean=baseline_mean)
     if not mi_validation['is_valid']:
         return {
             'is_break': False,
@@ -206,7 +219,7 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
                 val = h['coupling'][pair].get('delta_mi')
                 if val is not None:
                     # Validate historical value too (don't let bad data contaminate stats)
-                    val_check = validate_mi_measurement(val, pair)
+                    val_check = validate_mi_measurement(val, pair, baseline_mean=baseline_mean)
                     if val_check['is_valid']:
                         window_values.append(val)
                     else:
@@ -345,8 +358,8 @@ def classify_break_type(trend_info: dict = None, goes_context: dict = None) -> d
     Returns:
         dict with break_type, reason, and is_alertable
     """
-    # Extract values
-    slope = abs(trend_info.get('slope_pct_per_hour', 0)) if trend_info else 0
+    # Extract values (keep the sign: only NEGATIVE slope = decoupling)
+    slope = trend_info.get('slope_pct_per_hour', 0) if trend_info else 0
     acc = trend_info.get('acceleration', 0) if trend_info else 0
 
     goes_rising = False
@@ -364,7 +377,9 @@ def classify_break_type(trend_info: dict = None, goes_context: dict = None) -> d
         }
 
     # Rule 2: Accelerating decoupling (steep negative trend, negative acc) → PRECURSOR
-    if slope > 3.0 and acc < -1.0:
+    # A steep RISING trend (slope > 0) is recoupling, not decoupling - it must
+    # not trigger this rule, hence the signed comparison.
+    if slope < -3.0 and acc < -1.0:
         return {
             'break_type': BreakType.PRECURSOR,
             'reason': f'Accelerating decoupling ({slope:.1f}%/h, acc={acc:.1f})',
@@ -435,6 +450,7 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
             'veto_reasons': [f"DATA_ERROR: {break_detection.get('error_reason', 'unknown')}"],
             'passed_tests': [],
             'failed_tests': ['data_quality'],
+            'skipped_tests': [],
         }
 
     # No break detected = NORMAL
@@ -448,12 +464,14 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
                 'veto_reasons': [],
                 'passed_tests': [],
                 'failed_tests': [],
+                'skipped_tests': [],
             }
 
     # Break candidate detected - check validation tests
     veto_reasons = []
     passed_tests = []
     failed_tests = []
+    skipped_tests = []  # Tests that errored / did not actually run (fail-closed)
     z_mad = break_detection.get('z_mad', 0)
 
     # Test A: Time alignment (<60s)
@@ -467,7 +485,11 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
     # Test B: Registration shift (<10px)
     if registration_check:
         shift = registration_check.get('shift_pixels', 0)
-        if registration_check.get('is_centered', True) and shift <= 10:
+        if registration_check.get('is_centered') is None:
+            # Test errored - explicitly NOT a pass (previously fail-open)
+            err = registration_check.get('error', 'unknown error')
+            skipped_tests.append(f'registration (did not run: {err})')
+        elif registration_check.get('is_centered') and shift <= 10:
             passed_tests.append(f'registration ({shift:.1f}px)')
         else:
             failed_tests.append(f'registration ({shift:.1f}px > 10px)')
@@ -482,11 +504,22 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
             change = robustness_check.get('change_pct', 0)
             failed_tests.append(f'robustness ({change:.1f}% > 20%)')
             veto_reasons.append(f'robustness failed ({change:.1f}%)')
+        else:
+            # is_robust is None: check errored / did not run
+            err = robustness_check.get('error', 'not computed')
+            skipped_tests.append(f'robustness (did not run: {err})')
 
     # Already vetoed by earlier logic
     if break_detection.get('vetoed'):
         if break_detection['vetoed'] not in [r.split()[0] for r in veto_reasons]:
             veto_reasons.append(break_detection['vetoed'])
+
+    # Fail-closed gate: a break where NO validation test actually completed
+    # must not be reported as validated (previously such breaks slipped
+    # through as VALIDATED_BREAK because errored tests counted as passed).
+    if break_detection.get('is_break') and not passed_tests and not failed_tests:
+        detail = f' ({len(skipped_tests)} errored)' if skipped_tests else ''
+        veto_reasons.append(f'unvalidated: no validation test ran{detail}')
 
     # Phase-Gating: classify break type (PRECURSOR vs POSTCURSOR)
     break_type_info = classify_break_type(trend_info, goes_context)
@@ -517,4 +550,5 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
         'veto_reasons': veto_reasons,
         'passed_tests': passed_tests,
         'failed_tests': failed_tests,
+        'skipped_tests': skipped_tests,
     }

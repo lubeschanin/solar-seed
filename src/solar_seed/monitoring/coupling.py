@@ -14,6 +14,16 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+# Confidence levels ordered by rank. Plain string min() would compare
+# lexicographically (min('high', 'medium') == 'high'!), so combining
+# confidences must go through this ranking.
+CONFIDENCE_RANK = {'none': 0, 'insufficient': 0, 'low': 1, 'medium': 2, 'high': 3}
+
+
+def _min_confidence(a: str, b: str) -> str:
+    """Return the weaker of two confidence labels (by rank, not alphabet)."""
+    return min(a, b, key=lambda c: CONFIDENCE_RANK.get(c, 0))
+
 
 class CouplingMonitor:
     """Track coupling residuals over time for pre-flare detection."""
@@ -95,10 +105,12 @@ class CouplingMonitor:
         # Check if previous frames also had breaks
         # Use z_mad > 2.0 (break DETECTION threshold), not is_break (which may be vetoed)
         # This avoids catch-22 where vetoed breaks prevent future confirmations
+        # NOTE: z_mad is signed - POSITIVE means below median (coupling break).
+        # No abs() here: upward spikes (negative z_mad) must not confirm a break.
         BREAK_THRESHOLD = 2.0
         previous_breaks = sum(
             1 for h in pair_history[-(min_frames-1):]
-            if abs(h.get('coupling', {}).get(pair, {}).get('z_mad', 0)) > BREAK_THRESHOLD
+            if h.get('coupling', {}).get(pair, {}).get('z_mad', 0) > BREAK_THRESHOLD
         )
 
         return previous_breaks >= min_frames - 1
@@ -294,8 +306,14 @@ class CouplingMonitor:
         # Mean value for normalization
         y_mean = sum(values) / n if n > 0 else 1
 
-        # Normalize slope to % per hour (assuming 10min intervals)
-        slope_per_hour = slope * 6 / y_mean * 100 if y_mean else 0
+        # Normalize slope to % per hour using the ACTUAL cadence from
+        # timestamps (slope is per reading index). Falls back to the old
+        # 10-min assumption (6 readings/h) if the window has zero span.
+        if window_min > 0 and n > 1:
+            readings_per_hour = (n - 1) / (window_min / 60.0)
+        else:
+            readings_per_hour = 6  # Fallback: assume 10min intervals
+        slope_per_hour = slope * readings_per_hour / y_mean * 100 if y_mean else 0
 
         # Acceleration: compare first half vs second half slopes
         acceleration = 0
@@ -410,7 +428,7 @@ class CouplingMonitor:
                 'description': 'Chromospheric anchor strengthening, coronal coupling weakening',
                 'slope_193_304': slope_304,
                 'slope_193_211': slope_211,
-                'confidence': min(trend_304['confidence'], trend_211['confidence']),
+                'confidence': _min_confidence(trend_304['confidence'], trend_211['confidence']),
                 'interpretation': 'Possible energy reorganization / magnetic stress buildup',
                 'degraded': degraded,
                 'degraded_reasons': degraded_reasons,
@@ -426,7 +444,7 @@ class CouplingMonitor:
                 'description': 'Coronal coupling recovering, chromospheric anchor releasing',
                 'slope_193_304': slope_304,
                 'slope_193_211': slope_211,
-                'confidence': min(trend_304['confidence'], trend_211['confidence']),
+                'confidence': _min_confidence(trend_304['confidence'], trend_211['confidence']),
                 'interpretation': 'Possible post-flare recovery / relaxation',
                 'degraded': degraded,
                 'degraded_reasons': degraded_reasons,
