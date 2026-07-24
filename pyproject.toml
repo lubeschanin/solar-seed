@@ -57,6 +57,9 @@ dev = [
     "ruff>=0.1.0",
 ]
 
+[tool.uv]
+constraint-dependencies = ["pandas<3"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100
