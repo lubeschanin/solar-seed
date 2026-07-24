@@ -72,11 +72,13 @@ I(X;Y) = Σ p(x,y) log₂ [p(x,y) / p(x)p(y)]
 
 ### 3.2 Geometric Normalization
 
-To remove disk geometry and radial intensity gradients, we estimate the per-frame radial mean profile and normalize each image. The residual is defined as:
+To control for disk geometry and radial intensity gradients, we estimate the per-frame radial mean profile and normalize each image. The residual is defined as:
 
 R(r,θ) = I(r,θ) / ⟨I(r)⟩
 
-**Limb treatment.** Pixels beyond r/R☉ > 0.98 are excluded from analysis to avoid limb artifacts and off-disk emission. The radial normalization effectively removes limb brightening within the analyzed disk region; robustness tests confirm that results are stable when the limb exclusion threshold is varied between 0.95 and 0.99.
+This step conditions out the shared radial intensity profile — the most obvious common driver of cross-channel dependence — so that any coupling measured on the residuals cannot be attributed to it. Notably, on real AIA data this normalization leaves global MI essentially unchanged (Section 4.1): the shared radial profile turns out to contribute little to the measured dependence. We retain the step as an explicit control; the actual quantification of geometric and coarse-structural contributions is performed by the null-model hierarchy (Section 3.3), which decomposes the measured MI rather than assuming which part is geometric.
+
+**Limb treatment.** Pixels beyond r/R☉ > 0.98 are excluded from analysis to avoid limb artifacts and off-disk emission. The radial normalization removes limb brightening from the intensity distributions within the analyzed disk region; robustness tests confirm that results are stable when the limb exclusion threshold is varied between 0.95 and 0.99.
 
 ### 3.3 Hierarchy of Null Models
 
@@ -401,7 +403,7 @@ Unlike traditional approaches that primarily quantify radiative intensity, the p
 
 ### 6.2 Physically Grounded Interpretation of Multichannel Data
 
-The geometry-controlled mutual information framework addresses a long-standing challenge in solar data analysis: separating genuine physical coupling from apparent correlations caused by spherical geometry and line-of-sight effects. By explicitly removing these geometric contributions, the method reveals intrinsic interaction patterns that were previously obscured.
+The geometry-controlled mutual information framework addresses a long-standing challenge in solar data analysis: separating genuine physical coupling from apparent correlations caused by spherical geometry and line-of-sight effects. Rather than assuming which part of the measured dependence is geometric, the method decomposes it explicitly through the null-model hierarchy. On real AIA data this decomposition shows that geometry and coarse structure account for only a minority of the measured MI (Section 4.3) — the dominant contribution is local, co-spatial structure, which can therefore be attributed to intrinsic interaction patterns with quantified confidence.
 
 The identification of regime-dependent dynamics further implies that solar flares should not be treated as mere perturbations of the quiet Sun. Instead, they represent a distinct dynamical regime governed by different effective propagation laws. This insight places important constraints on physical models, which must account for regime switching rather than assuming a single stationary description of coronal dynamics.
 
