@@ -32,7 +32,6 @@ from solar_seed.monitoring.db import MonitoringDB
 PIPELINE_VERSION = "gap-backfill-1.0"
 WAVELENGTHS = [193, 211, 304]
 PAIRS = [(193, 211), (193, 304)]
-MAX_CONSECUTIVE_FAILURES = 20
 
 
 def existing_timestamps(db, start_iso, end_iso):
@@ -59,6 +58,9 @@ def main():
     parser.add_argument("--cadence", type=int, default=12, help="Cadence in minutes (default 12)")
     parser.add_argument("--limit", type=int, default=None, help="Max timepoints to process")
     parser.add_argument("--dry-run", action="store_true", help="Compute nothing, list planned timepoints")
+    parser.add_argument("--max-failures", type=int, default=200,
+                        help="Abort after this many consecutive load failures "
+                             "(404s are fast; 200 tolerates ~40h archive holes)")
     args = parser.parse_args()
 
     start = datetime.fromisoformat(args.start)
@@ -102,8 +104,8 @@ def main():
         if not channels:
             failed += 1
             consecutive_failures += 1
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                print(f"Aborting: {MAX_CONSECUTIVE_FAILURES} consecutive load failures")
+            if consecutive_failures >= args.max_failures:
+                print(f"Aborting: {args.max_failures} consecutive load failures")
                 break
             continue
         consecutive_failures = 0
