@@ -15,11 +15,13 @@ Multi-layer early warning architecture:
          ↓
   SDO/AIA + GOES X-ray          ← Minutes (flare detection)
          ↓
-  DSCOVR L1 Solar Wind          ← 15-60 min (geomagnetic storm arrival)
+  RTSW L1 Solar Wind            ← 15-60 min (geomagnetic storm arrival)
 
 Data Sources:
 - GOES X-ray flux (NOAA SWPC) - real-time flare classification
-- DSCOVR solar wind plasma & magnetic field (L1 point)
+- L1 solar wind plasma & magnetic field via NOAA RTSW (SWFO-L1/ACE/DSCOVR;
+  the feed names its own active source per record - NOAA retired the
+  DSCOVR-specific product endpoints in 2026)
 - SDO/AIA multichannel imagery - coupling analysis
 - NOAA Space Weather Alerts
 

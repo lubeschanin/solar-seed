@@ -7,7 +7,7 @@ Beautiful terminal output using Rich library.
 
 from datetime import datetime, timezone
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -191,7 +191,17 @@ class StatusFormatter:
             table.add_row("", "")  # Spacer
             table.add_row("Geomag Risk", f"[{risk_styles[risk_level]}]{risk_icons[risk_level]} {risk}[/]")
 
-        panel = Panel(table, title="💨 SOLAR WIND (DSCOVR L1)", border_style="blue", subtitle="[dim]Contextual[/]")
+        # Name the actual spacecraft. NOAA retired the DSCOVR product endpoints
+        # in 2026; the RTSW feed reports its own primary source per record
+        # (SWFO-L1, ACE, DSCOVR, ...), so read it rather than hardcoding one.
+        sources = {
+            solar_wind[k].get('source')
+            for k in ('plasma', 'mag')
+            if isinstance(solar_wind.get(k), dict) and solar_wind[k].get('source')
+        }
+        origin = '/'.join(sorted(sources)) if sources else 'RTSW'
+        panel = Panel(table, title=f"💨 SOLAR WIND ({origin} @ L1)",
+                      border_style="blue", subtitle="[dim]Contextual[/]")
         self.console.print(panel)
 
     def print_coupling_analysis(self, coupling: dict, AnomalyStatus, BreakType,
@@ -210,12 +220,17 @@ class StatusFormatter:
         n_warn = quality.get('n_warnings', 0)
         warnings = quality.get('warnings', [])
 
+        # Keep the title short. A table title is centred over the TABLE, which
+        # is narrower than the panel, so a long warning gets clipped mid-word
+        # ("Jump of 4.2σ from recent mean ("). The warnings themselves are
+        # rendered in full below the table, where the whole panel width is
+        # available.
         if n_warn == 0:
             quality_text = "[green]✓ GOOD[/]"
+        elif n_warn == 1:
+            quality_text = "[yellow]⚠ 1 warning[/]"
         else:
-            # Show first warning reason
-            warn_summary = warnings[0][:40] if warnings else "unknown"
-            quality_text = f"[yellow]⚠ {warn_summary}[/]"
+            quality_text = f"[yellow]⚠ {n_warn} warnings[/]"
 
         # Classify phase using BOTH classifiers in parallel
         goes_flux = xray.get('flux') if xray else None
@@ -303,7 +318,19 @@ class StatusFormatter:
                 trend_str,
             )
 
-        panel = Panel(table, title="📊 ΔMI COUPLING MONITOR", border_style="magenta", subtitle="[dim]Pre-Flare Detection[/]")
+        # Warnings in full underneath the table (wrapped, not truncated).
+        if warnings:
+            warn_text = Text()
+            for i, w in enumerate(warnings):
+                if i:
+                    warn_text.append("\n")
+                warn_text.append("⚠ ", style="yellow")
+                warn_text.append(str(w), style="dim yellow")
+            body = Group(table, Text(), warn_text)
+        else:
+            body = table
+
+        panel = Panel(body, title="📊 ΔMI COUPLING MONITOR", border_style="magenta", subtitle="[dim]Pre-Flare Detection[/]")
         self.console.print(panel)
 
         # Print parallel phase comparison panel
@@ -455,11 +482,21 @@ class StatusFormatter:
 
                 if break_type == BreakType.POSTCURSOR:
                     diag_text.append(f"{pair}: ", style="bold")
-                    diag_text.append(f"POSTCURSOR (late break - no alert)\n", style="dim")
+                    diag_text.append("POSTCURSOR (late break - no alert)\n", style="dim")
                 else:
                     diag_text.append(f"{pair}: ", style="bold")
                     diag_text.append(f"{z_mad:.1f}σ anomaly ", style="yellow")
-                    diag_text.append(f"[VETOED: {', '.join(veto)}]\n", style="dim")
+                    # A PHASE_GATED break carries no veto_reasons - the reason
+                    # it is not actionable is the phase, not a failed test.
+                    # Printing an empty "[VETOED: ]" would hide that.
+                    if veto:
+                        diag_text.append(f"[VETOED: {', '.join(veto)}]\n", style="dim")
+                    elif status.get('status') == AnomalyStatus.PHASE_GATED:
+                        reason = status.get('phase_reason', 'no phase context')
+                        diag_text.append(
+                            f"[phase-gated: {break_type} - {reason}]\n", style="dim")
+                    else:
+                        diag_text.append("[not actionable]\n", style="dim")
 
             self.console.print(Panel(diag_text, title="🔬 PHYSICS DIAGNOSTICS", border_style="dim", subtitle="[dim]Contextual, not for triggering[/]"))
 

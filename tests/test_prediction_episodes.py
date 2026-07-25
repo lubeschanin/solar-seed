@@ -243,3 +243,67 @@ class TestAnomalyStatusIsUnambiguous:
         assert status['is_actionable'] is False
         assert status['is_validated'] is False
         assert any('robustness' in r for r in status['veto_reasons'])
+
+
+class TestDiagnosticRendering:
+    """The diagnostics panel must never print an empty reason.
+
+    PHASE_GATED breaks carry no veto_reasons - the reason they are not
+    actionable is the phase, not a failed test - so the old
+    `[VETOED: {', '.join(veto)}]` rendered as a bare "[VETOED: ]".
+    """
+
+    @staticmethod
+    def _render(status, width=140):
+        import io
+
+        from rich.console import Console
+
+        from solar_seed.monitoring.formatting import StatusFormatter
+
+        fmt = StatusFormatter()
+        fmt.console = Console(file=io.StringIO(), width=width, no_color=True)
+        bd = {'is_break': True, 'z_mad': 2.6, 'k': 2.0}
+        fmt._print_alerts(
+            {'_validation': {'anomaly_statuses': {'193-211': status},
+                             'break_detections': {'193-211': bd}}},
+            AnomalyStatus, BreakType)
+        return fmt.console.file.getvalue()
+
+    @staticmethod
+    def _break():
+        return {'is_break': True, 'z_mad': 2.6, 'k': 2.0}
+
+    def test_ambiguous_shows_phase_reason(self):
+        status = classify_anomaly_status(
+            self._break(),
+            robustness_check={'is_robust': True, 'change_pct': 2.0},
+            time_spread_sec=10,
+            trend_info={'slope_pct_per_hour': 0.1, 'acceleration': 0.0},
+            goes_context={'rising': False, 'phase': 'active'},
+        )
+        out = self._render(status)
+        assert 'VETOED: ]' not in out
+        assert 'phase-gated' in out
+        assert BreakType.AMBIGUOUS in out
+
+    def test_postcursor_keeps_its_own_line(self):
+        status = classify_anomaly_status(
+            self._break(),
+            robustness_check={'is_robust': True, 'change_pct': 2.0},
+            time_spread_sec=10,
+            trend_info={'slope_pct_per_hour': -1.0, 'acceleration': 3.0},
+            goes_context={'rising': False, 'phase': 'decay'},
+        )
+        assert 'POSTCURSOR' in self._render(status)
+
+    def test_real_veto_still_names_the_test(self):
+        status = classify_anomaly_status(
+            self._break(),
+            robustness_check={'is_robust': False, 'change_pct': 130.0},
+            time_spread_sec=10,
+            goes_context={'rising': True},
+        )
+        out = self._render(status)
+        assert 'VETOED' in out
+        assert 'robustness' in out
