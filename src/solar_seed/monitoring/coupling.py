@@ -10,9 +10,19 @@ Based on findings from Lubeschanin et al. (2026):
 - Chromospheric anchor (304 Å) shows highest temporal stability
 """
 
+import copy
 import json
+import os
+import sys
 from pathlib import Path
 from datetime import datetime
+
+from .baselines import (
+    PROVISIONAL_BASELINES,
+    _mad_sigma,
+    _median,
+    load_baselines,
+)
 
 # Confidence levels ordered by rank. Plain string min() would compare
 # lexicographically (min('high', 'medium') == 'high'!), so combining
@@ -28,22 +38,11 @@ def _min_confidence(a: str, b: str) -> str:
 class CouplingMonitor:
     """Track coupling residuals over time for pre-flare detection."""
 
-    # Baseline values by resolution
-    # 1k: From synoptic data (spatial aliasing affects 304Å pairs)
-    # 4k: From JSOC full-resolution backfill (accurate MI values)
-    BASELINES_1K = {
-        '193-211': {'mean': 0.59, 'std': 0.12},   # Scale-invariant
-        '193-304': {'mean': 0.07, 'std': 0.02},   # Underestimated at 1k
-        '171-193': {'mean': 0.17, 'std': 0.04},
-        '211-335': {'mean': 0.28, 'std': 0.06},
-    }
-
-    BASELINES_4K = {
-        '193-211': {'mean': 1.03, 'std': 0.31},   # ~1.7x higher than 1k
-        '193-304': {'mean': 0.32, 'std': 0.12},   # ~4.5x higher than 1k
-        '171-193': {'mean': 0.29, 'std': 0.07},   # Estimated 1.7x scaling
-        '211-335': {'mean': 0.48, 'std': 0.10},   # Estimated 1.7x scaling
-    }
+    # Provisional fallback only - the live values come from
+    # results/early_warning/baselines.json via load_baselines(). Kept as class
+    # attributes because tests and external callers reference them.
+    BASELINES_1K = PROVISIONAL_BASELINES['1k']
+    BASELINES_4K = PROVISIONAL_BASELINES['4k']
 
     # Legacy alias for backwards compatibility
     BASELINES = BASELINES_1K
@@ -51,39 +50,111 @@ class CouplingMonitor:
     # Flare analysis showed -25% to -47% reduction during flares
     ALERT_THRESHOLD = -0.25  # 25% below baseline triggers warning
 
-    def __init__(self, history_file: Path = None):
+    def __init__(self, history_file: Path = None, baseline_file: Path = None):
         self.history_file = history_file or Path("results/early_warning/coupling_history.json")
         self.history = self._load_history()
+        self._baselines = load_baselines(baseline_file)
 
     def _load_history(self) -> list:
-        """Load coupling history from file."""
-        if self.history_file.exists():
+        """Load coupling history from file.
+
+        A corrupt history is not silently swallowed: losing 24h of context
+        puts every detector into "insufficient data" mode, which looks
+        identical to a quiet Sun. Report it and move the bad file aside so the
+        next run starts clean instead of failing again.
+        """
+        if not self.history_file.exists():
+            return []
+        try:
+            with open(self.history_file) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+            raise ValueError(f'expected a list, got {type(data).__name__}')
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            print(
+                f"WARNING: coupling history unreadable ({e}); starting empty. "
+                f"Detectors will report 'insufficient data' for ~1h.",
+                file=sys.stderr,
+            )
             try:
-                with open(self.history_file) as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, OSError):
+                self.history_file.replace(self.history_file.with_suffix('.corrupt'))
+            except OSError:
                 pass
-        return []
+            return []
 
     def _save_history(self):
-        """Save coupling history to file."""
+        """Save coupling history atomically (temp file + replace).
+
+        A plain open('w') truncates first: an interrupt mid-write leaves
+        invalid JSON behind and _load_history then starts from scratch.
+        """
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
         # Keep last 24 hours (144 entries at 10min intervals)
         self.history = self.history[-144:]
-        with open(self.history_file, 'w') as f:
+        tmp = self.history_file.with_suffix(self.history_file.suffix + '.tmp')
+        with open(tmp, 'w') as f:
             json.dump(self.history, f)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(self.history_file)
+
+    def pair_series(self, pair: str, valid_only: bool = True) -> list[dict]:
+        """
+        History entries carrying a ΔMI reading for `pair`, oldest first.
+
+        Args:
+            valid_only: Drop readings that failed measurement validation.
+                DATA_ERROR frames are stored with delta_mi = 0.0 (see
+                _analyze_pair); letting those through wrecks the Theil-Sen
+                slope and the y_mean normalisation in analyze_trend, and
+                poisons the sudden-drop reference. detect_coupling_break
+                already filtered them - this is the shared version.
+
+        Returns:
+            List of {'timestamp': str, 'delta_mi': float} dicts.
+        """
+        from .validation import validate_mi_measurement
+
+        series = []
+        for h in self.history:
+            entry = h.get('coupling', {}).get(pair)
+            if not isinstance(entry, dict):
+                continue
+            value = entry.get('delta_mi')
+            if value is None:
+                continue
+            if entry.get('data_error') or entry.get('status') == 'DATA_ERROR':
+                if valid_only:
+                    continue
+            if valid_only and not validate_mi_measurement(value, pair)['is_valid']:
+                continue
+            series.append({
+                'timestamp': h.get('timestamp'),
+                'delta_mi': value,
+                'z_mad': entry.get('z_mad', 0),
+            })
+        return series
 
     def is_persistent_break(self, pair: str, current_is_break: bool, min_frames: int = 2) -> bool:
         """
         Check if a break persists for min_frames consecutive readings.
 
-        Anti-spike filter: Only confirm break if it persists across multiple
-        frames. At 10-min cadence, min_frames=2 means 20 minutes persistence.
+        Anti-spike filter: only confirm a break if the coupling was already
+        depressed in the preceding frame(s). At 10-min cadence, min_frames=2
+        means 20 minutes of persistence.
+
+        The reference level is the median of the frames *before* the candidate
+        break window, not the rolling 60-min median used by
+        detect_coupling_break. That rolling median follows a sustained collapse
+        downwards, so z_mad falls back below threshold after a frame or two -
+        which used to let transient two-frame spikes through while filtering
+        out exactly the sustained plateaus this check is meant to confirm.
 
         Args:
             pair: Channel pair (e.g. '193-211')
             current_is_break: Whether current frame shows a break
-            min_frames: Minimum consecutive frames required (default: 2)
+            min_frames: Minimum consecutive depressed frames required
 
         Returns:
             True if break is persistent, False if likely spike/artifact
@@ -91,29 +162,27 @@ class CouplingMonitor:
         if not current_is_break:
             return False
 
-        # Check history for previous break detections
-        # Note: break_detected is stored in coupling_measurements when we add it
-        pair_history = [
-            h for h in self.history[-min_frames:]
-            if pair in h.get('coupling', {})
-        ]
+        n_previous = min_frames - 1
+        if n_previous <= 0:
+            return True
 
-        if len(pair_history) < min_frames - 1:
+        series = self.pair_series(pair)
+        candidate = series[-n_previous:] if n_previous else []
+        if len(candidate) < n_previous:
             # Not enough history, can't confirm persistence
             return False
 
-        # Check if previous frames also had breaks
-        # Use z_mad > 2.0 (break DETECTION threshold), not is_break (which may be vetoed)
-        # This avoids catch-22 where vetoed breaks prevent future confirmations
-        # NOTE: z_mad is signed - POSITIVE means below median (coupling break).
-        # No abs() here: upward spikes (negative z_mad) must not confirm a break.
-        BREAK_THRESHOLD = 2.0
-        previous_breaks = sum(
-            1 for h in pair_history[-(min_frames-1):]
-            if h.get('coupling', {}).get(pair, {}).get('z_mad', 0) > BREAK_THRESHOLD
-        )
+        # Pre-break reference window: the frames before the candidate frames.
+        reference_window = [e['delta_mi'] for e in series[:-n_previous]][-12:]
+        if len(reference_window) < 3:
+            return False
 
-        return previous_breaks >= min_frames - 1
+        reference = _median(reference_window)
+        sigma = _mad_sigma(reference_window, reference)
+        # With a degenerate spread fall back to a 10% relative drop.
+        threshold = reference - 2.0 * sigma if sigma > 1e-6 else reference * 0.90
+
+        return all(e['delta_mi'] < threshold for e in candidate)
 
     def detect_sudden_drop(self, pair: str, delta_mi: float, lookback: int = 3) -> dict:
         """
@@ -121,6 +190,13 @@ class CouplingMonitor:
 
         This catches pre-flare drops that are still above baseline but represent
         a significant decrease from recent readings.
+
+        The reference is the MEDIAN of the lookback window, not its maximum.
+        With max(), the reference sits systematically above the typical level -
+        for 193-211 the measured spread is sigma/mu = 0.24, so the maximum of
+        three draws lands ~20% high on average and a perfectly ordinary next
+        reading already registers as a >15% "drop". That single line produced
+        69% of all predictions in the database (10196 of 14708).
 
         Args:
             pair: Channel pair (e.g. '193-211')
@@ -130,27 +206,21 @@ class CouplingMonitor:
         Returns:
             Dict with drop detection results
         """
-        pair_history = [
-            h for h in self.history
-            if pair in h.get('coupling', {})
-        ]
+        series = self.pair_series(pair)
 
-        if len(pair_history) < lookback:
+        if len(series) < lookback:
             return {
                 'sudden_drop': False,
                 'drop_pct': 0,
                 'reference_value': None,
-                'reason': f'Not enough history ({len(pair_history)}/{lookback})'
+                'reason': f'Not enough history ({len(series)}/{lookback})'
             }
 
         # Get recent values (excluding current)
-        recent_values = [
-            h['coupling'][pair]['delta_mi']
-            for h in pair_history[-lookback:]
-        ]
+        recent_values = [e['delta_mi'] for e in series[-lookback:]]
 
-        # Use max of recent values as reference (captures the "normal" level)
-        reference = max(recent_values)
+        # Median of recent values as reference (robust "normal" level)
+        reference = _median(recent_values)
 
         # Calculate drop percentage
         if reference > 0:
@@ -182,10 +252,19 @@ class CouplingMonitor:
         }
 
     def get_baselines(self, resolution: str = '1k') -> dict:
-        """Get baselines for the specified resolution."""
-        if resolution == '4k':
-            return self.BASELINES_4K
-        return self.BASELINES_1K
+        """Get baselines for the specified resolution.
+
+        Reads the measured table loaded at construction time
+        (results/early_warning/baselines.json), falling back to the
+        provisional hardcoded values when no measured file exists.
+        """
+        key = '4k' if resolution == '4k' else '1k'
+        return self._baselines.get(key, PROVISIONAL_BASELINES[key])
+
+    @property
+    def baseline_source(self) -> str:
+        """Where the active baselines came from ('provisional' or a path)."""
+        return self._baselines.get('_meta', {}).get('source', 'unknown')
 
     def compute_residual(self, pair: str, delta_mi: float, resolution: str = '1k') -> dict:
         """Compute residual r(t) = (ΔMI - baseline) / std with sudden drop detection.
@@ -252,7 +331,9 @@ class CouplingMonitor:
 
     def analyze_trend(self, pair: str) -> dict:
         """Analyze recent trend in coupling using robust Theil-Sen estimator."""
-        pair_history = [h for h in self.history if pair in h.get('coupling', {})]
+        # valid_only: a DATA_ERROR frame is stored as delta_mi = 0.0 and would
+        # dominate both the Theil-Sen slope and the y_mean normalisation below.
+        pair_history = self.pair_series(pair)
         n_available = len(pair_history)
 
         # Base result with metadata
@@ -289,7 +370,7 @@ class CouplingMonitor:
         # Rolling window: last 12 points (2 hours) or all available
         window_size = min(12, n_available)
         recent = pair_history[-window_size:]
-        values = [h['coupling'][pair]['delta_mi'] for h in recent]
+        values = [e['delta_mi'] for e in recent]
         n = len(values)
 
         # Calculate actual time span from timestamps
@@ -361,10 +442,16 @@ class CouplingMonitor:
         }
 
     def add_reading(self, timestamp: str, coupling_data: dict):
-        """Add a new coupling reading to history."""
+        """Add a new coupling reading to history.
+
+        Stores a deep copy: the caller (run_coupling_analysis) keeps writing
+        _quality / _validation / _transfer_state into the same dict after this
+        returns, and a stored reference would pull all of that into the
+        history file on the next save.
+        """
         self.history.append({
             'timestamp': timestamp,
-            'coupling': coupling_data
+            'coupling': copy.deepcopy(coupling_data),
         })
         self._save_history()
 

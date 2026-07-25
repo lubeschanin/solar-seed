@@ -7,14 +7,31 @@ Physical thresholds and constants for anomaly detection.
 
 # Data Quality Gate
 # =================
-# Physical minimum thresholds to detect data errors BEFORE break detection.
-# ΔMI = 0.0 or very low values indicate data pipeline failures, not real breaks.
+# Detects data errors BEFORE break detection. The gate must catch pipeline
+# failures WITHOUT censoring the signal it exists to protect.
+#
+# History: this used to be a baseline-relative threshold, max(0.02, 0.3 *
+# baseline_mean). The documented flare signature is a -25% to -47% collapse,
+# and a -54% collapse was logged on 24 Apr 2026 - so a deeper collapse was
+# classified as a data error AND excluded from the rolling MAD window, keeping
+# the median high while the real event went unrecorded. Cutting the tail off
+# the distribution you are trying to measure is not a quality gate.
+#
+# The gate is now a pure noise floor. ΔMI = MI_original - MI_sector_shuffled is
+# a difference of two estimates of the same quantity under the null, so pure
+# permutation noise scatters it around zero (the database holds values down to
+# -0.062). At or below the floor there is no measurable coupling to speak of,
+# which is indistinguishable from a pipeline failure. Everything above it is a
+# real measurement, however low.
+#
+# Image-level failures (blank/constant frames) are caught separately and more
+# reliably by validate_roi_variance().
+MIN_MI_THRESHOLD = 0.01  # bits - noise floor; at or below this there is no measurement
 
-# Fallback quality gate when no baseline is known for a pair.
-# When a baseline IS known, validate_mi_measurement uses the baseline-relative
-# threshold max(0.02, 0.3 * baseline_mean) instead - a fixed 0.05 would discard
-# genuine 193-304 breaks at 1k resolution (baseline 0.07 ± 0.02).
-MIN_MI_THRESHOLD = 0.05  # bits - below this is DATA_ERROR (not a real measurement)
+# A reading this far below its baseline is flagged (is_extreme_low) but stays
+# VALID: deep collapses are the signal, not an error.
+EXTREME_LOW_BASELINE_FRACTION = 0.3
+
 MIN_ROI_STD = 0.5        # DN - minimum std dev in residual ROI (after geometry subtraction)
 
 

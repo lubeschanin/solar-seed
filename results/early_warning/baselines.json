@@ -1,0 +1,73 @@
+{
+  "1k": {
+    "171-193": {
+      "mean": 0.17,
+      "std": 0.04
+    },
+    "193-211": {
+      "mean": 0.7921,
+      "std": 0.1373
+    },
+    "193-304": {
+      "mean": 0.1832,
+      "std": 0.0586
+    },
+    "211-335": {
+      "mean": 0.28,
+      "std": 0.06
+    }
+  },
+  "4k": {
+    "171-193": {
+      "mean": 0.29,
+      "std": 0.07
+    },
+    "193-211": {
+      "mean": 0.7962,
+      "std": 0.1697
+    },
+    "193-304": {
+      "mean": 0.1072,
+      "std": 0.0513
+    },
+    "211-335": {
+      "mean": 0.48,
+      "std": 0.1
+    }
+  },
+  "_meta": {
+    "computed_at": "2026-07-25T17:23:40Z",
+    "days": null,
+    "estimator": "median / 1.4826*MAD",
+    "exclude_flare_hours": 2.0,
+    "excluded_near_flare": 5016,
+    "min_samples": 200,
+    "pairs": {
+      "1k/193-211": {
+        "mad_sigma": 0.1373,
+        "median": 0.7921,
+        "n": 17725,
+        "used": "measured"
+      },
+      "1k/193-304": {
+        "mad_sigma": 0.0586,
+        "median": 0.1832,
+        "n": 17719,
+        "used": "measured"
+      },
+      "4k/193-211": {
+        "mad_sigma": 0.1697,
+        "median": 0.7962,
+        "n": 1245,
+        "used": "measured"
+      },
+      "4k/193-304": {
+        "mad_sigma": 0.0513,
+        "median": 0.1072,
+        "n": 1243,
+        "used": "measured"
+      }
+    },
+    "source": "monitoring.db"
+  }
+}

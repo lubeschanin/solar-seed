@@ -1,5 +1,12 @@
 """
 Tests for Solar Monitoring Database
+
+Targets solar_seed.monitoring.db - the module the monitor, the cron jobs and
+the backfill actually import. These tests used to import scripts/monitoring_db.py
+instead, a stale fork missing ~25 methods (verify_predictions_against_flares,
+insert_prediction_match, the whole divergence/backfill/run surface). The
+production module was therefore untested while 700 lines of tests kept passing
+against code nothing ran.
 """
 
 import pytest
@@ -7,10 +14,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-
-from monitoring_db import MonitoringDB
+from solar_seed.monitoring.db import MonitoringDB
 
 
 class TestDatabaseSchema:

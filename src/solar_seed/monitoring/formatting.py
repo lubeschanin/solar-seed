@@ -423,7 +423,11 @@ class StatusFormatter:
                 data_errors.append((pair, status))
             elif status.get('is_actionable'):
                 actionable.append((pair, status))
-            elif status.get('status') in [AnomalyStatus.VALIDATED_BREAK, AnomalyStatus.ANOMALY_VETOED]:
+            elif status.get('status') in (
+                AnomalyStatus.VALIDATED_BREAK,
+                AnomalyStatus.PHASE_GATED,
+                AnomalyStatus.ANOMALY_VETOED,
+            ):
                 diagnostic.append((pair, status))
 
         # Actionable alerts

@@ -19,18 +19,28 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .validation import validate_mi_measurement
-from .constants import MIN_MI_THRESHOLD
 
 if TYPE_CHECKING:
     from .coupling import CouplingMonitor
 
 
 class AnomalyStatus:
-    """Anomaly status constants."""
+    """Anomaly status constants.
+
+    Exactly one status per classification, and `status` alone is sufficient to
+    decide whether to act - VALIDATED_BREAK now means actionable, with no
+    veto_reasons attached. Phase-gated breaks (real, validated, but in the
+    decay phase) get their own status rather than being reported as
+    VALIDATED_BREAK with a contradictory veto attached.
+    """
     DATA_ERROR = 'DATA_ERROR'            # Invalid data - do not process
-    VALIDATED_BREAK = 'VALIDATED_BREAK'  # Actionable - all tests pass
+    VALIDATED_BREAK = 'VALIDATED_BREAK'  # Actionable - all tests pass, PRECURSOR
+    PHASE_GATED = 'PHASE_GATED'          # Validated but POSTCURSOR/AMBIGUOUS
     ANOMALY_VETOED = 'ANOMALY_VETOED'    # Diagnostic only - some test failed
     NORMAL = 'NORMAL'                     # No anomaly detected
+
+    #: Statuses that represent a real, validation-passing break (actionable or not)
+    VALIDATED = (VALIDATED_BREAK, PHASE_GATED)
 
 
 class BreakType:
@@ -158,7 +168,8 @@ def compute_registration_shift(img1, img2, max_shift: int = 10) -> dict:
 
 def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonitor',
                           window_minutes: int = 60, k: float = 2.0,
-                          resolution: str = '1k') -> dict:
+                          resolution: str = '1k',
+                          now: datetime | None = None) -> dict:
     """
     Formal "Coupling Break" detection using rolling median and MAD.
 
@@ -177,7 +188,13 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
         window_minutes: Rolling window size
         k: MAD multiplier (default 2.0 = ~95% interval)
         resolution: Data resolution ('1k' or '4k') - selects the baseline used
-            for the baseline-relative low-MI quality gate
+            to flag extreme-low readings
+        now: Anchor for the rolling window. Defaults to the timestamp of the
+            most recent history entry, NOT wallclock: coupling is stored under
+            the AIA observation time, which can lag wallclock by tens of
+            minutes (and by hours for gap-backfilled data). Anchoring on
+            wallclock silently shrinks or empties the window, turning a
+            detectable break into "insufficient data".
 
     Returns:
         dict with break detection result and metadata
@@ -202,29 +219,35 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
             'reason': f"DATA_ERROR: {mi_validation['error_reason']}",
         }
 
-    pair_history = [h for h in monitor.history if pair in h.get('coupling', {})]
+    # pair_series() already drops DATA_ERROR frames and values below the noise
+    # floor, so the statistics cannot be contaminated by them.
+    pair_history = monitor.pair_series(pair)
 
-    # Filter to window AND exclude invalid values from statistics
-    now = datetime.now(timezone.utc)
+    def _parse(ts_raw):
+        ts = datetime.fromisoformat(str(ts_raw).replace('Z', '+00:00'))
+        return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+    # Anchor the window on the newest data timestamp, falling back to wallclock
+    # only when the history carries no parseable timestamp at all.
+    if now is None:
+        now = datetime.now(timezone.utc)
+        for entry in reversed(pair_history):
+            try:
+                now = _parse(entry['timestamp'])
+                break
+            except (KeyError, ValueError, TypeError):
+                continue
+
     window_start = now - timedelta(minutes=window_minutes)
 
     window_values = []
     excluded_count = 0
-    for h in pair_history:
+    for entry in pair_history:
         try:
-            ts = datetime.fromisoformat(h['timestamp'].replace('Z', '+00:00'))
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            if ts >= window_start:
-                val = h['coupling'][pair].get('delta_mi')
-                if val is not None:
-                    # Validate historical value too (don't let bad data contaminate stats)
-                    val_check = validate_mi_measurement(val, pair, baseline_mean=baseline_mean)
-                    if val_check['is_valid']:
-                        window_values.append(val)
-                    else:
-                        excluded_count += 1
+            if _parse(entry['timestamp']) >= window_start:
+                window_values.append(entry['delta_mi'])
         except (KeyError, ValueError, TypeError):
+            excluded_count += 1
             continue
 
     if len(window_values) < 3:
@@ -253,17 +276,25 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
     # Scale MAD to approximate std (1.4826 for normal distribution)
     mad_scaled = mad * 1.4826
 
-    # Threshold
-    threshold = median - k * mad_scaled
+    # A very quiet window drives MAD towards zero. Returning z_mad = 0 there
+    # made an arbitrarily deep collapse invisible - the calmer the run-up, the
+    # harder the break was to detect, which is backwards. Floor the spread at a
+    # fraction of the median so the criterion degrades into a relative one.
+    MIN_SPREAD_FRACTION = 0.05
+    spread_floor = abs(median) * MIN_SPREAD_FRACTION
+    effective_spread = max(mad_scaled, spread_floor)
+    spread_is_floored = effective_spread > mad_scaled
 
-    # Compute z_mad = (median - current) / MAD (positive = below median)
-    # This is the number of MADs below median
-    if mad_scaled > 0.001:
-        z_mad = (median - current_mi) / mad_scaled
+    # Threshold
+    threshold = median - k * effective_spread
+
+    # Compute z_mad = (median - current) / spread (positive = below median)
+    if effective_spread > 1e-9:
+        z_mad = (median - current_mi) / effective_spread
     else:
         z_mad = 0
 
-    # Detect break: z_mad >= k means we're k MADs below median
+    # Detect break: z_mad >= k means we're k spreads below median
     is_break = z_mad >= k
 
     return {
@@ -272,9 +303,11 @@ def detect_coupling_break(pair: str, current_mi: float, monitor: 'CouplingMonito
         'median': median,
         'mad': mad,
         'mad_scaled': mad_scaled,
+        'effective_spread': effective_spread,
+        'spread_is_floored': spread_is_floored,
         'threshold': threshold,
         'k': k,
-        'z_mad': z_mad,  # MADs below median (positive = below)
+        'z_mad': z_mad,  # spreads below median (positive = below)
         'n_points': n,
         'window_minutes': window_minutes,
         'criterion': f'ΔMI < median - {k}×MAD = {threshold:.4f}',
@@ -526,7 +559,10 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
     break_type = break_type_info['break_type']
     phase_reason = break_type_info['reason']
 
-    # Determine final status with phase-gating
+    # Determine final status with phase-gating.
+    # veto_reasons stays reserved for validation failures; the phase decision
+    # is carried by the status itself, so a caller reading only `status` never
+    # sees a "validated" break that is really gated.
     if veto_reasons:
         # Validation failed → diagnostic only
         status = AnomalyStatus.ANOMALY_VETOED
@@ -537,13 +573,13 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
         is_actionable = True
     else:
         # Validated but POSTCURSOR/AMBIGUOUS → diagnostic only (phase-gated)
-        status = AnomalyStatus.VALIDATED_BREAK  # Still validated, but...
-        is_actionable = False  # ...not actionable due to phase
-        veto_reasons.append(f'phase-gated: {break_type} ({phase_reason})')
+        status = AnomalyStatus.PHASE_GATED
+        is_actionable = False
 
     return {
         'status': status,
         'is_actionable': is_actionable,
+        'is_validated': status in AnomalyStatus.VALIDATED,
         'break_type': break_type,
         'phase_reason': phase_reason,
         'z_mad': z_mad,

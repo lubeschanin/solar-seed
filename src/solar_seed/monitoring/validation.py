@@ -9,7 +9,11 @@ data from contaminating baselines and thresholds.
 
 import numpy as np
 
-from .constants import MIN_MI_THRESHOLD, MIN_ROI_STD
+from .constants import (
+    EXTREME_LOW_BASELINE_FRACTION,
+    MIN_MI_THRESHOLD,
+    MIN_ROI_STD,
+)
 
 
 def validate_roi_variance(img1, img2, pair: str = None) -> dict:
@@ -70,16 +74,19 @@ def validate_mi_measurement(delta_mi: float, pair: str = None,
     This gate runs BEFORE MAD/baseline calculation to prevent
     data errors from contaminating statistics.
 
+    The gate is a pure noise floor (MIN_MI_THRESHOLD). It deliberately does NOT
+    scale with the baseline: a deep coupling collapse is the signal this system
+    exists to detect, and a baseline-relative gate discards exactly the largest
+    events. See the constants module for the full rationale.
+
     Args:
         delta_mi: Measured ΔMI value
         pair: Channel pair name (for reporting)
-        baseline_mean: Baseline mean ΔMI for this pair, if known. When given,
-            the low-MI gate becomes baseline-relative: max(0.02, 0.3*baseline).
-            A fixed threshold of 0.05 would discard genuine breaks in
-            weak-coupling pairs (e.g. 193-304 at 1k: baseline 0.07 ± 0.02).
+        baseline_mean: Baseline mean ΔMI for this pair, if known. Used only to
+            set the non-blocking 'is_extreme_low' flag - never to invalidate.
 
     Returns:
-        dict with 'is_valid', 'error_type', 'error_reason'
+        dict with 'is_valid', 'error_type', 'error_reason', 'is_extreme_low'
     """
     # Check for NaN/Inf
     if not np.isfinite(delta_mi):
@@ -87,18 +94,33 @@ def validate_mi_measurement(delta_mi: float, pair: str = None,
             'is_valid': False,
             'error_type': 'INVALID_VALUE',
             'error_reason': f'Non-finite value: {delta_mi}',
+            'is_extreme_low': False,
         }
 
-    # Check for suspiciously low MI (indicates data pipeline failure)
-    if baseline_mean is not None and baseline_mean > 0:
-        threshold = max(0.02, 0.3 * baseline_mean)
-    else:
-        threshold = MIN_MI_THRESHOLD
-    if delta_mi < threshold:
+    # Noise floor: at or below this there is no coupling left to measure, which
+    # is indistinguishable from a broken pipeline.
+    if delta_mi < MIN_MI_THRESHOLD:
         return {
             'is_valid': False,
             'error_type': 'BELOW_THRESHOLD',
-            'error_reason': f'ΔMI={delta_mi:.4f} < {threshold:.4f} (likely data error)',
+            'error_reason': (
+                f'ΔMI={delta_mi:.4f} < {MIN_MI_THRESHOLD:.4f} '
+                f'(at/below permutation noise floor)'
+            ),
+            'is_extreme_low': True,
         }
 
-    return {'is_valid': True, 'error_type': None, 'error_reason': None}
+    # Valid, but worth flagging: a collapse deeper than any documented flare
+    # signature. Kept in the statistics on purpose.
+    is_extreme_low = bool(
+        baseline_mean
+        and baseline_mean > 0
+        and delta_mi < EXTREME_LOW_BASELINE_FRACTION * baseline_mean
+    )
+
+    return {
+        'is_valid': True,
+        'error_type': None,
+        'error_reason': None,
+        'is_extreme_low': is_extreme_low,
+    }

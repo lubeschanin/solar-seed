@@ -70,4 +70,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "scripts"]
+markers = [
+    "integration: hits live network endpoints; deselect with -m 'not integration'",
+]

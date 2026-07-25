@@ -420,6 +420,13 @@ class MonitoringDB:
             ('trigger_kind', 'TEXT'),
             ('trigger_value', 'REAL'),
             ('trigger_threshold', 'REAL'),
+            # Episode tracking: the most recent trigger folded into this
+            # prediction. insert_or_extend_prediction measures the episode gap
+            # from here, not from prediction_time - otherwise a sustained
+            # deviation rolls past the gap tolerance and splits into a new row
+            # every few readings, which is what it is meant to prevent.
+            ('last_trigger_time', 'DATETIME'),
+            ('n_triggers', 'INTEGER DEFAULT 1'),
         ])
 
         # Migrate existing pair strings to pair_id (one-time migration)
@@ -755,6 +762,126 @@ class MonitoringDB:
         except sqlite3.Error as e:
             print(f"Error inserting prediction: {e}")
             return -1
+
+    #: Severity ordering used to decide whether an ongoing alarm episode has
+    #: escalated. Higher wins.
+    STATUS_SEVERITY = {'ELEVATED': 1, 'WARNING': 2, 'ALERT': 3}
+
+    #: A trigger this close to the previous one continues the same episode
+    #: rather than opening a new prediction.
+    EPISODE_GAP_MINUTES = 30
+
+    def insert_or_extend_prediction(self, prediction_time: str, trigger_pair: str,
+                                    trigger_status: str, episode_gap_minutes: int = None,
+                                    **kwargs) -> tuple[int, str]:
+        """
+        Record a prediction as part of an alarm EPISODE, not per measurement.
+
+        The monitor samples every ~10 min and used to emit one prediction per
+        pair per reading, so a single sustained deviation produced dozens of
+        rows: 14708 predictions accumulated over six months, which makes any
+        hit rate meaningless (with that many alarms, hitting M/X flares is
+        arithmetic, not skill). One episode = one prediction, so precision and
+        recall become computable.
+
+        An episode continues while triggers keep arriving within
+        `episode_gap_minutes` of each other. Within an episode:
+          - a MORE severe status escalates the existing row in place
+          - an equal or milder status is absorbed (no new row)
+        A gap longer than the tolerance opens a new episode.
+
+        Returns:
+            (prediction_id, action) where action is 'created', 'escalated'
+            or 'absorbed'. prediction_id is -1 on error.
+        """
+        gap = episode_gap_minutes if episode_gap_minutes is not None else self.EPISODE_GAP_MINUTES
+        cursor = self.conn.cursor()
+
+        try:
+            pred_dt = datetime.fromisoformat(str(prediction_time).replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            return self.insert_prediction(
+                prediction_time=prediction_time, trigger_pair=trigger_pair,
+                trigger_status=trigger_status, **kwargs), 'created'
+
+        cutoff = (pred_dt - timedelta(minutes=gap)).strftime("%Y-%m-%dT%H:%M:%S")
+
+        # The episode gap is measured from the LAST trigger folded into the
+        # prediction, not from when the episode opened.
+        cursor.execute("""
+            SELECT id, trigger_status,
+                   COALESCE(last_trigger_time, prediction_time) AS last_seen
+            FROM predictions
+            WHERE trigger_pair = ?
+              AND COALESCE(last_trigger_time, prediction_time) >= ?
+              AND COALESCE(last_trigger_time, prediction_time) <= ?
+            ORDER BY last_seen DESC
+            LIMIT 1
+        """, (trigger_pair, cutoff, prediction_time))
+        open_row = cursor.fetchone()
+
+        if open_row is None:
+            new_id = self.insert_prediction(
+                prediction_time=prediction_time, trigger_pair=trigger_pair,
+                trigger_status=trigger_status, **kwargs)
+            if new_id > 0:
+                cursor.execute(
+                    "UPDATE predictions SET last_trigger_time = ?, n_triggers = 1 WHERE id = ?",
+                    (prediction_time, new_id))
+                self.conn.commit()
+            return new_id, 'created'
+
+        pred_id = open_row['id']
+        prev_severity = self.STATUS_SEVERITY.get(open_row['trigger_status'], 0)
+        new_severity = self.STATUS_SEVERITY.get(trigger_status, 0)
+
+        # Every trigger extends the episode, whether or not it escalates.
+        cursor.execute("""
+            UPDATE predictions
+            SET last_trigger_time = ?, n_triggers = COALESCE(n_triggers, 1) + 1
+            WHERE id = ?
+        """, (prediction_time, pred_id))
+
+        if new_severity <= prev_severity:
+            self.conn.commit()
+            return pred_id, 'absorbed'
+
+        # Escalation: upgrade the episode in place and extend its window from
+        # the escalating trigger, so the forecast window tracks the worst state.
+        valid_to = kwargs.get('valid_to')
+        if valid_to is None:
+            valid_to = (pred_dt + timedelta(minutes=90)).isoformat()
+
+        try:
+            cursor.execute("""
+                UPDATE predictions
+                SET trigger_status = ?,
+                    predicted_class = COALESCE(?, predicted_class),
+                    trigger_residual = COALESCE(?, trigger_residual),
+                    trigger_trend = COALESCE(?, trigger_trend),
+                    trigger_kind = COALESCE(?, trigger_kind),
+                    trigger_value = COALESCE(?, trigger_value),
+                    trigger_threshold = COALESCE(?, trigger_threshold),
+                    valid_to = ?,
+                    notes = COALESCE(notes, '') || ?
+                WHERE id = ?
+            """, (
+                trigger_status,
+                kwargs.get('predicted_class'),
+                kwargs.get('trigger_residual'),
+                kwargs.get('trigger_trend'),
+                kwargs.get('trigger_kind'),
+                kwargs.get('trigger_value'),
+                kwargs.get('trigger_threshold'),
+                valid_to,
+                f' | escalated to {trigger_status} at {prediction_time}',
+                pred_id,
+            ))
+            self.conn.commit()
+            return pred_id, 'escalated'
+        except sqlite3.Error as e:
+            print(f"Error escalating prediction: {e}")
+            return -1, 'error'
 
     def insert_prediction_match(self, prediction_id: int, flare_event_id: int,
                                 match_type: str, time_to_peak_min: float = None,
@@ -2143,34 +2270,129 @@ class MonitoringDB:
         timestamp: str,
         pair: str,
         new_delta_mi: float,
-        original_delta_mi: float = None
+        original_delta_mi: float = None,
+        new_mi_original: float = None,
+        baselines: dict = None,
     ) -> bool:
         """
         Update a measurement with backfilled 4k data.
+
+        Derived fields (residual, deviation_pct, status) are recomputed against
+        the 4k baseline, or set to NULL when no baseline is available. Leaving
+        them at their 1k values - as this method used to - produces rows that
+        carry a 4k ΔMI next to a 1k-derived label, so any analysis joining ΔMI
+        against status silently mixes two computations. `mi_original` is
+        likewise cleared unless the caller supplies the recomputed value.
 
         Args:
             timestamp: Measurement timestamp
             pair: Channel pair (e.g., '193-304')
             new_delta_mi: New MI value from 4k data
             original_delta_mi: Original 1k value (for audit)
+            new_mi_original: Recomputed MI_original at 4k, if available
+            baselines: {pair: {'mean', 'std'}} at 4k. When omitted, the
+                measured 4k baselines are loaded from disk.
 
         Returns:
             True if updated, False if not found
         """
+        from .baselines import load_baselines
+
         cursor = self.conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
+
+        if baselines is None:
+            baselines = load_baselines().get('4k', {})
+        base = (baselines or {}).get(pair)
+
+        residual = deviation_pct = status = None
+        if base and base.get('std'):
+            residual = (new_delta_mi - base['mean']) / base['std']
+            deviation_pct = (new_delta_mi - base['mean']) / base['mean'] if base['mean'] else None
+            if deviation_pct is not None:
+                if deviation_pct < -0.25:
+                    status = 'ALERT'
+                elif deviation_pct < -0.15:
+                    status = 'WARNING'
+                elif deviation_pct < -0.10:
+                    status = 'ELEVATED'
+                else:
+                    status = 'NORMAL'
 
         cursor.execute("""
             UPDATE coupling_measurements
             SET delta_mi = ?,
+                mi_original = ?,
+                residual = ?,
+                deviation_pct = ?,
+                status = ?,
                 resolution = '4k',
                 backfilled_at = ?,
                 original_delta_mi = COALESCE(original_delta_mi, ?)
             WHERE timestamp = ? AND pair = ?
-        """, (new_delta_mi, now, original_delta_mi, timestamp, pair))
+        """, (new_delta_mi, new_mi_original, residual, deviation_pct, status,
+              now, original_delta_mi, timestamp, pair))
 
         self.conn.commit()
         return cursor.rowcount > 0
+
+    def repair_backfilled_rows(self, baselines: dict = None, dry_run: bool = False) -> dict:
+        """
+        Recompute derived fields on rows backfilled before the fix above.
+
+        Those rows hold a 4k delta_mi next to residual/deviation_pct/status
+        computed from the pre-backfill 1k value. Sudden-drop fields and
+        mi_original cannot be reconstructed and are cleared.
+
+        Returns:
+            {'examined': int, 'updated': int, 'skipped_no_baseline': int}
+        """
+        from .baselines import load_baselines
+
+        if baselines is None:
+            baselines = load_baselines().get('4k', {})
+
+        cursor = self.conn.cursor()
+        rows = cursor.execute("""
+            SELECT id, pair, delta_mi FROM coupling_measurements
+            WHERE resolution = '4k' AND backfilled_at IS NOT NULL
+        """).fetchall()
+
+        updated = skipped = 0
+        for row in rows:
+            base = (baselines or {}).get(row['pair'])
+            if not base or not base.get('std') or not base.get('mean'):
+                skipped += 1
+                continue
+            delta_mi = row['delta_mi']
+            if delta_mi is None:
+                skipped += 1
+                continue
+            residual = (delta_mi - base['mean']) / base['std']
+            deviation_pct = (delta_mi - base['mean']) / base['mean']
+            if deviation_pct < -0.25:
+                status = 'ALERT'
+            elif deviation_pct < -0.15:
+                status = 'WARNING'
+            elif deviation_pct < -0.10:
+                status = 'ELEVATED'
+            else:
+                status = 'NORMAL'
+
+            if not dry_run:
+                cursor.execute("""
+                    UPDATE coupling_measurements
+                    SET residual = ?, deviation_pct = ?, status = ?,
+                        mi_original = NULL,
+                        sudden_drop_pct = NULL, sudden_drop_severity = NULL
+                    WHERE id = ?
+                """, (residual, deviation_pct, status, row['id']))
+            updated += 1
+
+        if not dry_run:
+            self.conn.commit()
+
+        return {'examined': len(rows), 'updated': updated, 'skipped_no_baseline': skipped}
 
     def get_backfill_stats(self) -> dict:
         """Get backfill statistics."""

@@ -146,102 +146,125 @@ class TestGeomagneticRisk:
         assert level == 0
 
 
+#: Baselines used across the tests in this module. Roughly the values measured
+#: over six months of monitoring. Tests must never read the production
+#: results/early_warning/baselines.json - results would then depend on how
+#: recently someone ran `baselines --recompute`.
+TEST_BASELINES = {
+    '1k': {
+        '193-211': {'mean': 0.80, 'std': 0.14},
+        '193-304': {'mean': 0.18, 'std': 0.06},
+    },
+    '4k': {
+        '193-211': {'mean': 0.80, 'std': 0.17},
+        '193-304': {'mean': 0.11, 'std': 0.05},
+    },
+    '_meta': {'source': 'test fixture'},
+}
+
+
+def make_monitor(tmp_path, baselines=None):
+    """CouplingMonitor with isolated history AND baseline files."""
+    from solar_seed.monitoring.baselines import save_baselines
+
+    baseline_path = tmp_path / 'baselines.json'
+    save_baselines(baselines or TEST_BASELINES, baseline_path)
+    return CouplingMonitor(
+        history_file=tmp_path / 'history.json',
+        baseline_file=baseline_path,
+    )
+
+
 class TestCouplingMonitor:
     """Test coupling residual tracking."""
 
     @pytest.fixture
-    def monitor(self):
-        """Create a fresh monitor with temp file."""
-        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
-            temp_path = Path(f.name)
-        monitor = CouplingMonitor(history_file=temp_path)
-        yield monitor
-        # Cleanup
-        if temp_path.exists():
-            temp_path.unlink()
+    def monitor(self, tmp_path):
+        """Create a fresh monitor with temp history and temp baselines."""
+        return make_monitor(tmp_path)
 
     def test_baselines_defined(self, monitor):
-        """Verify baseline values exist for key pairs."""
-        assert '193-211' in monitor.BASELINES
-        assert '193-304' in monitor.BASELINES
-        assert monitor.BASELINES['193-211']['mean'] == 0.59
-        assert monitor.BASELINES['193-211']['std'] == 0.12
+        """Baselines resolve for the key pairs."""
+        active = monitor.get_baselines('1k')
+        assert '193-211' in active
+        assert '193-304' in active
+        assert active['193-211']['mean'] == 0.80
+        assert active['193-211']['std'] == 0.14
 
-    def test_baselines_1k_and_4k_defined(self, monitor):
-        """Verify both 1k and 4k baselines exist."""
-        # 1k baselines (synoptic data)
-        assert '193-211' in monitor.BASELINES_1K
-        assert '193-304' in monitor.BASELINES_1K
-        assert monitor.BASELINES_1K['193-211']['mean'] == 0.59
-        assert monitor.BASELINES_1K['193-304']['mean'] == 0.07
+    def test_baselines_come_from_file_not_class_constants(self, monitor):
+        """The active baselines are the loaded ones, not the provisional table.
 
-        # 4k baselines (JSOC full-resolution)
-        assert '193-211' in monitor.BASELINES_4K
-        assert '193-304' in monitor.BASELINES_4K
-        assert monitor.BASELINES_4K['193-211']['mean'] == 1.03
-        assert monitor.BASELINES_4K['193-304']['mean'] == 0.32
+        The class constants are a cold-start fallback only. They had drifted
+        far from the measured distributions - 193-304 at 4k was coded 0.32
+        against a measured 0.107, which made 65% of all 4k readings fire ALERT.
+        """
+        assert monitor.baseline_source == 'test fixture'
+        assert monitor.get_baselines('1k')['193-211']['mean'] != \
+            monitor.BASELINES_1K['193-211']['mean']
 
-        # 4k values should be higher than 1k
-        assert monitor.BASELINES_4K['193-211']['mean'] > monitor.BASELINES_1K['193-211']['mean']
-        assert monitor.BASELINES_4K['193-304']['mean'] > monitor.BASELINES_1K['193-304']['mean']
+    def test_provisional_fallback_when_no_file(self, tmp_path):
+        """With no baseline file the provisional table is used and flagged."""
+        m = CouplingMonitor(
+            history_file=tmp_path / 'history.json',
+            baseline_file=tmp_path / 'absent.json',
+        )
+        assert m.baseline_source == 'provisional'
+        assert m.get_baselines('1k') == m.BASELINES_1K
 
     def test_get_baselines_method(self, monitor):
-        """Test get_baselines returns correct baselines for resolution."""
-        baselines_1k = monitor.get_baselines('1k')
-        baselines_4k = monitor.get_baselines('4k')
-
-        assert baselines_1k == monitor.BASELINES_1K
-        assert baselines_4k == monitor.BASELINES_4K
-
+        """get_baselines returns the table for the requested resolution."""
+        for pair, expected in TEST_BASELINES['1k'].items():
+            assert monitor.get_baselines('1k')[pair] == expected
+        for pair, expected in TEST_BASELINES['4k'].items():
+            assert monitor.get_baselines('4k')[pair] == expected
         # Default should be 1k
-        assert monitor.get_baselines() == monitor.BASELINES_1K
+        assert monitor.get_baselines()['193-211'] == TEST_BASELINES['1k']['193-211']
+
+    def test_unmeasured_pairs_fall_back_to_provisional(self, monitor):
+        """Pairs absent from the measured file still resolve.
+
+        The monitor only samples 193-211 and 193-304, so 171-193 and 211-335
+        never reach the sample threshold and keep their provisional values.
+        """
+        assert monitor.get_baselines('1k')['211-335'] == \
+            monitor.BASELINES_1K['211-335']
 
     def test_residual_with_resolution_parameter(self, monitor):
-        """Test compute_residual uses correct baseline for resolution."""
-        delta_mi = 0.30  # Test value for 193-304
+        """compute_residual uses the baseline matching the resolution."""
+        delta_mi = 0.18  # nominal at 1k, well above the 4k baseline
 
-        # With 1k baseline (0.07): 0.30 is way above baseline
         result_1k = monitor.compute_residual('193-304', delta_mi, resolution='1k')
-        assert result_1k['deviation_pct'] > 3.0  # 329% above baseline
+        assert result_1k['deviation_pct'] == pytest.approx(0.0, abs=0.01)
 
-        # With 4k baseline (0.32): 0.30 is slightly below baseline
         result_4k = monitor.compute_residual('193-304', delta_mi, resolution='4k')
-        assert result_4k['deviation_pct'] < 0  # Below baseline
-        assert result_4k['deviation_pct'] > -0.10  # But not much
+        assert result_4k['deviation_pct'] > 0.5  # far above the 4k baseline
 
     def test_residual_4k_status_classification(self, monitor):
-        """Test status classification with 4k baselines."""
-        # 4k 193-304 baseline: 0.32
-        # Normal: around baseline
-        result = monitor.compute_residual('193-304', 0.32, resolution='4k')
-        assert result['status'] == 'NORMAL'
-
-        # Warning: 20% below baseline = 0.256
-        result = monitor.compute_residual('193-304', 0.256, resolution='4k')
-        assert result['status'] == 'WARNING'
-
-        # Alert: 30% below baseline = 0.224
-        result = monitor.compute_residual('193-304', 0.22, resolution='4k')
-        assert result['status'] == 'ALERT'
+        """Status classification with 4k baselines (193-304 mean 0.11)."""
+        assert monitor.compute_residual(
+            '193-304', 0.11, resolution='4k')['status'] == 'NORMAL'
+        # 20% below baseline
+        assert monitor.compute_residual(
+            '193-304', 0.088, resolution='4k')['status'] == 'WARNING'
+        # 30% below baseline
+        assert monitor.compute_residual(
+            '193-304', 0.077, resolution='4k')['status'] == 'ALERT'
 
     def test_residual_normal(self, monitor):
-        """Normal coupling: within 1σ of baseline."""
-        # 193-211 baseline: 0.59 ± 0.12
-        result = monitor.compute_residual('193-211', 0.59)
+        """Normal coupling: at the baseline."""
+        result = monitor.compute_residual('193-211', 0.80)
         assert result['residual'] == pytest.approx(0.0, abs=0.1)
         assert result['status'] == 'NORMAL'
 
     def test_residual_elevated(self, monitor):
         """Elevated: 10-15% below baseline."""
-        # 193-211: 0.59 - 12% = 0.52
-        result = monitor.compute_residual('193-211', 0.52)
+        result = monitor.compute_residual('193-211', 0.80 * 0.88)
         assert result['deviation_pct'] < -0.10
         assert result['status'] in ['ELEVATED', 'WARNING']
 
     def test_residual_warning(self, monitor):
         """Warning: 15-25% below baseline."""
-        # 193-211: 0.59 - 20% = 0.47
-        result = monitor.compute_residual('193-211', 0.47)
+        result = monitor.compute_residual('193-211', 0.80 * 0.80)
         assert result['deviation_pct'] < -0.15
         assert result['status'] == 'WARNING'
 
@@ -396,69 +419,98 @@ class TestCouplingMonitor:
         result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
         assert result is False
 
+    @staticmethod
+    def _fill(monitor, values, start_hour=10):
+        """Append `values` as consecutive 10-minute readings for 193-211."""
+        for i, v in enumerate(values):
+            monitor.add_reading(
+                f"2026-01-01T{start_hour + i // 6:02d}:{(i % 6) * 10:02d}:00",
+                {'193-211': {'delta_mi': v}},
+            )
+
     def test_persistence_single_frame(self, monitor):
-        """Single previous frame with break = not persistent (need 2)."""
-        # Add one reading with z_mad > 2.0 (break detected)
-        monitor.add_reading(
-            "2026-01-01T10:00:00",
-            {'193-211': {'delta_mi': 0.5, 'z_mad': 5.0}}  # Break
-        )
-        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
-        # Need 1 previous break (min_frames-1=1), have 1 → persistent
-        assert result is True
+        """One depressed frame before the current one = persistent (min_frames=2).
+
+        Persistence is judged against the level BEFORE the break window, not
+        against the rolling median used by detect_coupling_break: that median
+        follows a sustained collapse downwards and would drop the frame back
+        below threshold after a frame or two.
+        """
+        # Quiet plateau around 0.90, then one clearly depressed frame.
+        self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.50])
+        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2) is True
 
     def test_persistence_previous_no_break(self, monitor):
-        """Previous frame had no break = not persistent."""
-        # Add reading WITHOUT break (z_mad < 2.0)
-        monitor.add_reading(
-            "2026-01-01T10:00:00",
-            {'193-211': {'delta_mi': 0.5, 'z_mad': 1.0}}  # No break
-        )
-        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
-        assert result is False
+        """Previous frame still at the quiet level = not persistent (single-frame spike)."""
+        self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.90])
+        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2) is False
 
-    def test_persistence_vetoed_still_counts(self, monitor):
-        """Vetoed break (is_break=False but z_mad>2) should still count for persistence."""
-        # Add reading where break was DETECTED but VETOED
-        # This tests the fix: we check z_mad, not is_break
-        monitor.add_reading(
-            "2026-01-01T10:00:00",
-            {'193-211': {'delta_mi': 0.5, 'z_mad': 10.0, 'is_break': False, 'break_vetoed': 'spike'}}
-        )
-        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
-        # z_mad > 2.0 → counts as break for persistence
-        assert result is True
+    def test_persistence_survives_sustained_collapse(self, monitor):
+        """A long collapse stays persistent.
+
+        Regression guard: the old z_mad-based check compared against a rolling
+        median that sinks with the collapse, so a plateau of low values stopped
+        registering as a break after a couple of frames.
+        """
+        self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.50, 0.48, 0.47, 0.49])
+        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2) is True
 
     def test_persistence_three_frames(self, monitor):
-        """Three frames required: need 2 previous breaks."""
-        # Add two readings with breaks
-        monitor.add_reading("2026-01-01T10:00:00", {'193-211': {'z_mad': 5.0}})
-        monitor.add_reading("2026-01-01T10:10:00", {'193-211': {'z_mad': 6.0}})
+        """Three frames required: the two preceding frames must both be depressed."""
+        self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.50, 0.48])
+        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=3) is True
 
-        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=3)
-        # Need 2 previous breaks (min_frames-1=2), have 2 → persistent
-        assert result is True
+        # Only the most recent frame depressed → not persistent over 3 frames
+        m2_values = [0.90, 0.91, 0.89, 0.90, 0.90, 0.50]
+        monitor.history = []
+        self._fill(monitor, m2_values)
+        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=3) is False
+
+    def test_persistence_insufficient_reference(self, monitor):
+        """Too little pre-break history to establish a reference = not persistent."""
+        self._fill(monitor, [0.90, 0.50])
+        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2) is False
 
     def test_persistence_not_current_break(self, monitor):
         """If current is not a break, return False immediately."""
-        monitor.add_reading("2026-01-01T10:00:00", {'193-211': {'z_mad': 5.0}})
-        result = monitor.is_persistent_break('193-211', current_is_break=False, min_frames=2)
-        assert result is False
+        self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.50])
+        assert monitor.is_persistent_break('193-211', current_is_break=False, min_frames=2) is False
 
 
 class TestSuddenDropDetector:
-    """Test sudden drop detection for pre-flare warnings."""
+    """Test sudden drop detection for pre-flare warnings.
+
+    The reference level is the MEDIAN of the lookback window. It used to be the
+    maximum, which sits systematically above the typical level (for 193-211 the
+    measured sigma/mu is 0.24, so max-of-three lands ~20% high) and made an
+    ordinary reading look like a 15% drop. That produced 69% of all stored
+    predictions.
+    """
+
+    #: Baseline low enough that the drops below stay ABOVE it - the whole
+    #: point of the sudden-drop detector is to catch a fall that the absolute
+    #: threshold would miss.
+    BASELINES = {
+        '1k': {'193-211': {'mean': 0.70, 'std': 0.14}},
+        '4k': {'193-211': {'mean': 0.70, 'std': 0.14}},
+        '_meta': {'source': 'test fixture'},
+    }
 
     @pytest.fixture
-    def monitor(self):
-        """Create monitor with typical history."""
-        m = CouplingMonitor()
+    def monitor(self, tmp_path):
+        """Create monitor with typical history (median of window = 0.90)."""
+        m = make_monitor(tmp_path, self.BASELINES)
         m.history = [
             {'timestamp': '2026-01-01T10:00:00', 'coupling': {'193-211': {'delta_mi': 0.90}}},
             {'timestamp': '2026-01-01T10:10:00', 'coupling': {'193-211': {'delta_mi': 0.95}}},
             {'timestamp': '2026-01-01T10:20:00', 'coupling': {'193-211': {'delta_mi': 0.88}}},
         ]
         return m
+
+    def test_reference_is_median_not_max(self, monitor):
+        """The reference is the window median, not its maximum."""
+        result = monitor.compute_residual('193-211', 0.90)
+        assert result['sudden_drop']['reference_value'] == pytest.approx(0.90)
 
     def test_no_drop_normal_status(self, monitor):
         """No significant drop = NORMAL status."""
@@ -467,31 +519,47 @@ class TestSuddenDropDetector:
         # Status based on absolute threshold (0.90 > baseline 0.59)
         assert result['status'] == 'NORMAL'
 
+    def test_typical_reading_is_not_a_drop(self, monitor):
+        """A reading at the window's own level must not register as a drop.
+
+        Regression guard for the max-reference bias: with max(0.95) as
+        reference, 0.88 - a value already present in the window - came out as
+        a -7% "drop", and anything mildly below it crossed -15%.
+        """
+        result = monitor.compute_residual('193-211', 0.88)
+        assert result['sudden_drop']['sudden_drop'] is False
+
     def test_moderate_drop_detected(self, monitor):
-        """15-25% drop = MODERATE severity."""
-        # 0.95 * 0.83 = 0.79 (17% drop from max)
-        result = monitor.compute_residual('193-211', 0.79)
+        """15-25% drop from the median = MODERATE severity."""
+        # 0.90 * 0.80 = 0.72 (20% drop from median)
+        result = monitor.compute_residual('193-211', 0.72)
         assert result['sudden_drop']['sudden_drop'] is True
         assert result['sudden_drop']['severity'] == 'MODERATE'
 
     def test_severe_drop_detected(self, monitor):
-        """25%+ drop = SEVERE severity."""
-        # 0.95 * 0.73 = 0.69 (27% drop from max)
-        result = monitor.compute_residual('193-211', 0.69)
+        """25%+ drop from the median = SEVERE severity."""
+        # 0.90 * 0.70 = 0.63 (30% drop from median)
+        result = monitor.compute_residual('193-211', 0.63)
         assert result['sudden_drop']['sudden_drop'] is True
         assert result['sudden_drop']['severity'] == 'SEVERE'
 
     def test_sudden_drop_triggers_elevated_status(self, monitor):
         """Severe sudden drop should trigger ELEVATED even if above baseline."""
-        # 0.70 is above baseline (0.59) but 26% below recent max (0.95)
-        result = monitor.compute_residual('193-211', 0.70)
+        # 0.65 is above baseline (0.59) but 28% below the median (0.90)
+        result = monitor.compute_residual('193-211', 0.65)
         assert result['sudden_drop']['sudden_drop'] is True
         assert result['sudden_drop']['severity'] == 'SEVERE'
         assert result['status'] == 'ELEVATED'
 
     def test_m3_preflare_scenario(self, monitor):
-        """Simulate M3 pre-flare drop that was missed before."""
-        # M3 timeline: 0.917 → 0.953 → 0.875 → 0.714 (drop!)
+        """Simulate the M3 pre-flare drop.
+
+        Timeline 0.917 → 0.953 → 0.875 → 0.714. Against the median (0.917) this
+        is -22%, so MODERATE rather than the SEVERE the max-reference produced;
+        the -25% SEVERE boundary was only crossed because the reference was the
+        window peak. Both severities map to status ELEVATED, so the operational
+        outcome - the pre-flare warning - is unchanged.
+        """
         monitor.history = [
             {'timestamp': '2026-01-11T21:38:00', 'coupling': {'193-211': {'delta_mi': 0.917}}},
             {'timestamp': '2026-01-11T21:48:00', 'coupling': {'193-211': {'delta_mi': 0.953}}},
@@ -499,18 +567,17 @@ class TestSuddenDropDetector:
         ]
         result = monitor.compute_residual('193-211', 0.714)
 
-        # Should detect severe drop
         assert result['sudden_drop']['sudden_drop'] is True
-        assert result['sudden_drop']['severity'] == 'SEVERE'
+        assert result['sudden_drop']['severity'] == 'MODERATE'
         drop_pct = result['sudden_drop']['drop_pct']
         assert drop_pct < -0.20  # At least 20% drop
 
-        # Should trigger ELEVATED (pre-flare warning!)
+        # Still triggers ELEVATED (pre-flare warning!)
         assert result['status'] == 'ELEVATED'
 
-    def test_empty_history_no_crash(self):
+    def test_empty_history_no_crash(self, tmp_path):
         """Empty history should not crash."""
-        m = CouplingMonitor()
+        m = make_monitor(tmp_path, self.BASELINES)
         m.history = []
         result = m.compute_residual('193-211', 0.5)
         assert result['sudden_drop']['sudden_drop'] is False
@@ -520,24 +587,33 @@ class TestSuddenDropDetector:
 class TestAlertThresholds:
     """Test that alert thresholds match paper findings."""
 
-    def test_flare_coupling_reduction(self):
+    def test_flare_coupling_reduction(self, tmp_path):
         """Paper shows 25-47% coupling reduction during flares."""
-        monitor = CouplingMonitor()
+        monitor = make_monitor(tmp_path)
 
-        # Simulate flare-level reduction (30% below baseline)
-        baseline = monitor.BASELINES['193-211']['mean']
+        # Simulate flare-level reduction (30% below the ACTIVE baseline, not
+        # the provisional class constant - those are no longer the same thing)
+        baseline = monitor.get_baselines('1k')['193-211']['mean']
         flare_value = baseline * 0.70  # 30% reduction
 
         result = monitor.compute_residual('193-211', flare_value)
         assert result['status'] == 'ALERT'
 
-    def test_pre_flare_detection_window(self):
-        """Coupling anomaly should trigger before flare peak."""
-        monitor = CouplingMonitor()
+    def test_deep_collapse_still_classified_not_discarded(self, tmp_path):
+        """A -70% collapse must reach ALERT, not be dropped as a data error."""
+        monitor = make_monitor(tmp_path)
+        baseline = monitor.get_baselines('1k')['193-211']['mean']
 
-        # 15% reduction should trigger WARNING
-        baseline = monitor.BASELINES['193-211']['mean']
-        pre_flare = baseline * 0.85
+        result = monitor.compute_residual('193-211', baseline * 0.30)
+        assert result['status'] == 'ALERT'
+
+    def test_pre_flare_detection_window(self, tmp_path):
+        """Coupling anomaly should trigger before flare peak."""
+        monitor = make_monitor(tmp_path)
+
+        # 14% reduction should trigger at least ELEVATED
+        baseline = monitor.get_baselines('1k')['193-211']['mean']
+        pre_flare = baseline * 0.86
 
         result = monitor.compute_residual('193-211', pre_flare)
         assert result['status'] in ['WARNING', 'ELEVATED']

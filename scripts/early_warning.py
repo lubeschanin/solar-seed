@@ -494,10 +494,16 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
         return
     db = get_monitoring_db()
 
-    # Extract resolution from quality metadata
+    # Resolution as determined from the actual array shape in
+    # run_coupling_analysis. Do NOT re-derive it here by substring-matching
+    # '1024' in the resolution string: anything that is not literally 1024
+    # (512, 2048, a missing field) would silently be tagged '4k' and get the
+    # 4k baselines - the same class of mislabelling that once mistagged 6634
+    # measurements.
     quality = coupling.get('_quality', {})
-    resolution_str = quality.get('resolution', '1024x1024')
-    resolution = '1k' if '1024' in resolution_str else '4k'
+    resolution = quality.get('resolution_class')
+    if resolution not in ('1k', '4k'):
+        resolution = '1k'
     time_spread_sec = quality.get('time_spread_sec')
 
     # Extract validation data for quality_ok
@@ -607,7 +613,15 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
                         trigger_kind = 'TREND'
                         trigger_value = data.get('slope_pct_per_hour')
 
-            db.insert_prediction(
+            if trigger_kind is None:
+                # Nothing above matched. Leaving this NULL made 2376 stored
+                # predictions unattributable; record the status itself so every
+                # row is at least traceable to what fired it.
+                trigger_kind = 'STATUS_ONLY'
+                trigger_value = data.get('deviation_pct')
+
+            # One prediction per alarm episode, not per 10-min reading.
+            db.insert_or_extend_prediction(
                 prediction_time=timestamp,
                 predicted_class=predicted_class,
                 trigger_pair=pair,
@@ -1104,6 +1118,7 @@ def run_coupling_analysis(validate_breaks: bool = True, xray: dict = None, use_s
             'data_timestamp': timestamp,  # actual AIA observation time (not wallclock)
             'data_source': data_source,
             'resolution': f'{actual_size}x{actual_size}',
+            'resolution_class': resolution,  # authoritative: derived from array shape
             'is_good': quality_info['is_good_quality'] if quality_info else None,
             'time_spread_sec': time_spread,
             'timestamps': quality_info['timestamps'] if quality_info else {},
@@ -1465,6 +1480,106 @@ def monitor(
         with_stereo=stereo,
         store_db=not no_db,
     )
+
+
+@app.command()
+def baselines(
+    recompute: bool = typer.Option(False, "--recompute", help="Recompute from monitoring.db and save"),
+    days: int = typer.Option(0, "--days", "-d", help="Restrict to last N days (0 = all history)"),
+    exclude_flare_hours: float = typer.Option(
+        2.0, "--exclude-flare-hours",
+        help="Drop measurements within N hours of an M/X flare"),
+    repair_backfill: bool = typer.Option(
+        False, "--repair-backfill",
+        help="Recompute residual/deviation_pct/status on already-backfilled 4k rows"),
+):
+    """
+    📐 Show or recompute ΔMI baselines.
+
+    Baselines drive every residual, deviation_pct and status. Without
+    --recompute this only reports what is currently in effect.
+
+    Examples:
+      baselines                        # show active baselines
+      baselines --recompute            # derive from all history, quiet Sun only
+      baselines --recompute --days 90  # last 90 days
+      baselines --repair-backfill      # fix rows backfilled before the fix
+    """
+    from rich.table import Table
+    from solar_seed.monitoring.baselines import (
+        compute_baselines_from_db, load_baselines, save_baselines,
+    )
+
+    db = get_monitoring_db()
+
+    if recompute:
+        console.print("[bold]Recomputing baselines from monitoring.db...[/]")
+        computed = compute_baselines_from_db(
+            db,
+            days=days or None,
+            exclude_flare_hours=exclude_flare_hours,
+        )
+        meta = computed['_meta']
+        console.print(
+            f"  Excluded {meta['excluded_near_flare']} measurements "
+            f"within ±{exclude_flare_hours}h of an M/X flare"
+        )
+
+        current = load_baselines()
+        table = Table(title="Baseline change", box=box.ROUNDED)
+        for col in ("Pair", "Res", "old mean ± std", "new mean ± std", "n", "source"):
+            table.add_column(col)
+        for resolution in ('1k', '4k'):
+            for pair in sorted(computed[resolution]):
+                old = current.get(resolution, {}).get(pair, {})
+                new = computed[resolution][pair]
+                detail = meta['pairs'].get(f'{resolution}/{pair}', {})
+                table.add_row(
+                    pair, resolution,
+                    f"{old.get('mean', float('nan')):.3f} ± {old.get('std', float('nan')):.3f}",
+                    f"{new['mean']:.3f} ± {new['std']:.3f}",
+                    str(detail.get('n', '-')),
+                    detail.get('used', 'provisional'),
+                )
+        console.print(table)
+
+        path = save_baselines(computed)
+        console.print(f"[green]✓ Saved to {path}[/]")
+        console.print("[dim]Restart the monitor for the new baselines to take effect.[/]")
+    else:
+        active = load_baselines()
+        meta = active.get('_meta', {})
+        table = Table(title="Active ΔMI baselines", box=box.ROUNDED)
+        for col in ("Pair", "Res", "mean", "std", "n", "source"):
+            table.add_column(col)
+        for resolution in ('1k', '4k'):
+            for pair in sorted(active.get(resolution, {})):
+                b = active[resolution][pair]
+                detail = meta.get('pairs', {}).get(f'{resolution}/{pair}', {})
+                table.add_row(
+                    pair, resolution, f"{b['mean']:.3f}", f"{b['std']:.3f}",
+                    str(detail.get('n', '-')),
+                    detail.get('used', meta.get('source', 'provisional')),
+                )
+        console.print(table)
+        if meta.get('source') == 'provisional':
+            console.print(
+                "[yellow]⚠ Using provisional hardcoded baselines. These are known "
+                "to disagree with the measured distributions.[/]\n"
+                "[yellow]  Run: early_warning.py baselines --recompute[/]"
+            )
+        else:
+            console.print(f"[dim]Computed {meta.get('computed_at', '?')} "
+                          f"({meta.get('estimator', '?')})[/]")
+
+    if repair_backfill:
+        console.print("\n[bold]Repairing backfilled 4k rows...[/]")
+        result = db.repair_backfilled_rows()
+        console.print(f"  Examined: {result['examined']}")
+        console.print(f"  Updated:  {result['updated']}")
+        if result['skipped_no_baseline']:
+            console.print(f"  [yellow]Skipped (no 4k baseline): "
+                          f"{result['skipped_no_baseline']}[/]")
 
 
 @app.command()
@@ -2146,6 +2261,11 @@ def backfill(
             pass
         return
 
+    # 4k baselines used to recompute residual/deviation_pct/status for the
+    # backfilled rows. Loaded once so every row in this run uses one table.
+    from solar_seed.monitoring.baselines import load_baselines
+    baselines_4k = load_baselines().get('4k', {})
+
     # Get measurements to backfill
     measurements = db.get_measurements_for_backfill(
         min_age_days=0,  # Try all, JSOC check will filter
@@ -2261,12 +2381,16 @@ def backfill(
                 shuffle_result = sector_ring_shuffle_test(res1, res2, n_rings=10, n_sectors=12)
                 new_mi = shuffle_result.mi_original - shuffle_result.mi_sector_shuffled
 
-                # Update in DB
+                # Update in DB. residual/deviation_pct/status are recomputed
+                # against the 4k baseline inside the method - passing
+                # mi_original keeps that field consistent with delta_mi too.
                 db.update_measurement_backfill(
                     timestamp=ts,
                     pair=pair,
                     new_delta_mi=new_mi,
-                    original_delta_mi=m['delta_mi']
+                    original_delta_mi=m['delta_mi'],
+                    new_mi_original=shuffle_result.mi_original,
+                    baselines=baselines_4k,
                 )
 
                 change_pct = ((new_mi / m['delta_mi']) - 1) * 100 if m['delta_mi'] else 0
