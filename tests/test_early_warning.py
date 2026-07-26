@@ -240,15 +240,34 @@ class TestCouplingMonitor:
         assert result_4k['deviation_pct'] > 0.5  # far above the 4k baseline
 
     def test_residual_4k_status_classification(self, monitor):
-        """Status classification with 4k baselines (193-304 mean 0.11)."""
+        """Status classification with 4k baselines (193-304: 0.11 ± 0.05)."""
+        at_z = lambda z: 0.11 + z * 0.05
+        for z, expected in ((-0.5, 'NORMAL'), (-1.7, 'ELEVATED'),
+                            (-2.5, 'WARNING'), (-3.5, 'ALERT')):
+            assert monitor.compute_residual(
+                '193-304', at_z(z), resolution='4k')['status'] == expected
+
+    def test_deep_alert_can_be_out_of_reach_for_weak_pairs(self, monitor):
+        """ΔMI is floored, so a weak pair may not span the ALERT threshold.
+
+        193-304 at 4k has a measured baseline near 0.107 ± 0.051 and ΔMI
+        cannot go below MIN_MI_THRESHOLD, which puts its floor at about
+        -1.9 sigma - above the -3 sigma ALERT line. That is a fact about the
+        pair's dynamic range, not a threshold to be lowered until every pair
+        can alarm; the sudden-drop path still covers it.
+        """
+        from solar_seed.monitoring.constants import MIN_MI_THRESHOLD, Z_ALERT
+
+        base = monitor.get_baselines('4k')['193-304']
+        z_floor = (MIN_MI_THRESHOLD - base['mean']) / base['std']
+        assert z_floor > Z_ALERT  # ALERT unreachable for this pair
         assert monitor.compute_residual(
-            '193-304', 0.11, resolution='4k')['status'] == 'NORMAL'
-        # 20% below baseline
-        assert monitor.compute_residual(
-            '193-304', 0.088, resolution='4k')['status'] == 'WARNING'
-        # 30% below baseline
-        assert monitor.compute_residual(
-            '193-304', 0.077, resolution='4k')['status'] == 'ALERT'
+            '193-304', MIN_MI_THRESHOLD, resolution='4k')['status'] != 'ALERT'
+
+    # Status is decided in sigma. With the fixture baseline 0.80 ± 0.14:
+    #   z = -1.5 -> 0.590   (ELEVATED)
+    #   z = -2.0 -> 0.520   (WARNING)
+    #   z = -3.0 -> 0.380   (ALERT)
 
     def test_residual_normal(self, monitor):
         """Normal coupling: at the baseline."""
@@ -257,23 +276,37 @@ class TestCouplingMonitor:
         assert result['status'] == 'NORMAL'
 
     def test_residual_elevated(self, monitor):
-        """Elevated: 10-15% below baseline."""
-        result = monitor.compute_residual('193-211', 0.80 * 0.88)
-        assert result['deviation_pct'] < -0.10
-        assert result['status'] in ['ELEVATED', 'WARNING']
+        """Elevated: below -1.5 sigma."""
+        result = monitor.compute_residual('193-211', 0.80 - 1.7 * 0.14)
+        assert result['residual'] < -1.5
+        assert result['status'] == 'ELEVATED'
 
     def test_residual_warning(self, monitor):
-        """Warning: 15-25% below baseline."""
-        result = monitor.compute_residual('193-211', 0.80 * 0.80)
-        assert result['deviation_pct'] < -0.15
+        """Warning: below -2 sigma."""
+        result = monitor.compute_residual('193-211', 0.80 - 2.5 * 0.14)
+        assert result['residual'] < -2.0
         assert result['status'] == 'WARNING'
 
     def test_residual_alert(self, monitor):
-        """Alert: >25% below baseline (flare precursor)."""
-        # 193-211: 0.59 - 30% = 0.41
-        result = monitor.compute_residual('193-211', 0.41)
-        assert result['deviation_pct'] < -0.25
+        """Alert: below -3 sigma (flare precursor)."""
+        result = monitor.compute_residual('193-211', 0.80 - 3.5 * 0.14)
+        assert result['residual'] < -3.0
         assert result['status'] == 'ALERT'
+
+    def test_status_is_pair_independent_in_sigma(self, monitor):
+        """The same z gives the same status for pairs with different spread.
+
+        This is the whole point of the change: a fixed -25% meant -1.44 sigma
+        for 193-211 but only -0.52 sigma for 193-304 at 4k, so one nominal
+        threshold produced very different false-alarm rates per pair.
+        """
+        for pair in ('193-211', '193-304'):
+            base = monitor.get_baselines('1k')[pair]
+            at_z = lambda z: base['mean'] + z * base['std']
+            assert monitor.compute_residual(pair, at_z(-0.5))['status'] == 'NORMAL'
+            assert monitor.compute_residual(pair, at_z(-1.7))['status'] == 'ELEVATED'
+            assert monitor.compute_residual(pair, at_z(-2.5))['status'] == 'WARNING'
+            assert monitor.compute_residual(pair, at_z(-3.5))['status'] == 'ALERT'
 
     def test_residual_unknown_pair(self, monitor):
         """Unknown pair returns safe defaults."""
@@ -485,6 +518,11 @@ class TestSuddenDropDetector:
     measured sigma/mu is 0.24, so max-of-three lands ~20% high) and made an
     ordinary reading look like a 15% drop. That produced 69% of all stored
     predictions.
+
+    Severity is graded in sigma below the reference, not in percent. With the
+    fixture baseline 0.70 ± 0.14 and a window median of 0.90:
+        MODERATE (>= 1.25 sigma) -> reading <= 0.725
+        SEVERE   (>= 2.50 sigma) -> reading <= 0.550
     """
 
     #: Baseline low enough that the drops below stay ABOVE it - the whole
@@ -530,35 +568,44 @@ class TestSuddenDropDetector:
         assert result['sudden_drop']['sudden_drop'] is False
 
     def test_moderate_drop_detected(self, monitor):
-        """15-25% drop from the median = MODERATE severity."""
-        # 0.90 * 0.80 = 0.72 (20% drop from median)
-        result = monitor.compute_residual('193-211', 0.72)
+        """1.25-2.5 sigma below the median = MODERATE severity."""
+        # 0.90 - 1.7*0.14 = 0.662
+        result = monitor.compute_residual('193-211', 0.662)
         assert result['sudden_drop']['sudden_drop'] is True
         assert result['sudden_drop']['severity'] == 'MODERATE'
+        assert result['sudden_drop']['drop_sigma'] == pytest.approx(1.7, abs=0.05)
 
     def test_severe_drop_detected(self, monitor):
-        """25%+ drop from the median = SEVERE severity."""
-        # 0.90 * 0.70 = 0.63 (30% drop from median)
-        result = monitor.compute_residual('193-211', 0.63)
+        """2.5+ sigma below the median = SEVERE severity."""
+        # 0.90 - 3.0*0.14 = 0.48
+        result = monitor.compute_residual('193-211', 0.48)
         assert result['sudden_drop']['sudden_drop'] is True
         assert result['sudden_drop']['severity'] == 'SEVERE'
 
     def test_sudden_drop_triggers_elevated_status(self, monitor):
-        """Severe sudden drop should trigger ELEVATED even if above baseline."""
-        # 0.65 is above baseline (0.59) but 28% below the median (0.90)
-        result = monitor.compute_residual('193-211', 0.65)
+        """A sharp drop raises ELEVATED even while the level is nominal."""
+        # 0.68 is only -0.14 sigma from the 0.70 baseline (NORMAL on level),
+        # but 1.57 sigma below the recent median of 0.90.
+        result = monitor.compute_residual('193-211', 0.68)
+        assert result['residual'] > -1.5          # nominal by absolute level
         assert result['sudden_drop']['sudden_drop'] is True
-        assert result['sudden_drop']['severity'] == 'SEVERE'
         assert result['status'] == 'ELEVATED'
+
+    def test_no_severity_without_baseline_sigma(self, monitor):
+        """Without a sigma the drop cannot be graded, so nothing fires."""
+        info = monitor.detect_sudden_drop('193-211', 0.40, baseline_std=None)
+        assert info['sudden_drop'] is False
+        assert info['severity'] is None
+        assert info['drop_pct'] < 0  # still reported for context
 
     def test_m3_preflare_scenario(self, monitor):
         """Simulate the M3 pre-flare drop.
 
-        Timeline 0.917 → 0.953 → 0.875 → 0.714. Against the median (0.917) this
-        is -22%, so MODERATE rather than the SEVERE the max-reference produced;
-        the -25% SEVERE boundary was only crossed because the reference was the
-        window peak. Both severities map to status ELEVATED, so the operational
-        outcome - the pre-flare warning - is unchanged.
+        Timeline 0.917 → 0.953 → 0.875 → 0.714. Against the median (0.917) the
+        drop is 0.203 bits = 1.45 sigma, so MODERATE. This is the case that
+        pinned the MODERATE threshold at 1.25 rather than 1.5 sigma: the
+        documented precursor must stay detectable. Both severities map to
+        status ELEVATED, so the operational outcome is unchanged.
         """
         monitor.history = [
             {'timestamp': '2026-01-11T21:38:00', 'coupling': {'193-211': {'delta_mi': 0.917}}},
@@ -569,8 +616,8 @@ class TestSuddenDropDetector:
 
         assert result['sudden_drop']['sudden_drop'] is True
         assert result['sudden_drop']['severity'] == 'MODERATE'
-        drop_pct = result['sudden_drop']['drop_pct']
-        assert drop_pct < -0.20  # At least 20% drop
+        # 0.203 bits below the median = 1.45 sigma at the fixture's 0.14
+        assert result['sudden_drop']['drop_sigma'] == pytest.approx(1.45, abs=0.05)
 
         # Still triggers ELEVATED (pre-flare warning!)
         assert result['status'] == 'ELEVATED'
@@ -587,17 +634,45 @@ class TestSuddenDropDetector:
 class TestAlertThresholds:
     """Test that alert thresholds match paper findings."""
 
-    def test_flare_coupling_reduction(self, tmp_path):
-        """Paper shows 25-47% coupling reduction during flares."""
+    def test_deep_flare_collapse_reaches_alert(self, tmp_path):
+        """The deep end of the documented -25%..-47% flare collapse alarms.
+
+        For 193-211 the measured sigma/mu is ~0.17, so -47% is about -2.7
+        sigma (WARNING) and a -55% collapse clears the -3 sigma ALERT line.
+        """
         monitor = make_monitor(tmp_path)
-
-        # Simulate flare-level reduction (30% below the ACTIVE baseline, not
-        # the provisional class constant - those are no longer the same thing)
         baseline = monitor.get_baselines('1k')['193-211']['mean']
-        flare_value = baseline * 0.70  # 30% reduction
 
-        result = monitor.compute_residual('193-211', flare_value)
-        assert result['status'] == 'ALERT'
+        assert monitor.compute_residual(
+            '193-211', baseline * 0.45)['status'] == 'ALERT'
+        assert monitor.compute_residual(
+            '193-211', baseline * 0.53)['status'] == 'WARNING'
+
+    def test_shallow_collapse_needs_the_sudden_drop_path(self, tmp_path):
+        """A -25% dip is only -1.4 sigma and the level alone does not flag it.
+
+        Worth stating plainly: switching to sigma means the shallow end of the
+        documented flare range no longer alarms on absolute level. It is still
+        caught, but by the sudden-drop detector - a 25% fall from a steady run
+        is 1.4 sigma below the recent median, past the 1.25 MODERATE line. The
+        two paths are complementary, and dropping either would open a gap.
+        """
+        monitor = make_monitor(tmp_path)
+        base = monitor.get_baselines('1k')['193-211']
+        collapsed = base['mean'] * 0.75
+
+        # Absolute level alone: not flagged
+        assert monitor.compute_residual('193-211', collapsed)['status'] == 'NORMAL'
+
+        # Same value after a steady run at baseline: caught as a sudden drop
+        monitor.history = [
+            {'timestamp': f'2026-03-01T10:{i * 10:02d}:00',
+             'coupling': {'193-211': {'delta_mi': base['mean']}}}
+            for i in range(3)
+        ]
+        result = monitor.compute_residual('193-211', collapsed)
+        assert result['sudden_drop']['severity'] == 'MODERATE'
+        assert result['status'] == 'ELEVATED'
 
     def test_deep_collapse_still_classified_not_discarded(self, tmp_path):
         """A -70% collapse must reach ALERT, not be dropped as a data error."""
@@ -608,13 +683,11 @@ class TestAlertThresholds:
         assert result['status'] == 'ALERT'
 
     def test_pre_flare_detection_window(self, tmp_path):
-        """Coupling anomaly should trigger before flare peak."""
+        """A destabilisation below -1.5 sigma must be flagged before the peak."""
         monitor = make_monitor(tmp_path)
+        base = monitor.get_baselines('1k')['193-211']
 
-        # 14% reduction should trigger at least ELEVATED
-        baseline = monitor.get_baselines('1k')['193-211']['mean']
-        pre_flare = baseline * 0.86
-
+        pre_flare = base['mean'] - 1.7 * base['std']
         result = monitor.compute_residual('193-211', pre_flare)
         assert result['status'] in ['WARNING', 'ELEVATED']
 
@@ -803,16 +876,16 @@ class TestStoreCouplingReading:
         db_path.unlink()
 
     def test_trigger_kind_elevated_threshold(self, mock_db):
-        """deviation_pct between -0.10 and -0.15 gets trigger_kind=THRESHOLD."""
+        """A z between -1.5 and -2 gets trigger_kind=THRESHOLD(-1.5)."""
         coupling = {
             '193-211': {
                 'delta_mi': 0.53,
                 'status': 'ELEVATED',
-                'deviation_pct': -0.12,  # Between -0.10 and -0.15
-                'residual': -0.4,
+                'deviation_pct': -0.12,
+                'residual': -1.7,
                 'trend': 'STABLE',
             },
-            '_quality': {'resolution': '1024x1024'},
+            '_quality': {'resolution': '1024x1024', 'resolution_class': '1k'},
         }
 
         store_coupling_reading("2026-01-15T12:00:00", coupling)
@@ -821,27 +894,28 @@ class TestStoreCouplingReading:
         cursor.execute("SELECT trigger_kind, trigger_value, trigger_threshold FROM predictions")
         row = cursor.fetchone()
         assert row['trigger_kind'] == 'THRESHOLD'
-        assert row['trigger_value'] == pytest.approx(-0.12)
-        assert row['trigger_threshold'] == pytest.approx(-0.10)
+        assert row['trigger_value'] == pytest.approx(-1.7)
+        assert row['trigger_threshold'] == pytest.approx(-1.5)
 
     def test_trigger_kind_all_levels(self, mock_db):
-        """Each deviation_pct range maps to correct trigger_threshold."""
+        """Each sigma band maps to the matching trigger_threshold."""
         cases = [
-            (-0.30, -0.25, 'ALERT'),     # < -0.25 → THRESHOLD(-0.25)
-            (-0.18, -0.15, 'ELEVATED'),   # < -0.15 → THRESHOLD(-0.15)
-            (-0.12, -0.10, 'ELEVATED'),   # < -0.10 → THRESHOLD(-0.10)
+            (-3.5, -3.0, 'ALERT'),
+            (-2.5, -2.0, 'WARNING'),
+            (-1.7, -1.5, 'ELEVATED'),
         ]
-        for i, (dev_pct, expected_threshold, status) in enumerate(cases):
-            ts = f"2026-01-15T{12+i}:00:00"
+        for i, (residual, expected_threshold, status) in enumerate(cases):
+            # Hours apart so each opens its own episode rather than folding
+            ts = f"2026-01-15T{12 + i * 2}:00:00"
             coupling = {
                 '193-211': {
                     'delta_mi': 0.50,
                     'status': status,
-                    'deviation_pct': dev_pct,
-                    'residual': -0.5,
+                    'deviation_pct': -0.3,
+                    'residual': residual,
                     'trend': 'STABLE',
                 },
-                '_quality': {'resolution': '1024x1024'},
+                '_quality': {'resolution': '1024x1024', 'resolution_class': '1k'},
             }
             store_coupling_reading(ts, coupling)
 
@@ -849,9 +923,8 @@ class TestStoreCouplingReading:
         cursor.execute("SELECT trigger_threshold FROM predictions ORDER BY prediction_time")
         rows = cursor.fetchall()
         assert len(rows) == 3
-        assert rows[0]['trigger_threshold'] == pytest.approx(-0.25)
-        assert rows[1]['trigger_threshold'] == pytest.approx(-0.15)
-        assert rows[2]['trigger_threshold'] == pytest.approx(-0.10)
+        for row, (_, expected, _) in zip(rows, cases):
+            assert row['trigger_threshold'] == pytest.approx(expected)
 
     def test_quality_ok_stored(self, mock_db):
         """quality_ok, robustness_score, sync_delta_s passed through to DB."""

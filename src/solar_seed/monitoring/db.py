@@ -24,6 +24,15 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+from .constants import (
+    Z_ALERT,
+    Z_ELEVATED,
+    Z_SUDDEN_DROP_MODERATE,
+    Z_SUDDEN_DROP_SEVERE,
+    Z_WARNING,
+    classify_status,
+)
 import json
 
 
@@ -44,20 +53,21 @@ def classify_trigger_kind(data: dict) -> tuple[str, float | None, float | None]:
         so every prediction stays attributable.
     """
     sudden_drop = data.get('sudden_drop_severity')
-    deviation_pct = data.get('deviation_pct')
     residual = data.get('residual')
 
     if sudden_drop:
         return ('SUDDEN_DROP', data.get('sudden_drop_pct'),
-                -0.15 if sudden_drop == 'MODERATE' else -0.25)
+                Z_SUDDEN_DROP_MODERATE if sudden_drop == 'MODERATE'
+                else Z_SUDDEN_DROP_SEVERE)
 
     if data.get('is_break'):
         return 'BREAK', data.get('z_mad'), 2.0
 
-    if deviation_pct is not None:
-        for threshold in (-0.25, -0.15, -0.10):
-            if deviation_pct < threshold:
-                return 'THRESHOLD', deviation_pct, threshold
+    # Thresholds are in sigma, matching classify_status()
+    if residual is not None:
+        for threshold in (Z_ALERT, Z_WARNING, Z_ELEVATED):
+            if residual < threshold:
+                return 'THRESHOLD', residual, threshold
 
     if residual is not None and abs(residual) > 4.0:
         return 'Z_SCORE_SPIKE', residual, 4.0
@@ -65,7 +75,7 @@ def classify_trigger_kind(data: dict) -> tuple[str, float | None, float | None]:
     if data.get('trend') in ('DECLINING', 'ACCELERATING_DOWN'):
         return 'TREND', data.get('slope_pct_per_hour'), None
 
-    return 'STATUS_ONLY', deviation_pct, None
+    return 'STATUS_ONLY', data.get('deviation_pct'), None
 
 
 class MonitoringDB:
@@ -301,7 +311,13 @@ class MonitoringDB:
                 trigger_status TEXT,
                 trigger_residual REAL,
                 trigger_trend TEXT,
-                trigger_kind TEXT CHECK(trigger_kind IN ('Z_SCORE_SPIKE', 'SUDDEN_DROP', 'BREAK', 'TREND', 'THRESHOLD', 'TRANSFER_STATE')),
+                -- STATUS_ONLY is the catch-all from classify_trigger_kind().
+                -- It was missing here, so a freshly created database rejected
+                -- those rows outright while an existing one accepted them (the
+                -- column was added by ALTER TABLE, which carries no CHECK) -
+                -- the same code silently kept or dropped predictions depending
+                -- on how old the database was.
+                trigger_kind TEXT CHECK(trigger_kind IN ('Z_SCORE_SPIKE', 'SUDDEN_DROP', 'BREAK', 'TREND', 'THRESHOLD', 'TRANSFER_STATE', 'STATUS_ONLY')),
                 trigger_value REAL,
                 trigger_threshold REAL,
                 actual_flare_id INTEGER REFERENCES flare_events(id),
@@ -746,7 +762,7 @@ class MonitoringDB:
         Insert a prediction (skips if same time+pair exists).
 
         Args:
-            trigger_kind: Z_SCORE_SPIKE, SUDDEN_DROP, BREAK, TREND, THRESHOLD, TRANSFER_STATE
+            trigger_kind: Z_SCORE_SPIKE, SUDDEN_DROP, BREAK, TREND, THRESHOLD, TRANSFER_STATE, STATUS_ONLY
             trigger_value: The actual value that triggered the prediction
             trigger_threshold: The threshold that was exceeded
             trigger_measurement_id: FK to the coupling_measurement that triggered this
@@ -2494,15 +2510,7 @@ class MonitoringDB:
         if base and base.get('std'):
             residual = (new_delta_mi - base['mean']) / base['std']
             deviation_pct = (new_delta_mi - base['mean']) / base['mean'] if base['mean'] else None
-            if deviation_pct is not None:
-                if deviation_pct < -0.25:
-                    status = 'ALERT'
-                elif deviation_pct < -0.15:
-                    status = 'WARNING'
-                elif deviation_pct < -0.10:
-                    status = 'ELEVATED'
-                else:
-                    status = 'NORMAL'
+            status = classify_status(residual)
 
         cursor.execute("""
             UPDATE coupling_measurements
@@ -2555,14 +2563,7 @@ class MonitoringDB:
                 continue
             residual = (delta_mi - base['mean']) / base['std']
             deviation_pct = (delta_mi - base['mean']) / base['mean']
-            if deviation_pct < -0.25:
-                status = 'ALERT'
-            elif deviation_pct < -0.15:
-                status = 'WARNING'
-            elif deviation_pct < -0.10:
-                status = 'ELEVATED'
-            else:
-                status = 'NORMAL'
+            status = classify_status(residual)
 
             if not dry_run:
                 cursor.execute("""

@@ -35,6 +35,66 @@ EXTREME_LOW_BASELINE_FRACTION = 0.3
 MIN_ROI_STD = 0.5        # DN - minimum std dev in residual ROI (after geometry subtraction)
 
 
+# Status Thresholds (in sigma)
+# ============================
+# Status is decided on z = (ΔMI - baseline_mean) / baseline_sigma, NOT on a
+# percentage deviation. A fixed percentage means something different for every
+# pair, because the relative spread differs by a factor of ~3:
+#
+#   pair            sigma/mu    -25% is...
+#   193-211 @1k       0.17       -1.44 sigma
+#   193-304 @4k       0.48       -0.52 sigma
+#
+# So the old -25% ALERT fired at half a sigma for 193-304 - which is why 33%
+# of that pair's readings alarmed while 193-211 alarmed at a third of the rate
+# for the same nominal threshold. In sigma the criterion means the same thing
+# everywhere.
+Z_ELEVATED = -1.5
+Z_WARNING = -2.0
+Z_ALERT = -3.0
+
+# Sudden drop, also in sigma: (recent_median - current) / baseline_sigma.
+# Positive values mean "this far below the recent level".
+#
+# Calibrated against the stored history (n ~ 20k per pair at 1k). In sigma the
+# rates finally agree across pairs, which the percentage version never did:
+#
+#   threshold   193-211 1k   193-304 1k   193-211 4k   193-304 4k
+#     1.25          5.9%         5.3%         7.9%         6.2%
+#     2.50          1.5%         0.5%         3.1%         0.5%
+#
+# MODERATE sits at 1.25 rather than 1.5 so the documented M3 precursor still
+# registers: its window median was 0.917 against a reading of 0.714, a drop of
+# 0.203 bits = 1.48 sigma, which a 1.5 threshold would have missed by a hair.
+Z_SUDDEN_DROP_MODERATE = 1.25
+Z_SUDDEN_DROP_SEVERE = 2.5
+
+
+def classify_status(residual: float | None) -> str:
+    """
+    Map a z-score to a coupling status.
+
+    Single definition shared by the live monitor, the batch extraction and the
+    backfill, so the three cannot drift apart.
+
+    Note on reachable range: ΔMI is floored at MIN_MI_THRESHOLD, so the deepest
+    z a pair can express is (MIN_MI_THRESHOLD - mean) / sigma. For a weakly
+    coupled pair that bound can sit above the ALERT threshold - 193-304 at 4k
+    bottoms out near -1.9 sigma - and no ALERT is possible for it. That is a
+    statement about the pair's dynamic range, not a threshold to be lowered
+    until every pair can alarm.
+    """
+    if residual is None:
+        return 'NORMAL'
+    if residual < Z_ALERT:
+        return 'ALERT'
+    if residual < Z_WARNING:
+        return 'WARNING'
+    if residual < Z_ELEVATED:
+        return 'ELEVATED'
+    return 'NORMAL'
+
+
 # =============================================================================
 # ANOMALY LEVEL (Statistical)
 # =============================================================================

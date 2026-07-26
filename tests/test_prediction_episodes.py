@@ -117,7 +117,7 @@ class TestBatchExtractionUsesEpisodes:
         for i in range(n):
             db.insert_coupling(
                 timestamp=f"2026-03-01T10:{start_minute + i * 10:02d}:00",
-                pair='193-211', delta_mi=0.70, residual=-1.2,
+                pair='193-211', delta_mi=0.70, residual=-1.7,
                 deviation_pct=-0.12, status=status, trend='DECLINING',
                 resolution='1k',
             )
@@ -136,7 +136,7 @@ class TestBatchExtractionUsesEpisodes:
         row = db.conn.execute("SELECT * FROM predictions").fetchone()
         # Previously NULL on every batch-created row
         assert row['trigger_kind'] == 'THRESHOLD'
-        assert row['trigger_value'] == pytest.approx(-0.12)
+        assert row['trigger_value'] == pytest.approx(-1.7)
         assert row['last_trigger_time'] is not None
         assert row['valid_to'] is not None
 
@@ -289,24 +289,25 @@ class TestTriggerKindClassification:
     def test_sudden_drop_wins(self):
         kind, value, threshold = classify_trigger_kind(
             {'sudden_drop_severity': 'SEVERE', 'sudden_drop_pct': -0.3,
-             'deviation_pct': -0.4, 'is_break': True})
-        assert (kind, value, threshold) == ('SUDDEN_DROP', -0.3, -0.25)
+             'residual': -4.0, 'is_break': True})
+        assert (kind, value, threshold) == ('SUDDEN_DROP', -0.3, 2.5)
 
     def test_break_before_threshold(self):
         kind, _, _ = classify_trigger_kind(
-            {'is_break': True, 'z_mad': 3.0, 'deviation_pct': -0.4})
+            {'is_break': True, 'z_mad': 3.0, 'residual': -4.0})
         assert kind == 'BREAK'
 
     def test_threshold_picks_the_steepest_band(self):
-        assert classify_trigger_kind({'deviation_pct': -0.30})[2] == -0.25
-        assert classify_trigger_kind({'deviation_pct': -0.20})[2] == -0.15
-        assert classify_trigger_kind({'deviation_pct': -0.12})[2] == -0.10
+        """Bands are in sigma, matching classify_status()."""
+        assert classify_trigger_kind({'residual': -3.5})[2] == -3.0
+        assert classify_trigger_kind({'residual': -2.5})[2] == -2.0
+        assert classify_trigger_kind({'residual': -1.7})[2] == -1.5
 
     def test_never_returns_none(self):
         """A NULL trigger_kind left 2376 stored rows unattributable."""
         kind, _, _ = classify_trigger_kind({})
         assert kind == 'STATUS_ONLY'
-        kind, _, _ = classify_trigger_kind({'deviation_pct': 0.5, 'trend': 'STABLE'})
+        kind, _, _ = classify_trigger_kind({'residual': 0.5, 'trend': 'STABLE'})
         assert kind == 'STATUS_ONLY'
 
 

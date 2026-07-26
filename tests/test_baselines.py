@@ -155,20 +155,20 @@ class TestBackfillConsistency:
         )
         db.update_measurement_backfill(
             timestamp='2026-03-01T00:00:00', pair='193-304',
-            new_delta_mi=0.055, original_delta_mi=0.18,
+            new_delta_mi=0.02, original_delta_mi=0.18,
             new_mi_original=1.1,
-            baselines={'193-304': {'mean': 0.11, 'std': 0.05}},
+            baselines={'193-304': {'mean': 0.11, 'std': 0.025}},
         )
         row = db.conn.execute(
             "SELECT * FROM coupling_measurements WHERE pair='193-304'").fetchone()
 
         assert row['resolution'] == '4k'
-        assert row['delta_mi'] == pytest.approx(0.055)
+        assert row['delta_mi'] == pytest.approx(0.02)
         assert row['original_delta_mi'] == pytest.approx(0.18)
         assert row['mi_original'] == pytest.approx(1.1)
-        # Recomputed, not the stale 1k values
-        assert row['residual'] == pytest.approx((0.055 - 0.11) / 0.05)
-        assert row['deviation_pct'] == pytest.approx(-0.5)
+        # Recomputed, not the stale 1k values. Status comes from the z-score:
+        # (0.02 - 0.11) / 0.025 = -3.6 sigma -> ALERT
+        assert row['residual'] == pytest.approx((0.02 - 0.11) / 0.025)
         assert row['status'] == 'ALERT'
 
     def test_no_baseline_clears_derived_fields(self, db):
@@ -199,7 +199,7 @@ class TestBackfillConsistency:
         db.conn.commit()
 
         result = db.repair_backfilled_rows(
-            baselines={'193-304': {'mean': 0.11, 'std': 0.05}})
+            baselines={'193-304': {'mean': 0.11, 'std': 0.025}})
         assert result == {'examined': 1, 'updated': 1, 'skipped_no_baseline': 0}
 
         row = db.conn.execute("SELECT * FROM coupling_measurements").fetchone()

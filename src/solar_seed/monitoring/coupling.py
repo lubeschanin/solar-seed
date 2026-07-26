@@ -23,6 +23,11 @@ from .baselines import (
     _median,
     load_baselines,
 )
+from .constants import (
+    Z_SUDDEN_DROP_MODERATE,
+    Z_SUDDEN_DROP_SEVERE,
+    classify_status,
+)
 
 # Confidence levels ordered by rank. Plain string min() would compare
 # lexicographically (min('high', 'medium') == 'high'!), so combining
@@ -184,7 +189,8 @@ class CouplingMonitor:
 
         return all(e['delta_mi'] < threshold for e in candidate)
 
-    def detect_sudden_drop(self, pair: str, delta_mi: float, lookback: int = 3) -> dict:
+    def detect_sudden_drop(self, pair: str, delta_mi: float, lookback: int = 3,
+                           baseline_std: float = None) -> dict:
         """
         Detect sudden relative drop in coupling.
 
@@ -198,10 +204,18 @@ class CouplingMonitor:
         reading already registers as a >15% "drop". That single line produced
         69% of all predictions in the database (10196 of 14708).
 
+        Severity is graded in sigma, not in percent, for the same reason the
+        status thresholds are: a 15% drop is 0.9 sigma for 193-211 but only
+        0.3 sigma for 193-304 at 4k, so one percentage produced wildly
+        different false-alarm rates per pair.
+
         Args:
             pair: Channel pair (e.g. '193-211')
             delta_mi: Current ΔMI value
             lookback: Number of previous readings to compare (default: 3 = ~30 min)
+            baseline_std: Baseline sigma for this pair. Without it the drop
+                cannot be expressed in sigma and no severity is assigned -
+                drop_pct is still reported for context.
 
         Returns:
             Dict with drop detection results
@@ -212,7 +226,9 @@ class CouplingMonitor:
             return {
                 'sudden_drop': False,
                 'drop_pct': 0,
+                'drop_sigma': 0,
                 'reference_value': None,
+                'severity': None,
                 'reason': f'Not enough history ({len(series)}/{lookback})'
             }
 
@@ -222,29 +238,28 @@ class CouplingMonitor:
         # Median of recent values as reference (robust "normal" level)
         reference = _median(recent_values)
 
-        # Calculate drop percentage
-        if reference > 0:
-            drop_pct = (delta_mi - reference) / reference
-        else:
-            drop_pct = 0
+        # Percent drop is kept for display and for the stored record
+        drop_pct = (delta_mi - reference) / reference if reference > 0 else 0
 
-        # Thresholds for sudden drop detection
-        SUDDEN_DROP_THRESHOLD = -0.15  # 15% drop from recent max
-        SEVERE_DROP_THRESHOLD = -0.25  # 25% drop = more urgent
-
-        if drop_pct < SEVERE_DROP_THRESHOLD:
-            sudden_drop = True
-            severity = 'SEVERE'
-        elif drop_pct < SUDDEN_DROP_THRESHOLD:
-            sudden_drop = True
-            severity = 'MODERATE'
+        # ...but the decision is made in sigma below the recent level.
+        if baseline_std and baseline_std > 0:
+            drop_sigma = (reference - delta_mi) / baseline_std
         else:
-            sudden_drop = False
-            severity = None
+            drop_sigma = 0.0
+
+        if not baseline_std or baseline_std <= 0:
+            sudden_drop, severity = False, None
+        elif drop_sigma >= Z_SUDDEN_DROP_SEVERE:
+            sudden_drop, severity = True, 'SEVERE'
+        elif drop_sigma >= Z_SUDDEN_DROP_MODERATE:
+            sudden_drop, severity = True, 'MODERATE'
+        else:
+            sudden_drop, severity = False, None
 
         return {
             'sudden_drop': sudden_drop,
             'drop_pct': drop_pct,
+            'drop_sigma': drop_sigma,
             'reference_value': reference,
             'current_value': delta_mi,
             'severity': severity,
@@ -280,26 +295,22 @@ class CouplingMonitor:
 
         baseline = baselines[pair]
         residual = (delta_mi - baseline['mean']) / baseline['std']
+        # Kept for display and for the stored record; no longer decides status.
         deviation_pct = (delta_mi - baseline['mean']) / baseline['mean']
 
-        # Check for sudden drop (relative to recent readings)
-        drop_info = self.detect_sudden_drop(pair, delta_mi)
+        # Check for sudden drop (relative to recent readings), graded in sigma
+        drop_info = self.detect_sudden_drop(
+            pair, delta_mi, baseline_std=baseline['std'])
 
-        # Determine status - combine absolute threshold AND sudden drop
-        if deviation_pct < self.ALERT_THRESHOLD:
-            status = 'ALERT'
-        elif deviation_pct < -0.15:
-            status = 'WARNING'
-        elif deviation_pct < -0.10:
+        # Status from the z-score alone, so the criterion means the same thing
+        # for every pair regardless of its relative spread.
+        status = classify_status(residual)
+
+        # A sharp drop from the recent level still raises ELEVATED even when
+        # the absolute level is nominal - that is the pre-flare case the
+        # absolute threshold cannot see.
+        if status == 'NORMAL' and drop_info['sudden_drop']:
             status = 'ELEVATED'
-        elif drop_info['sudden_drop'] and drop_info['severity'] == 'SEVERE':
-            # Sudden severe drop even if above baseline
-            status = 'ELEVATED'
-        elif drop_info['sudden_drop'] and drop_info['severity'] == 'MODERATE':
-            # Sudden moderate drop
-            status = 'ELEVATED'
-        else:
-            status = 'NORMAL'
 
         return {
             'residual': residual,
