@@ -171,6 +171,118 @@ class TestBatchExtractionUsesEpisodes:
         assert rows[0]['predicted_class'] == 'M'
 
 
+class TestMergeDuplicateEpisodes:
+    """Cleanup for rows the pre-fix batch path wrote inside existing episodes."""
+
+    @staticmethod
+    def _episode(db, start, last, status='ELEVATED', n=3, pair='193-211'):
+        db.insert_prediction(prediction_time=start, trigger_pair=pair,
+                             trigger_status=status, trigger_kind='THRESHOLD')
+        db.conn.execute(
+            "UPDATE predictions SET last_trigger_time=?, n_triggers=? "
+            "WHERE prediction_time=? AND trigger_pair=?",
+            (last, n, start, pair))
+        db.conn.commit()
+
+    @staticmethod
+    def _loose_row(db, ts, status='ELEVATED', pair='193-211'):
+        """A row as the old batch path wrote it: no episode fields."""
+        db.conn.execute(
+            "INSERT INTO predictions (prediction_time, trigger_pair, trigger_status) "
+            "VALUES (?, ?, ?)", (ts, pair, status))
+        db.conn.commit()
+
+    def test_contained_row_is_folded_in(self, db):
+        self._episode(db, '2026-03-01T10:00:00', '2026-03-01T10:50:00', n=6)
+        self._loose_row(db, '2026-03-01T10:20:00')
+
+        result = db.merge_duplicate_prediction_episodes()
+        assert result['merged'] == 1
+        assert result['remaining'] == 0
+
+        rows = db.conn.execute("SELECT * FROM predictions").fetchall()
+        assert len(rows) == 1
+        assert rows[0]['prediction_time'] == '2026-03-01T10:00:00'
+        assert rows[0]['n_triggers'] == 7  # 6 + the folded row
+
+    def test_more_severe_status_survives(self, db):
+        self._episode(db, '2026-03-01T10:00:00', '2026-03-01T10:50:00', 'ELEVATED')
+        self._loose_row(db, '2026-03-01T10:20:00', 'ALERT')
+
+        db.merge_duplicate_prediction_episodes()
+        row = db.conn.execute("SELECT * FROM predictions").fetchone()
+        assert row['trigger_status'] == 'ALERT'
+        assert row['predicted_class'] == 'M'
+
+    def test_row_outside_the_span_is_kept(self, db):
+        self._episode(db, '2026-03-01T10:00:00', '2026-03-01T10:50:00')
+        self._loose_row(db, '2026-03-01T14:00:00')  # separate alarm
+
+        assert db.merge_duplicate_prediction_episodes()['merged'] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 2
+
+    def test_other_pair_is_not_touched(self, db):
+        self._episode(db, '2026-03-01T10:00:00', '2026-03-01T10:50:00', pair='193-211')
+        self._loose_row(db, '2026-03-01T10:20:00', pair='193-304')
+
+        assert db.merge_duplicate_prediction_episodes()['merged'] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 2
+
+    def test_verified_row_is_left_alone(self, db):
+        """Merging an evaluated prediction would rewrite a recorded result."""
+        self._episode(db, '2026-03-01T10:00:00', '2026-03-01T10:50:00')
+        self._loose_row(db, '2026-03-01T10:20:00')
+        db.conn.execute(
+            "UPDATE predictions SET verified=1 WHERE prediction_time='2026-03-01T10:20:00'")
+        db.conn.commit()
+
+        result = db.merge_duplicate_prediction_episodes()
+        assert result['merged'] == 0
+        assert result['remaining'] == 1  # reported, not silently dropped
+        assert db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 2
+
+    def test_row_with_flare_match_is_left_alone(self, db):
+        self._episode(db, '2026-03-01T10:00:00', '2026-03-01T10:50:00')
+        self._loose_row(db, '2026-03-01T10:20:00')
+        flare_id = db.insert_flare_event(
+            start_time='2026-03-01T11:00:00', flare_class='M', magnitude=1.0)
+        dup_id = db.conn.execute(
+            "SELECT id FROM predictions WHERE prediction_time='2026-03-01T10:20:00'"
+        ).fetchone()[0]
+        db.insert_prediction_match(dup_id, flare_id, 'hit')
+
+        assert db.merge_duplicate_prediction_episodes()['merged'] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 2
+
+    def test_is_idempotent(self, db):
+        self._episode(db, '2026-03-01T10:00:00', '2026-03-01T10:50:00')
+        self._loose_row(db, '2026-03-01T10:20:00')
+
+        db.merge_duplicate_prediction_episodes()
+        assert db.merge_duplicate_prediction_episodes()['merged'] == 0
+
+    def test_dry_run_writes_nothing(self, db):
+        self._episode(db, '2026-03-01T10:00:00', '2026-03-01T10:50:00')
+        self._loose_row(db, '2026-03-01T10:20:00')
+
+        self._loose_row(db, '2026-03-01T10:30:00')  # second duplicate
+
+        before = db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+        result = db.merge_duplicate_prediction_episodes(dry_run=True)
+        after = db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+        assert before == after == 3
+        # Reports the true candidate count, not just the first one found
+        assert result['merged'] == 2
+
+    def test_since_bounds_the_cleanup(self, db):
+        self._episode(db, '2026-01-01T10:00:00', '2026-01-01T10:50:00')
+        self._loose_row(db, '2026-01-01T10:20:00')
+
+        assert db.merge_duplicate_prediction_episodes(
+            since='2026-03-01T00:00:00')['merged'] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 2
+
+
 class TestTriggerKindClassification:
     """Both paths share one classifier, so they cannot drift apart."""
 

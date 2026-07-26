@@ -935,6 +935,133 @@ class MonitoringDB:
             print(f"Error escalating prediction: {e}")
             return -1, 'error'
 
+    def merge_duplicate_prediction_episodes(self, since: str = None,
+                                            dry_run: bool = False) -> dict:
+        """
+        Fold prediction rows that sit inside another episode's span into it.
+
+        Cleans up after the batch path that bypassed the episode logic: it
+        wrote one row per measurement alongside the episode the live path had
+        already recorded, so the same alarm is counted several times and any
+        precision figure over that period is wrong.
+
+        A row is a duplicate when another row for the SAME pair starts earlier
+        and its span [prediction_time .. last_trigger_time] covers it. The
+        surviving row keeps the earliest anchor, the latest end, the summed
+        trigger count and the most severe status.
+
+        Rows that were already verified or carry prediction_matches are left
+        alone and reported - merging them would silently rewrite evaluated
+        results.
+
+        Args:
+            since: Only consider rows at or after this ISO timestamp
+            dry_run: Report what would happen without writing
+
+        Returns:
+            {'merged': int, 'skipped_verified': int, 'remaining': int}
+        """
+        cursor = self.conn.cursor()
+        where_since = "AND b.prediction_time >= ?" if since else ""
+        params = (since,) if since else ()
+
+        merged = 0
+        skipped = 0
+
+        # Containment can chain (b inside a, c inside b), and each merge widens
+        # the surviving span, so iterate until the query comes back empty.
+        # Bounded to keep a pathological dataset from looping forever.
+        for _ in range(1000):
+            cursor.execute(f"""
+                SELECT b.id AS dup_id, a.id AS keep_id
+                FROM predictions b
+                JOIN predictions a
+                  ON a.trigger_pair = b.trigger_pair
+                 AND a.id <> b.id
+                 AND a.prediction_time < b.prediction_time
+                 AND b.prediction_time <= COALESCE(a.last_trigger_time, a.prediction_time)
+                WHERE COALESCE(b.verified, 0) = 0
+                  AND NOT EXISTS (SELECT 1 FROM prediction_matches m
+                                  WHERE m.prediction_id = b.id)
+                  {where_since}
+                ORDER BY a.prediction_time ASC, b.prediction_time ASC
+                LIMIT 1
+            """, params)
+            row = cursor.fetchone()
+            if row is None:
+                break
+
+            dup_id, keep_id = row['dup_id'], row['keep_id']
+            if dry_run:
+                # Cannot iterate without writing, so count the candidates
+                # directly instead of reporting just the first one.
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM predictions b
+                    JOIN predictions a
+                      ON a.trigger_pair = b.trigger_pair AND a.id <> b.id
+                     AND a.prediction_time < b.prediction_time
+                     AND b.prediction_time <= COALESCE(a.last_trigger_time, a.prediction_time)
+                    WHERE COALESCE(b.verified, 0) = 0
+                      AND NOT EXISTS (SELECT 1 FROM prediction_matches m
+                                      WHERE m.prediction_id = b.id)
+                      {where_since}
+                """, params)
+                merged = cursor.fetchone()[0]
+                break
+
+            dup = cursor.execute(
+                "SELECT * FROM predictions WHERE id = ?", (dup_id,)).fetchone()
+            keep = cursor.execute(
+                "SELECT * FROM predictions WHERE id = ?", (keep_id,)).fetchone()
+
+            severity = max(
+                self.STATUS_SEVERITY.get(keep['trigger_status'], 0),
+                self.STATUS_SEVERITY.get(dup['trigger_status'], 0),
+            )
+            status = next(
+                (s for s, v in self.STATUS_SEVERITY.items() if v == severity),
+                keep['trigger_status'])
+
+            cursor.execute("""
+                UPDATE predictions
+                SET last_trigger_time = MAX(
+                        COALESCE(last_trigger_time, prediction_time),
+                        COALESCE(?, ?)),
+                    valid_to = MAX(COALESCE(valid_to, ''), COALESCE(?, '')),
+                    n_triggers = COALESCE(n_triggers, 1) + COALESCE(?, 1),
+                    trigger_status = ?,
+                    predicted_class = ?,
+                    trigger_kind = COALESCE(trigger_kind, ?)
+                WHERE id = ?
+            """, (
+                dup['last_trigger_time'], dup['prediction_time'],
+                dup['valid_to'],
+                dup['n_triggers'],
+                status,
+                'M' if status == 'ALERT' else 'C',
+                dup['trigger_kind'],
+                keep_id,
+            ))
+            cursor.execute("DELETE FROM predictions WHERE id = ?", (dup_id,))
+            merged += 1
+
+        if not dry_run:
+            self.conn.commit()
+
+        # Anything still contained but untouchable (verified / has matches)
+        cursor.execute(f"""
+            SELECT COUNT(*) FROM predictions b
+            JOIN predictions a
+              ON a.trigger_pair = b.trigger_pair AND a.id <> b.id
+             AND a.prediction_time < b.prediction_time
+             AND b.prediction_time <= COALESCE(a.last_trigger_time, a.prediction_time)
+            WHERE 1=1 {where_since}
+        """, params)
+        remaining = cursor.fetchone()[0]
+        skipped = remaining if not dry_run else 0
+
+        return {'merged': merged, 'skipped_verified': skipped, 'remaining': remaining}
+
     def insert_prediction_match(self, prediction_id: int, flare_event_id: int,
                                 match_type: str, time_to_peak_min: float = None,
                                 distance_score: float = None, notes: str = None) -> int:
