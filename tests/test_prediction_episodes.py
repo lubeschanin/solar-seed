@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from solar_seed.monitoring.coupling import CouplingMonitor
-from solar_seed.monitoring.db import MonitoringDB
+from solar_seed.monitoring.db import MonitoringDB, classify_trigger_kind
 from solar_seed.monitoring.detection import (
     AnomalyStatus,
     BreakType,
@@ -101,6 +101,101 @@ class TestPredictionEpisodes:
             prediction_time="2026-03-01T10:00:00",
             trigger_pair='193-304', trigger_status='ELEVATED')
         assert db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 2
+
+
+class TestBatchExtractionUsesEpisodes:
+    """extract_predictions_from_coupling must agree with the live path.
+
+    It used to be a raw INSERT that bypassed episode folding and trigger_kind,
+    and deduplicated on an exact prediction_time match. Because the live path
+    anchors an episode at its START, every later measurement in that episode
+    looked unextracted and got a duplicate row with NULL trigger fields.
+    """
+
+    @staticmethod
+    def _seed(db, n=6, status='ELEVATED', start_minute=0):
+        for i in range(n):
+            db.insert_coupling(
+                timestamp=f"2026-03-01T10:{start_minute + i * 10:02d}:00",
+                pair='193-211', delta_mi=0.70, residual=-1.2,
+                deviation_pct=-0.12, status=status, trend='DECLINING',
+                resolution='1k',
+            )
+
+    def test_consecutive_measurements_become_one_episode(self, db):
+        self._seed(db)
+        created = db.extract_predictions_from_coupling()
+        assert created == 1
+        assert db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 1
+        row = db.conn.execute("SELECT * FROM predictions").fetchone()
+        assert row['n_triggers'] == 6
+
+    def test_trigger_fields_are_populated(self, db):
+        self._seed(db)
+        db.extract_predictions_from_coupling()
+        row = db.conn.execute("SELECT * FROM predictions").fetchone()
+        # Previously NULL on every batch-created row
+        assert row['trigger_kind'] == 'THRESHOLD'
+        assert row['trigger_value'] == pytest.approx(-0.12)
+        assert row['last_trigger_time'] is not None
+        assert row['valid_to'] is not None
+
+    def test_does_not_duplicate_live_path_episodes(self, db):
+        """Re-running extraction over live-recorded episodes adds nothing."""
+        for i in range(6):
+            db.insert_or_extend_prediction(
+                prediction_time=f"2026-03-01T10:{i * 10:02d}:00",
+                trigger_pair='193-211', trigger_status='ELEVATED',
+                trigger_kind='THRESHOLD')
+        self._seed(db)
+
+        before = db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+        created = db.extract_predictions_from_coupling()
+        after = db.conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+
+        assert before == 1
+        assert created == 0
+        assert after == 1
+
+    def test_escalation_is_carried_over(self, db):
+        self._seed(db, n=3, status='ELEVATED')
+        db.insert_coupling(
+            timestamp="2026-03-01T10:30:00", pair='193-211', delta_mi=0.50,
+            residual=-3.0, deviation_pct=-0.37, status='ALERT',
+            trend='DECLINING', resolution='1k')
+
+        db.extract_predictions_from_coupling()
+        rows = db.conn.execute("SELECT * FROM predictions").fetchall()
+        assert len(rows) == 1
+        assert rows[0]['trigger_status'] == 'ALERT'
+        assert rows[0]['predicted_class'] == 'M'
+
+
+class TestTriggerKindClassification:
+    """Both paths share one classifier, so they cannot drift apart."""
+
+    def test_sudden_drop_wins(self):
+        kind, value, threshold = classify_trigger_kind(
+            {'sudden_drop_severity': 'SEVERE', 'sudden_drop_pct': -0.3,
+             'deviation_pct': -0.4, 'is_break': True})
+        assert (kind, value, threshold) == ('SUDDEN_DROP', -0.3, -0.25)
+
+    def test_break_before_threshold(self):
+        kind, _, _ = classify_trigger_kind(
+            {'is_break': True, 'z_mad': 3.0, 'deviation_pct': -0.4})
+        assert kind == 'BREAK'
+
+    def test_threshold_picks_the_steepest_band(self):
+        assert classify_trigger_kind({'deviation_pct': -0.30})[2] == -0.25
+        assert classify_trigger_kind({'deviation_pct': -0.20})[2] == -0.15
+        assert classify_trigger_kind({'deviation_pct': -0.12})[2] == -0.10
+
+    def test_never_returns_none(self):
+        """A NULL trigger_kind left 2376 stored rows unattributable."""
+        kind, _, _ = classify_trigger_kind({})
+        assert kind == 'STATUS_ONLY'
+        kind, _, _ = classify_trigger_kind({'deviation_pct': 0.5, 'trend': 'STABLE'})
+        assert kind == 'STATUS_ONLY'
 
 
 class TestBreakWindowAnchor:

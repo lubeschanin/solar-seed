@@ -17,7 +17,7 @@ Usage:
     status = classify_anomaly_status(break_result, robustness_check=rob)
 """
 
-from .db import MonitoringDB
+from .db import MonitoringDB, classify_trigger_kind
 from .coupling import CouplingMonitor
 from .constants import (
     MIN_MI_THRESHOLD,
@@ -56,6 +56,7 @@ from .relevance import (
 __all__ = [
     # Database
     'MonitoringDB',
+    'classify_trigger_kind',
     # Coupling monitor
     'CouplingMonitor',
     # Constants & Classification

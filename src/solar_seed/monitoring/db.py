@@ -27,6 +27,47 @@ from typing import Optional
 import json
 
 
+def classify_trigger_kind(data: dict) -> tuple[str, float | None, float | None]:
+    """
+    Decide what fired a prediction, from a coupling reading.
+
+    Shared by the live path (store_coupling_reading) and the batch path
+    (extract_predictions_from_coupling) so the two cannot drift apart - the
+    batch path used to insert rows with trigger_kind NULL entirely.
+
+    Args:
+        data: Mapping with any of sudden_drop_severity, sudden_drop_pct,
+            is_break, z_mad, deviation_pct, residual, trend.
+
+    Returns:
+        (kind, value, threshold). Falls back to STATUS_ONLY rather than None,
+        so every prediction stays attributable.
+    """
+    sudden_drop = data.get('sudden_drop_severity')
+    deviation_pct = data.get('deviation_pct')
+    residual = data.get('residual')
+
+    if sudden_drop:
+        return ('SUDDEN_DROP', data.get('sudden_drop_pct'),
+                -0.15 if sudden_drop == 'MODERATE' else -0.25)
+
+    if data.get('is_break'):
+        return 'BREAK', data.get('z_mad'), 2.0
+
+    if deviation_pct is not None:
+        for threshold in (-0.25, -0.15, -0.10):
+            if deviation_pct < threshold:
+                return 'THRESHOLD', deviation_pct, threshold
+
+    if residual is not None and abs(residual) > 4.0:
+        return 'Z_SCORE_SPIKE', residual, 4.0
+
+    if data.get('trend') in ('DECLINING', 'ACCELERATING_DOWN'):
+        return 'TREND', data.get('slope_pct_per_hour'), None
+
+    return 'STATUS_ONLY', deviation_pct, None
+
+
 class MonitoringDB:
     """SQLite database for solar monitoring data."""
 
@@ -804,20 +845,25 @@ class MonitoringDB:
                 prediction_time=prediction_time, trigger_pair=trigger_pair,
                 trigger_status=trigger_status, **kwargs), 'created'
 
-        cutoff = (pred_dt - timedelta(minutes=gap)).strftime("%Y-%m-%dT%H:%M:%S")
+        lo = (pred_dt - timedelta(minutes=gap)).strftime("%Y-%m-%dT%H:%M:%S")
+        hi = (pred_dt + timedelta(minutes=gap)).strftime("%Y-%m-%dT%H:%M:%S")
 
-        # The episode gap is measured from the LAST trigger folded into the
-        # prediction, not from when the episode opened.
+        # A trigger belongs to an episode if it falls within `gap` of that
+        # episode's span [prediction_time .. last_trigger_time] - on EITHER
+        # side, not just after its end. Matching only backwards works for a
+        # live stream but breaks when re-processing stored measurements
+        # (extract_predictions_from_coupling): a timestamp in the middle of an
+        # already-recorded episode found no match and opened a duplicate.
         cursor.execute("""
-            SELECT id, trigger_status,
+            SELECT id, trigger_status, prediction_time,
                    COALESCE(last_trigger_time, prediction_time) AS last_seen
             FROM predictions
             WHERE trigger_pair = ?
+              AND prediction_time <= ?
               AND COALESCE(last_trigger_time, prediction_time) >= ?
-              AND COALESCE(last_trigger_time, prediction_time) <= ?
-            ORDER BY last_seen DESC
+            ORDER BY prediction_time DESC
             LIMIT 1
-        """, (trigger_pair, cutoff, prediction_time))
+        """, (trigger_pair, hi, lo))
         open_row = cursor.fetchone()
 
         if open_row is None:
@@ -836,9 +882,15 @@ class MonitoringDB:
         new_severity = self.STATUS_SEVERITY.get(trigger_status, 0)
 
         # Every trigger extends the episode, whether or not it escalates.
+        # MAX so a replay in a different order cannot shrink the span.
+        # prediction_time deliberately stays put: it is part of a UNIQUE
+        # (prediction_time, trigger_pair) key, so moving the anchor backwards
+        # can collide with an existing row - and the anchor means "when this
+        # episode was first recorded" anyway.
         cursor.execute("""
             UPDATE predictions
-            SET last_trigger_time = ?, n_triggers = COALESCE(n_triggers, 1) + 1
+            SET last_trigger_time = MAX(COALESCE(last_trigger_time, prediction_time), ?),
+                n_triggers = COALESCE(n_triggers, 1) + 1
             WHERE id = ?
         """, (prediction_time, pred_id))
 
@@ -1756,12 +1808,22 @@ class MonitoringDB:
         Converts ALERT/WARNING/ELEVATED coupling entries into prediction
         records for separate tracking and validation.
 
+        Routes through insert_or_extend_prediction, so a run of consecutive
+        anomalous measurements becomes ONE episode - exactly as the live path
+        records it. This used to be a raw INSERT that bypassed the episode
+        logic, trigger_kind classification and valid_from/to entirely, and
+        deduplicated on an exact prediction_time match. Since the live path
+        folds a range of timestamps into a single row anchored at the episode
+        start, every later measurement in that episode looked "not yet
+        extracted" and got a duplicate row with NULL trigger fields.
+
         Args:
             statuses: List of statuses to extract
                       (default: ['ALERT', 'WARNING', 'ELEVATED'])
 
         Returns:
-            Number of predictions extracted
+            Number of NEW prediction episodes created (escalations and
+            absorptions into existing episodes are not counted)
         """
         if statuses is None:
             # Status hierarchy is ALERT > WARNING > ELEVATED - all three are
@@ -1773,42 +1835,38 @@ class MonitoringDB:
         # Get coupling measurements with alert/elevated status
         placeholders = ','.join('?' * len(statuses))
         cursor.execute(f"""
-            SELECT DISTINCT timestamp, pair, delta_mi, residual, status, trend
+            SELECT DISTINCT timestamp, pair, delta_mi, residual, deviation_pct,
+                   status, trend, slope_pct_per_hour,
+                   sudden_drop_pct, sudden_drop_severity
             FROM coupling_measurements
             WHERE status IN ({placeholders})
             ORDER BY timestamp
         """, statuses)
 
-        measurements = cursor.fetchall()
+        measurements = [dict(row) for row in cursor.fetchall()]
         inserted = 0
 
         for m in measurements:
-            ts, pair, delta_mi, residual, status, trend = m
-
-            # Check if already exists
-            cursor.execute("""
-                SELECT id FROM predictions
-                WHERE prediction_time = ? AND trigger_pair = ?
-            """, (ts, pair))
-
-            if cursor.fetchone():
-                continue  # Already extracted
-
+            status = m['status']
             # Estimate predicted class based on status
-            if status == 'ALERT':
-                predicted_class = 'M'  # Alert suggests M-class potential
-            else:
-                predicted_class = 'C'  # Elevated suggests C-class
+            predicted_class = 'M' if status == 'ALERT' else 'C'
 
-            cursor.execute("""
-                INSERT INTO predictions
-                (prediction_time, predicted_class, trigger_pair, trigger_status,
-                 trigger_residual, trigger_trend, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (ts, predicted_class, pair, status, residual, trend,
-                  f'Auto-extracted from coupling_measurements'))
+            kind, value, threshold = classify_trigger_kind(m)
 
-            inserted += 1
+            _, action = self.insert_or_extend_prediction(
+                prediction_time=m['timestamp'],
+                trigger_pair=m['pair'],
+                trigger_status=status,
+                predicted_class=predicted_class,
+                trigger_residual=m['residual'],
+                trigger_trend=m['trend'],
+                trigger_kind=kind,
+                trigger_value=value,
+                trigger_threshold=threshold,
+                notes='Auto-extracted from coupling_measurements',
+            )
+            if action == 'created':
+                inserted += 1
 
         self.conn.commit()
         return inserted

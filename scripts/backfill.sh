@@ -27,4 +27,19 @@ if [ $# -eq 0 ]; then
     set -- --days 14
 fi
 
-uv run python scripts/early_warning.py backfill "$@"
+# cron runs with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that does not
+# include Homebrew, so a bare `uv` fails with "command not found" every night
+# without the script ever reporting anything useful. Resolve it explicitly.
+UV="${UV:-}"
+if [ -z "$UV" ]; then
+    for candidate in /opt/homebrew/bin/uv /usr/local/bin/uv "$HOME/.local/bin/uv"; do
+        [ -x "$candidate" ] && { UV="$candidate"; break; }
+    done
+fi
+[ -z "$UV" ] && UV="$(command -v uv || true)"
+if [ -z "$UV" ]; then
+    echo "backfill.sh: uv not found (looked in /opt/homebrew/bin, /usr/local/bin, ~/.local/bin, PATH)" >&2
+    exit 1
+fi
+
+"$UV" run python scripts/early_warning.py backfill "$@"

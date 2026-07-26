@@ -78,6 +78,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from solar_seed.monitoring import (
     MonitoringDB,
     CouplingMonitor,
+    classify_trigger_kind,
     validate_roi_variance,
     AnomalyStatus,
     BreakType,
@@ -566,61 +567,9 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
         if status in ('ALERT', 'WARNING', 'ELEVATED'):
             predicted_class = 'M' if status == 'ALERT' else 'C'
 
-            # Determine trigger_kind based on what caused the alert
-            trigger_kind = None
-            trigger_value = None
-            trigger_threshold = None
-
-            sudden_drop = data.get('sudden_drop_severity')
-            is_break = data.get('is_break')
-            deviation_pct = data.get('deviation_pct')
-            z_mad = data.get('z_mad')
-
-            if sudden_drop:
-                # Sudden drop detector triggered
-                trigger_kind = 'SUDDEN_DROP'
-                trigger_value = data.get('sudden_drop_pct')
-                trigger_threshold = -0.15 if sudden_drop == 'MODERATE' else -0.25
-            elif is_break:
-                # Coupling break detected
-                trigger_kind = 'BREAK'
-                trigger_value = z_mad
-                trigger_threshold = 2.0
-            elif deviation_pct is not None and deviation_pct < -0.25:
-                # Absolute threshold exceeded (ALERT)
-                trigger_kind = 'THRESHOLD'
-                trigger_value = deviation_pct
-                trigger_threshold = -0.25
-            elif deviation_pct is not None and deviation_pct < -0.15:
-                # Warning threshold (ELEVATED)
-                trigger_kind = 'THRESHOLD'
-                trigger_value = deviation_pct
-                trigger_threshold = -0.15
-            elif deviation_pct is not None and deviation_pct < -0.10:
-                # Elevated threshold (matches coupling.py ELEVATED status)
-                trigger_kind = 'THRESHOLD'
-                trigger_value = deviation_pct
-                trigger_threshold = -0.10
-            else:
-                # Check for z-score spike (STRONG/EXTREME anomaly level)
-                residual = data.get('residual')
-                if residual is not None and abs(residual) > 4.0:
-                    trigger_kind = 'Z_SCORE_SPIKE'
-                    trigger_value = residual
-                    trigger_threshold = 4.0
-                else:
-                    # Fallback: check trend
-                    trend = data.get('trend')
-                    if trend in ('DECLINING', 'ACCELERATING_DOWN'):
-                        trigger_kind = 'TREND'
-                        trigger_value = data.get('slope_pct_per_hour')
-
-            if trigger_kind is None:
-                # Nothing above matched. Leaving this NULL made 2376 stored
-                # predictions unattributable; record the status itself so every
-                # row is at least traceable to what fired it.
-                trigger_kind = 'STATUS_ONLY'
-                trigger_value = data.get('deviation_pct')
+            # Shared with extract_predictions_from_coupling so the live and
+            # batch paths cannot classify the same reading differently.
+            trigger_kind, trigger_value, trigger_threshold = classify_trigger_kind(data)
 
             # One prediction per alarm episode, not per 10-min reading.
             db.insert_or_extend_prediction(
