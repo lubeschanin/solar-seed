@@ -828,6 +828,9 @@ class MonitoringDB:
     #: rather than opening a new prediction.
     EPISODE_GAP_MINUTES = 30
 
+    #: Forecast horizon of a prediction: valid_to = last trigger + this.
+    PREDICTION_WINDOW_MINUTES = 90
+
     def insert_or_extend_prediction(self, prediction_time: str, trigger_pair: str,
                                     trigger_status: str, episode_gap_minutes: int = None,
                                     **kwargs) -> tuple[int, str]:
@@ -903,22 +906,30 @@ class MonitoringDB:
         # (prediction_time, trigger_pair) key, so moving the anchor backwards
         # can collide with an existing row - and the anchor means "when this
         # episode was first recorded" anyway.
+        #
+        # valid_to moves with the episode too, not only on escalation. Only
+        # escalating triggers used to push it, so a sustained alarm at one
+        # level ran on with an expired forecast window: id 15352 (193-211,
+        # ALERT) collected 171 triggers over 22h while valid_to still said
+        # the window had closed after 90 minutes. Anything reading valid_to
+        # as "is this prediction live" saw a dead row for an active alarm.
+        window_end = (pred_dt + timedelta(minutes=self.PREDICTION_WINDOW_MINUTES)).isoformat()
         cursor.execute("""
             UPDATE predictions
             SET last_trigger_time = MAX(COALESCE(last_trigger_time, prediction_time), ?),
-                n_triggers = COALESCE(n_triggers, 1) + 1
+                n_triggers = COALESCE(n_triggers, 1) + 1,
+                valid_to = MAX(COALESCE(valid_to, ''), ?)
             WHERE id = ?
-        """, (prediction_time, pred_id))
+        """, (prediction_time, window_end, pred_id))
 
         if new_severity <= prev_severity:
             self.conn.commit()
             return pred_id, 'absorbed'
 
-        # Escalation: upgrade the episode in place and extend its window from
-        # the escalating trigger, so the forecast window tracks the worst state.
-        valid_to = kwargs.get('valid_to')
-        if valid_to is None:
-            valid_to = (pred_dt + timedelta(minutes=90)).isoformat()
+        # Escalation: upgrade the episode in place. An explicit valid_to from
+        # the caller overrides the rolling window; otherwise the update above
+        # already moved it, so leave it alone rather than recomputing it.
+        valid_to = kwargs.get('valid_to') or window_end
 
         try:
             cursor.execute("""
@@ -930,7 +941,7 @@ class MonitoringDB:
                     trigger_kind = COALESCE(?, trigger_kind),
                     trigger_value = COALESCE(?, trigger_value),
                     trigger_threshold = COALESCE(?, trigger_threshold),
-                    valid_to = ?,
+                    valid_to = MAX(COALESCE(valid_to, ''), ?),
                     notes = COALESCE(notes, '') || ?
                 WHERE id = ?
             """, (

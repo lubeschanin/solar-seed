@@ -32,6 +32,7 @@ Usage:
     uv run python scripts/early_warning.py --monitor --coupling --interval 600  # Full monitoring
 """
 
+import os
 import sys
 import json
 import time
@@ -2150,6 +2151,14 @@ https://github.com/lubeschanin/solar-seed
         console.print(f"  [yellow]Send manually: mail jsoc@sun.stanford.edu < {report_path}[/]")
 
 
+def _close_db_quietly(db) -> None:
+    """Close the DB before a hard exit, without letting that hide the abort."""
+    try:
+        db.close()
+    except Exception as e:  # pragma: no cover - diagnostics only
+        console.print(f"  [dim]DB close failed on abort: {e}[/]")
+
+
 @app.command()
 def backfill(
     days: int = typer.Option(7, "--days", "-d", help="Days to look back"),
@@ -2376,9 +2385,21 @@ def backfill(
                 f.write(f"  {ts}\n")
         console.print(f"  [dim]Failure log: {report_path}[/]")
 
-    # Non-zero exit for cron when the run aborted (JSOC down)
+    # Non-zero exit for cron when the run aborted (JSOC down).
+    #
+    # Hard exit, not typer.Exit: aborting means a JSOC download was abandoned
+    # mid-flight by run_with_timeout, and the libraries underneath it (parfive
+    # /aiohttp) spin up their own non-daemon threads that the interpreter
+    # joins on the way out. On 2026-08-09 that turned a clean abort into a
+    # process that hung in Py_Finalize for three days holding the run lock,
+    # which silently killed the next three nightly backfills. Nothing is left
+    # to persist here — every measurement is committed as it is written.
     if aborted:
-        raise typer.Exit(1)
+        _close_db_quietly(db)
+        console.file.flush()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
 
 
 def main():

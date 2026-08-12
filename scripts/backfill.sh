@@ -12,13 +12,31 @@
 
 set -euo pipefail
 
-# Lock against concurrent runs (macOS has no flock; mkdir is atomic)
+# Lock against concurrent runs (macOS has no flock; mkdir is atomic).
+#
+# The lock records its owner's PID. A bare mkdir lock is only correct while
+# every holder exits: on 2026-08-09 a run hung in interpreter shutdown for
+# three days, and the three following nightly runs each reported "already
+# running" and exited 0 — a dead job that looked like a healthy one. If the
+# recorded PID is gone, the lock is stale and gets reclaimed.
 LOCKDIR="/tmp/solar-backfill.lock"
+PIDFILE="$LOCKDIR/pid"
+
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
-    echo "backfill.sh: another instance is already running (lock: $LOCKDIR) — exiting"
-    exit 0
+    OWNER="$(cat "$PIDFILE" 2>/dev/null || true)"
+    if [ -n "$OWNER" ] && kill -0 "$OWNER" 2>/dev/null; then
+        echo "backfill.sh: another instance is already running (pid $OWNER, lock: $LOCKDIR) — exiting"
+        exit 0
+    fi
+    echo "backfill.sh: reclaiming stale lock $LOCKDIR (owner ${OWNER:-unknown} is gone)" >&2
+    rm -rf "$LOCKDIR"
+    if ! mkdir "$LOCKDIR" 2>/dev/null; then
+        echo "backfill.sh: lost the race for $LOCKDIR — exiting"
+        exit 0
+    fi
 fi
-trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
+echo $$ > "$PIDFILE"
+trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
 
 cd "$(dirname "$0")/.." || { echo "backfill.sh: cd to project root failed" >&2; exit 1; }
 

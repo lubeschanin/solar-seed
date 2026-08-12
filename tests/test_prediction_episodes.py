@@ -93,6 +93,40 @@ class TestPredictionEpisodes:
         row = db.conn.execute("SELECT * FROM predictions").fetchone()
         assert row['trigger_status'] == 'ALERT'  # not downgraded
 
+    def test_absorbed_triggers_extend_the_forecast_window(self, db):
+        """A sustained alarm must not run on with an expired valid_to.
+
+        Only escalation used to push valid_to, so id 15352 (193-211, ALERT)
+        collected 171 triggers over 22h while valid_to still claimed the
+        window had closed 90 min after the first one.
+        """
+        db.insert_or_extend_prediction(
+            prediction_time="2026-03-01T10:00:00",
+            trigger_pair='193-211', trigger_status='ALERT')
+
+        # Same severity every 10 min for two hours - all absorbed
+        for i in range(1, 13):
+            ts = (datetime(2026, 3, 1, 10, 0) + timedelta(minutes=10 * i)).isoformat()
+            _, action = db.insert_or_extend_prediction(
+                prediction_time=ts, trigger_pair='193-211', trigger_status='ALERT')
+            assert action == 'absorbed'
+
+        row = db.conn.execute("SELECT * FROM predictions").fetchone()
+        assert row['n_triggers'] == 13
+        assert row['last_trigger_time'] == '2026-03-01T12:00:00'
+        # Window tracks the LAST trigger (12:00 + 90 min), not the first
+        assert row['valid_to'].startswith('2026-03-01T13:30')
+
+    def test_out_of_order_replay_cannot_shrink_the_window(self, db):
+        db.insert_or_extend_prediction(
+            prediction_time="2026-03-01T10:20:00",
+            trigger_pair='193-211', trigger_status='ELEVATED')
+        db.insert_or_extend_prediction(
+            prediction_time="2026-03-01T10:00:00",
+            trigger_pair='193-211', trigger_status='ELEVATED')
+        row = db.conn.execute("SELECT * FROM predictions").fetchone()
+        assert row['valid_to'].startswith('2026-03-01T11:50')
+
     def test_pairs_are_independent_episodes(self, db):
         db.insert_or_extend_prediction(
             prediction_time="2026-03-01T10:00:00",
