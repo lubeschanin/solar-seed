@@ -447,13 +447,19 @@ class TestCouplingMonitor:
         transfer = monitor.detect_transfer_state()
         assert transfer is None
 
+    # TEST_BASELINES 193-211 @1k: mean 0.80, std 0.14
+    # → depressed means below 0.80 - 1.5*0.14 = 0.59
+    QUIET = 0.90
+    LOW = 0.48
+
     def test_persistence_no_history(self, monitor):
-        """No history = not persistent."""
-        result = monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2)
+        """No history = not persistent (min_frames=2 needs one previous frame)."""
+        result = monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=self.LOW, min_frames=2)
         assert result is False
 
     @staticmethod
-    def _fill(monitor, values, start_hour=10):
+    def _fill(monitor, values, start_hour=0):
         """Append `values` as consecutive 10-minute readings for 193-211."""
         for i, v in enumerate(values):
             monitor.add_reading(
@@ -461,53 +467,119 @@ class TestCouplingMonitor:
                 {'193-211': {'delta_mi': v}},
             )
 
-    def test_persistence_single_frame(self, monitor):
-        """One depressed frame before the current one = persistent (min_frames=2).
-
-        Persistence is judged against the level BEFORE the break window, not
-        against the rolling median used by detect_coupling_break: that median
-        follows a sustained collapse downwards and would drop the frame back
-        below threshold after a frame or two.
-        """
-        # Quiet plateau around 0.90, then one clearly depressed frame.
+    def test_persistence_previous_and_current_depressed(self, monitor):
+        """Previous frame depressed and current depressed = persistent."""
         self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.50])
-        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2) is True
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=self.LOW, min_frames=2) is True
 
-    def test_persistence_previous_no_break(self, monitor):
-        """Previous frame still at the quiet level = not persistent (single-frame spike)."""
+    def test_persistence_rejects_single_frame_spike(self, monitor):
+        """Previous frame still quiet = single-frame spike, not persistent.
+
+        Regression guard against the inverted filter: with a rolling reference
+        window, an isolated excursion *passed* precisely because the window
+        preceding it was still undisturbed.
+        """
         self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.90])
-        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2) is False
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=self.LOW, min_frames=2) is False
 
     def test_persistence_survives_sustained_collapse(self, monitor):
-        """A long collapse stays persistent.
+        """A collapse longer than any plausible rolling window stays persistent.
 
-        Regression guard: the old z_mad-based check compared against a rolling
-        median that sinks with the collapse, so a plateau of low values stopped
-        registering as a break after a couple of frames.
+        Regression guard for the inverted filter. Both earlier variants judged
+        the frame against a window drawn from the recent past (60-min median,
+        then a 12-frame pre-break window). Once such a window has filled with
+        depressed values its median sits on the plateau and its spread shrinks,
+        so no plateau value can be 2 sigma below it and every frame is vetoed
+        as a "spike" - the exact inverse of the intent.
+
+        The collapse here is deliberately longer than 12 frames: the previous
+        test suite used four, which is why it passed while production, running
+        on 144 frames of history, vetoed 265 of 297 frames of a real 44-hour
+        depression (193-211, 11-13 Aug 2026).
         """
-        self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.50, 0.48, 0.47, 0.49])
-        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2) is True
+        self._fill(monitor, [0.90, 0.91, 0.89, 0.90] + [0.47] * 20)
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=self.LOW, min_frames=2) is True
+
+    def test_persistence_real_plateau_confirmed(self, monitor):
+        """Real 193-211 plateau of 12-13 Aug 2026 must confirm, not veto.
+
+        These are measured values from monitoring.db. Against the quiet-Sun
+        baseline they sit ~2.7 sigma low; against their own rolling median they
+        are indistinguishable from noise (median 0.316, sigma 0.009).
+        """
+        self._fill(monitor, [0.318, 0.320, 0.322, 0.330, 0.400, 0.416, 0.380, 0.382])
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=0.407, min_frames=2) is True
+
+    def test_persistence_real_spike_vetoed(self, monitor):
+        """Real single-frame excursion of 11 Aug 2026 17:27 must be vetoed.
+
+        ΔMI 0.345 sitting between 0.701 and 0.640 - a textbook spike that the
+        inverted filter confirmed as "PERSISTENT (2+ frames)", because it
+        judged the spike against the still-undisturbed window before it.
+
+        Framed as production hit it: the spike is the previous frame and the
+        current frame has already recovered to 0.640.
+        """
+        self._fill(monitor, [0.616, 0.578, 0.684, 0.701, 0.345])
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=0.640, min_frames=2) is False
 
     def test_persistence_three_frames(self, monitor):
-        """Three frames required: the two preceding frames must both be depressed."""
+        """Three frames required: both preceding frames must be depressed."""
         self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.50, 0.48])
-        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=3) is True
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=self.LOW, min_frames=3) is True
 
-        # Only the most recent frame depressed → not persistent over 3 frames
-        m2_values = [0.90, 0.91, 0.89, 0.90, 0.90, 0.50]
+        # Only the most recent previous frame depressed → not persistent over 3
         monitor.history = []
-        self._fill(monitor, m2_values)
-        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=3) is False
+        self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.90, 0.50])
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=self.LOW, min_frames=3) is False
 
-    def test_persistence_insufficient_reference(self, monitor):
-        """Too little pre-break history to establish a reference = not persistent."""
-        self._fill(monitor, [0.90, 0.50])
-        assert monitor.is_persistent_break('193-211', current_is_break=True, min_frames=2) is False
+    def test_persistence_insufficient_history_for_min_frames(self, monitor):
+        """Fewer previous frames than min_frames requires = not persistent."""
+        self._fill(monitor, [0.50])
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=self.LOW, min_frames=3) is False
+
+    def test_persistence_current_frame_is_checked(self, monitor):
+        """A quiet current frame cannot be persistent, however depressed the past.
+
+        The previous implementation never looked at the current value at all -
+        it took only the boolean and inspected history.
+        """
+        self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.47, 0.47])
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=True, current_delta_mi=self.QUIET, min_frames=2) is False
+
+    def test_persistence_uses_resolution_baseline(self, monitor):
+        """The 4k baseline table is selected when resolution='4k'."""
+        # 193-304: 1k mean 0.18/std 0.06 → thr 0.09; 4k mean 0.11/std 0.05 → thr 0.035
+        self._fill(monitor, [0.90] * 4)
+        for i, v in enumerate([0.05, 0.05]):
+            monitor.add_reading(
+                f"2026-01-01T05:{i * 10:02d}:00", {'193-304': {'delta_mi': v}})
+        assert monitor.is_persistent_break(
+            '193-304', current_is_break=True, current_delta_mi=0.05,
+            min_frames=2, resolution='1k') is True
+        assert monitor.is_persistent_break(
+            '193-304', current_is_break=True, current_delta_mi=0.05,
+            min_frames=2, resolution='4k') is False
+
+    def test_persistence_unknown_pair(self, monitor):
+        """A pair with no baseline cannot be judged = not persistent."""
+        assert monitor.is_persistent_break(
+            '94-131', current_is_break=True, current_delta_mi=0.01, min_frames=2) is False
 
     def test_persistence_not_current_break(self, monitor):
         """If current is not a break, return False immediately."""
         self._fill(monitor, [0.90, 0.91, 0.89, 0.90, 0.50])
-        assert monitor.is_persistent_break('193-211', current_is_break=False, min_frames=2) is False
+        assert monitor.is_persistent_break(
+            '193-211', current_is_break=False, current_delta_mi=self.LOW, min_frames=2) is False
 
 
 class TestSuddenDropDetector:

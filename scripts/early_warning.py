@@ -561,6 +561,10 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
             quality_ok=quality_ok,
             robustness_score=robustness_score,
             sync_delta_s=sync_delta_s,
+            # Without this the DB records quality_ok=0 with no reason attached,
+            # which is how an inverted anti-spike filter stayed invisible for
+            # three weeks (8959 rows, all veto_reason NULL).
+            veto_reason=data.get('break_vetoed'),
         )
 
         # Auto-create prediction for ALERT/WARNING/ELEVATED status
@@ -882,7 +886,8 @@ def _analyze_pair(wl1: int, wl2: int, channels: dict, monitor, validate_breaks: 
                 print(f"     ✓ Break is ROBUST under binning (Δ={robust['change_pct']:.1f}%)")
 
                 # Persistence check: anti-spike filter (2+ consecutive frames)
-                is_persistent = monitor.is_persistent_break(pair_key, True, min_frames=2)
+                is_persistent = monitor.is_persistent_break(
+                    pair_key, True, delta_mi, min_frames=2, resolution=resolution)
                 if is_persistent:
                     print(f"     ✓ Break is PERSISTENT (2+ frames)")
                 else:

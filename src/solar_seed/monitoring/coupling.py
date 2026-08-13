@@ -19,7 +19,6 @@ from datetime import datetime
 
 from .baselines import (
     PROVISIONAL_BASELINES,
-    _mad_sigma,
     _median,
     load_baselines,
 )
@@ -141,25 +140,43 @@ class CouplingMonitor:
             })
         return series
 
-    def is_persistent_break(self, pair: str, current_is_break: bool, min_frames: int = 2) -> bool:
+    # Frames must sit at least this many sigma below the quiet-Sun baseline to
+    # count as depressed. Looser than the ALERT line (-3.0) on purpose: this is
+    # a persistence filter, not a trigger - the trigger already fired.
+    PERSISTENCE_SIGMA = 1.5
+
+    def is_persistent_break(self, pair: str, current_is_break: bool,
+                            current_delta_mi: float, min_frames: int = 2,
+                            resolution: str = '1k') -> bool:
         """
         Check if a break persists for min_frames consecutive readings.
 
-        Anti-spike filter: only confirm a break if the coupling was already
-        depressed in the preceding frame(s). At 10-min cadence, min_frames=2
-        means 20 minutes of persistence.
+        Anti-spike filter: confirm a break only if the current frame *and* the
+        preceding ones are all depressed. At 10-min cadence, min_frames=2 means
+        20 minutes of persistence.
 
-        The reference level is the median of the frames *before* the candidate
-        break window, not the rolling 60-min median used by
-        detect_coupling_break. That rolling median follows a sustained collapse
-        downwards, so z_mad falls back below threshold after a frame or two -
-        which used to let transient two-frame spikes through while filtering
-        out exactly the sustained plateaus this check is meant to confirm.
+        The reference is the fixed quiet-Sun baseline, not a rolling window over
+        recent frames. Any window taken from the recent past follows a sustained
+        collapse downwards: once it has filled with depressed values its median
+        sits on the plateau and its spread shrinks, and no plateau value can be
+        2 sigma below its own plateau median. Both earlier variants - the
+        60-min median and the 12-frame pre-break window that replaced it -
+        inverted the filter this way, passing isolated single-frame excursions
+        (which follow a still-undisturbed window) while vetoing exactly the
+        sustained depressions the check exists to confirm. Measured against
+        193-211 over 11-13 Aug 2026: 265 of 297 frames of a 44-hour plateau
+        were vetoed as "spike", while a lone 0.345 frame between 0.701 and
+        0.640 passed. The baseline does not move with the event, so it cannot
+        develop that blind spot.
 
         Args:
             pair: Channel pair (e.g. '193-211')
             current_is_break: Whether current frame shows a break
+            current_delta_mi: ΔMI of the current frame. Required - the frame is
+                not in self.history yet at call time (add_reading runs after
+                the break checks), so it cannot be read back from the series.
             min_frames: Minimum consecutive depressed frames required
+            resolution: '1k' or '4k' - selects the baseline table
 
         Returns:
             True if break is persistent, False if likely spike/artifact
@@ -167,27 +184,24 @@ class CouplingMonitor:
         if not current_is_break:
             return False
 
-        n_previous = min_frames - 1
-        if n_previous <= 0:
-            return True
-
-        series = self.pair_series(pair)
-        candidate = series[-n_previous:] if n_previous else []
-        if len(candidate) < n_previous:
-            # Not enough history, can't confirm persistence
+        baselines = self.get_baselines(resolution)
+        if pair not in baselines:
             return False
 
-        # Pre-break reference window: the frames before the candidate frames.
-        reference_window = [e['delta_mi'] for e in series[:-n_previous]][-12:]
-        if len(reference_window) < 3:
-            return False
+        baseline = baselines[pair]
+        threshold = baseline['mean'] - self.PERSISTENCE_SIGMA * baseline['std']
 
-        reference = _median(reference_window)
-        sigma = _mad_sigma(reference_window, reference)
-        # With a degenerate spread fall back to a 10% relative drop.
-        threshold = reference - 2.0 * sigma if sigma > 1e-6 else reference * 0.90
+        n_previous = max(0, min_frames - 1)
+        frames = [current_delta_mi]
+        if n_previous:
+            series = self.pair_series(pair)
+            previous = [e['delta_mi'] for e in series[-n_previous:]]
+            if len(previous) < n_previous:
+                # Not enough history, can't confirm persistence
+                return False
+            frames = previous + frames
 
-        return all(e['delta_mi'] < threshold for e in candidate)
+        return all(v < threshold for v in frames)
 
     def detect_sudden_drop(self, pair: str, delta_mi: float, lookback: int = 3,
                            baseline_std: float = None) -> dict:
