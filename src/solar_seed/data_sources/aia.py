@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from solar_seed.data_sources._timeout import run_with_timeout, FutureTimeoutError
+from solar_seed.monitoring.constants import SYNC_SPREAD_MAX_SEC
 
 
 def load_aia_latest(
@@ -177,8 +178,11 @@ def load_aia_latest(
         if len(timestamps) >= 2:
             ts_list = list(timestamps.values())
             time_spread_sec = (max(ts_list) - min(ts_list)).total_seconds()
-            if time_spread_sec > 60:
-                warnings.append(f"ASYNC: Channels spread over {time_spread_sec:.0f}s (>60s)")
+            if time_spread_sec > SYNC_SPREAD_MAX_SEC:
+                warnings.append(
+                    f"ASYNC: Channels spread over {time_spread_sec:.0f}s "
+                    f"(>{SYNC_SPREAD_MAX_SEC:.0f}s)"
+                )
                 print(f"    ⚠ Time spread: {time_spread_sec:.0f}s between channels")
             elif time_spread_sec > 30:
                 print(f"    Time spread: {time_spread_sec:.0f}s (acceptable)")

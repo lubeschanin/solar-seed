@@ -23,33 +23,15 @@ from urllib.error import URLError
 # JSOC synoptic data endpoint
 from solar_seed.endpoints import endpoint
 
+from ._timestamps import compute_time_spread_sec, parse_obs_time
+
 SYNOPTIC_BASE_URL = endpoint('synoptic_base')
 
 
-def _parse_obs_time(value) -> Optional[datetime]:
-    """Parse a FITS T_OBS/DATE-OBS header value (e.g. '2026-01-11T11:46:04.84Z')."""
-    try:
-        s = str(value).strip().replace('Z', '+00:00')
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except (TypeError, ValueError):
-        return None
-
-
-def _compute_time_spread_sec(timestamps: dict) -> Optional[float]:
-    """
-    Compute max-min spread (seconds) of per-channel observation times.
-
-    Returns None if any timestamp cannot be parsed (no false '0' assurance).
-    """
-    if len(timestamps) < 2:
-        return 0.0
-    parsed = [_parse_obs_time(v) for v in timestamps.values()]
-    if any(p is None for p in parsed):
-        return None
-    return (max(parsed) - min(parsed)).total_seconds()
+# Re-exported under the historical private names; the definitions now live in
+# _timestamps so the JSOC backfill can measure its own spread with the same code.
+_parse_obs_time = parse_obs_time
+_compute_time_spread_sec = compute_time_spread_sec
 
 
 def _fetch_synoptic_fits(fits_url: str, timeout: int = 30):

@@ -28,6 +28,7 @@ from solar_seed.radial_profile import subtract_radial_geometry
 from solar_seed.control_tests import sector_ring_shuffle_test
 from solar_seed.monitoring.coupling import CouplingMonitor
 from solar_seed.monitoring.db import MonitoringDB
+from solar_seed.monitoring.validation import assess_measurement_quality
 
 PIPELINE_VERSION = "gap-backfill-1.0"
 WAVELENGTHS = [193, 211, 304]
@@ -112,8 +113,16 @@ def main():
 
         ts_db = iso_ts.rstrip("Z")
         spread = quality.get("time_spread_sec")
-        quality_ok = (spread is not None and spread < 60
-                      and len(channels) == len(WAVELENGTHS))
+        # Same shared verdict the live monitor uses, so a gap-filled row is
+        # flagged - and explained - by exactly the same rule as a live one.
+        _q = assess_measurement_quality(time_spread_sec=spread)
+        reasons = [_q["veto_reason"]] if _q["veto_reason"] else []
+        if spread is None:
+            reasons.append("time_sync(unknown)")
+        if len(channels) != len(WAVELENGTHS):
+            reasons.append(f"channels({len(channels)}/{len(WAVELENGTHS)})")
+        veto_reason = "+".join(reasons) if reasons else None
+        quality_ok = not reasons
 
         residuals = {}
         for wl, data in channels.items():
@@ -143,6 +152,7 @@ def main():
                     residual=residual_z, deviation_pct=deviation,
                     pipeline_version=PIPELINE_VERSION,
                     quality_ok=quality_ok, sync_delta_s=spread,
+                    veto_reason=veto_reason,
                     resolution="1k",
                 )
                 if row_id == -1:

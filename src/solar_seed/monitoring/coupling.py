@@ -23,6 +23,7 @@ from .baselines import (
     load_baselines,
 )
 from .constants import (
+    SYNC_SPREAD_MAX_SEC,
     Z_SUDDEN_DROP_MODERATE,
     Z_SUDDEN_DROP_SEVERE,
     classify_status,
@@ -494,7 +495,8 @@ class CouplingMonitor:
 
         Args:
             robustness_checks: Dict of robustness check results by pair
-            time_spread_sec: Time spread between channel observations (>60s = ASYNC)
+            time_spread_sec: Time spread between channel observations
+                (> SYNC_SPREAD_MAX_SEC = ASYNC)
 
         Returns dict with state info or None if not detected.
         """
@@ -520,7 +522,7 @@ class CouplingMonitor:
         degraded_reasons = []
 
         # 1. Time sync failure (ASYNC)
-        if time_spread_sec is not None and time_spread_sec > 60:
+        if time_spread_sec is not None and time_spread_sec > SYNC_SPREAD_MAX_SEC:
             degraded = True
             degraded_reasons.append(f'ASYNC (channels {time_spread_sec:.0f}s apart)')
 

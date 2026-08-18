@@ -1062,3 +1062,92 @@ class TestStoreCouplingReading:
         row = cursor.fetchone()
         assert row['quality_ok'] == 0
         assert row['robustness_score'] == pytest.approx(35.0)
+
+    def test_veto_reason_written_for_time_sync(self, mock_db):
+        """
+        A row flagged for channel desync must say so.
+
+        This is the regression that mattered: the time-sync branch set
+        quality_ok=False but passed only `break_vetoed` as the reason, so ~21%
+        of all stored rows carried quality_ok=0 with veto_reason NULL. An
+        exclusion nobody can grep for is an exclusion nobody can review.
+        """
+        coupling = {
+            '193-211': {'delta_mi': 0.59, 'status': 'NORMAL'},
+            '_quality': {'resolution': '1024x1024', 'time_spread_sec': 184.5},
+            '_validation': {
+                'robustness_checks': {
+                    '193-211': {'is_robust': True, 'change_pct': 2.0},
+                },
+            },
+        }
+
+        store_coupling_reading("2026-01-15T12:00:00", coupling)
+
+        cursor = mock_db.conn.cursor()
+        cursor.execute("SELECT quality_ok, veto_reason, sync_delta_s FROM coupling_measurements")
+        row = cursor.fetchone()
+        assert row['quality_ok'] == 0
+        assert row['veto_reason'] is not None
+        assert 'time_sync' in row['veto_reason']
+        assert row['sync_delta_s'] == pytest.approx(184.5)
+
+    def test_veto_reason_written_for_every_failing_branch(self, mock_db):
+        """No branch may set quality_ok=0 without recording a reason."""
+        cases = [
+            ('2026-01-15T12:00:00',
+             {'delta_mi': 0.0, 'status': 'DATA_ERROR'},
+             {'time_spread_sec': 5.0}, None, 'data_error'),
+            ('2026-01-15T12:10:00',
+             {'delta_mi': 0.59, 'status': 'NORMAL'},
+             {'time_spread_sec': 5.0},
+             {'is_robust': False, 'change_pct': 130.6}, 'robustness'),
+            ('2026-01-15T12:20:00',
+             {'delta_mi': 0.59, 'status': 'NORMAL', 'break_vetoed': 'spike'},
+             {'time_spread_sec': 5.0}, None, 'spike'),
+        ]
+
+        for ts, pair_data, quality, rob, expected in cases:
+            coupling = {
+                '193-211': pair_data,
+                '_quality': {'resolution': '1024x1024', **quality},
+                '_validation': {
+                    'robustness_checks': {'193-211': rob} if rob else {},
+                },
+            }
+            store_coupling_reading(ts, coupling)
+
+        cursor = mock_db.conn.cursor()
+        cursor.execute(
+            "SELECT timestamp, quality_ok, veto_reason FROM coupling_measurements "
+            "ORDER BY timestamp"
+        )
+        rows = cursor.fetchall()
+        assert len(rows) == 3
+        for row, (_, _, _, _, expected) in zip(rows, cases):
+            assert row['quality_ok'] == 0, f"{row['timestamp']} should be flagged"
+            assert row['veto_reason'] is not None, (
+                f"{row['timestamp']} flagged with no reason - the exact defect "
+                f"this test exists to prevent"
+            )
+            assert expected in row['veto_reason']
+
+    def test_multiple_failures_are_all_recorded(self, mock_db):
+        """Two failing tests produce two reasons, not just the first one."""
+        coupling = {
+            '193-211': {'delta_mi': 0.59, 'status': 'NORMAL'},
+            '_quality': {'resolution': '1024x1024', 'time_spread_sec': 360.0},
+            '_validation': {
+                'robustness_checks': {
+                    '193-211': {'is_robust': False, 'change_pct': 130.6},
+                },
+            },
+        }
+
+        store_coupling_reading("2026-01-15T12:00:00", coupling)
+
+        cursor = mock_db.conn.cursor()
+        cursor.execute("SELECT veto_reason FROM coupling_measurements")
+        reason = cursor.fetchone()['veto_reason']
+        assert 'time_sync' in reason
+        assert 'robustness' in reason

@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING
 import numpy as np
 
+from .constants import SYNC_SPREAD_MAX_SEC
 from .validation import validate_mi_measurement
 
 if TYPE_CHECKING:
@@ -507,12 +508,14 @@ def classify_anomaly_status(break_detection: dict, robustness_check: dict = None
     skipped_tests = []  # Tests that errored / did not actually run (fail-closed)
     z_mad = break_detection.get('z_mad', 0)
 
-    # Test A: Time alignment (<60s)
+    # Test A: Time alignment (SYNC_SPREAD_MAX_SEC)
     if time_spread_sec is not None:
-        if time_spread_sec <= 60:
+        if time_spread_sec <= SYNC_SPREAD_MAX_SEC:
             passed_tests.append(f'time_sync ({time_spread_sec:.0f}s)')
         else:
-            failed_tests.append(f'time_sync ({time_spread_sec:.0f}s > 60s)')
+            failed_tests.append(
+                f'time_sync ({time_spread_sec:.0f}s > {SYNC_SPREAD_MAX_SEC:.0f}s)'
+            )
             veto_reasons.append(f'time sync failed ({time_spread_sec:.0f}s)')
 
     # Test B: Registration shift (<10px)

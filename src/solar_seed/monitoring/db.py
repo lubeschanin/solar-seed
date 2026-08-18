@@ -2485,6 +2485,7 @@ class MonitoringDB:
         original_delta_mi: float = None,
         new_mi_original: float = None,
         baselines: dict = None,
+        sync_delta_s: float = None,
     ) -> bool:
         """
         Update a measurement with backfilled 4k data.
@@ -2504,11 +2505,17 @@ class MonitoringDB:
             new_mi_original: Recomputed MI_original at 4k, if available
             baselines: {pair: {'mean', 'std'}} at 4k. When omitted, the
                 measured 4k baselines are loaded from disk.
+            sync_delta_s: Channel time spread measured on the 4k frames. Pass
+                None when it could not be determined - the column is then
+                cleared rather than left holding the 1k value of the replaced
+                row. Keeping the old value made every 4k row echo the 1k spread
+                distribution, which is not a measurement of anything.
 
         Returns:
             True if updated, False if not found
         """
         from .baselines import load_baselines
+        from .validation import assess_measurement_quality
 
         cursor = self.conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
@@ -2523,6 +2530,26 @@ class MonitoringDB:
             deviation_pct = (new_delta_mi - base['mean']) / base['mean'] if base['mean'] else None
             status = classify_status(residual)
 
+        # Re-derive the quality verdict for the 4k frames. The time-sync test is
+        # recomputed from the new spread; any reason that was NOT recomputed
+        # (robustness, measured on the 1k image pair) is carried forward rather
+        # than silently dropped.
+        prior = cursor.execute(
+            "SELECT veto_reason FROM coupling_measurements WHERE timestamp = ? AND pair = ?",
+            (timestamp, pair)
+        ).fetchone()
+        inherited = None
+        if prior and prior[0]:
+            inherited = '+'.join(
+                r for r in (x.strip() for x in str(prior[0]).split('+'))
+                if r and not r.startswith('time_sync')
+            ) or None
+
+        quality = assess_measurement_quality(
+            time_spread_sec=sync_delta_s,
+            inherited_reasons=inherited,
+        )
+
         cursor.execute("""
             UPDATE coupling_measurements
             SET delta_mi = ?,
@@ -2532,10 +2559,14 @@ class MonitoringDB:
                 status = ?,
                 resolution = '4k',
                 backfilled_at = ?,
+                sync_delta_s = ?,
+                quality_ok = ?,
+                veto_reason = ?,
                 original_delta_mi = COALESCE(original_delta_mi, ?)
             WHERE timestamp = ? AND pair = ?
         """, (new_delta_mi, new_mi_original, residual, deviation_pct, status,
-              now, original_delta_mi, timestamp, pair))
+              now, sync_delta_s, quality['quality_ok'], quality['veto_reason'],
+              original_delta_mi, timestamp, pair))
 
         self.conn.commit()
         return cursor.rowcount > 0

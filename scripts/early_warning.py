@@ -81,6 +81,7 @@ from solar_seed.monitoring import (
     CouplingMonitor,
     classify_trigger_kind,
     validate_roi_variance,
+    assess_measurement_quality,
     AnomalyStatus,
     BreakType,
     detect_artifact,
@@ -99,6 +100,7 @@ from solar_seed.data_sources import (
 )
 
 # External endpoints: defaults + config/endpoints.toml + user override
+from solar_seed.data_sources._timestamps import compute_time_spread_sec
 from solar_seed.endpoints import endpoint
 
 GOES_XRAY_URL = endpoint('goes_xray')
@@ -521,8 +523,12 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
 
         status = data.get('status')
 
-        # Determine quality_ok from validation checks
-        quality_ok = None
+        # Determine quality_ok from validation checks.
+        # assess_measurement_quality is the shared definition - it returns the
+        # reason alongside the verdict, so no branch can flag a row without
+        # saying why. The previous version evaluated the same three tests but
+        # only ever recorded a reason for the break_vetoed branch, leaving
+        # ~21% of all rows marked bad with veto_reason NULL.
         robustness_score = None
         sync_delta_s = time_spread_sec
 
@@ -530,18 +536,13 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
         if rob is not None:
             robustness_score = rob.get('change_pct')
 
-        if status == 'DATA_ERROR':
-            quality_ok = False
-        elif data.get('break_vetoed'):
-            quality_ok = False
-        else:
-            # Check individual tests
-            tests_ok = True
-            if rob is not None and rob.get('is_robust') is False:
-                tests_ok = False
-            if time_spread_sec is not None and time_spread_sec > 60:
-                tests_ok = False
-            quality_ok = tests_ok
+        quality = assess_measurement_quality(
+            time_spread_sec=time_spread_sec,
+            robustness_check=rob,
+            is_data_error=(status == 'DATA_ERROR'),
+            break_vetoed=data.get('break_vetoed'),
+        )
+        quality_ok = quality['quality_ok']
 
         # Store coupling measurement with resolution and quality fields
         db.insert_coupling(
@@ -564,7 +565,7 @@ def store_coupling_reading(timestamp: str, coupling: dict, xray: dict = None):
             # Without this the DB records quality_ok=0 with no reason attached,
             # which is how an inverted anti-spike filter stayed invisible for
             # three weeks (8959 rows, all veto_reason NULL).
-            veto_reason=data.get('break_vetoed'),
+            veto_reason=quality['veto_reason'],
         )
 
         # Auto-create prediction for ALERT/WARNING/ELEVATED status
@@ -2329,6 +2330,11 @@ def backfill(
 
         consecutive_failures = 0  # Reset on success
 
+        # Measure the spread of the 4k frames themselves. Without this the row
+        # keeps the 1k spread of the measurement it replaces - a value that no
+        # longer describes any image in the row.
+        jsoc_spread = compute_time_spread_sec((meta or {}).get('timestamps') or {})
+
         # Calculate MI for each pair
         for m in pairs:
             pair = m['pair']
@@ -2356,6 +2362,7 @@ def backfill(
                     original_delta_mi=m['delta_mi'],
                     new_mi_original=shuffle_result.mi_original,
                     baselines=baselines_4k,
+                    sync_delta_s=jsoc_spread,
                 )
 
                 change_pct = ((new_mi / m['delta_mi']) - 1) * 100 if m['delta_mi'] else 0

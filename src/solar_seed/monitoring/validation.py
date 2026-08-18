@@ -13,6 +13,8 @@ from .constants import (
     EXTREME_LOW_BASELINE_FRACTION,
     MIN_MI_THRESHOLD,
     MIN_ROI_STD,
+    ROBUSTNESS_MAX_CHANGE_PCT,
+    SYNC_SPREAD_MAX_SEC,
 )
 
 
@@ -123,4 +125,84 @@ def validate_mi_measurement(delta_mi: float, pair: str = None,
         'error_type': None,
         'error_reason': None,
         'is_extreme_low': is_extreme_low,
+    }
+
+
+def assess_measurement_quality(
+    *,
+    time_spread_sec: float = None,
+    robustness_check: dict = None,
+    is_data_error: bool = False,
+    break_vetoed=None,
+    inherited_reasons: str = None,
+) -> dict:
+    """
+    Decide quality_ok for a stored measurement AND say why.
+
+    This is the single definition of "is this row clean", shared by the live
+    monitor, the gap backfill and the 4k backfill. Every caller previously had
+    its own copy of `spread < 60`, and only one of the four failure branches
+    ever wrote a reason.
+
+    Why the reason matters: a bare quality_ok=0 is unfilterable. 12513 of the
+    12665 flagged rows in the database carry no reason at all, which is how an
+    inverted anti-spike filter stayed invisible for three weeks. A row that is
+    excluded must say what excluded it, or the exclusion cannot be reviewed.
+
+    Args:
+        time_spread_sec: Channel observation spread (artifact test A)
+        robustness_check: Result of the 2x2 binning check (artifact test C)
+        is_data_error: Measurement already classified as DATA_ERROR
+        break_vetoed: Truthy veto recorded by break detection
+        inherited_reasons: Reasons carried over from an earlier computation of
+            the same row (used by backfill, which recomputes only some tests)
+
+    Returns:
+        dict with 'quality_ok' (bool) and 'veto_reason' (str or None).
+        Multiple reasons are joined with '+' so the field stays greppable.
+    """
+    reasons = []
+
+    if inherited_reasons:
+        reasons.extend(
+            r for r in (x.strip() for x in inherited_reasons.split('+')) if r
+        )
+
+    if is_data_error:
+        reasons.append('data_error')
+
+    if break_vetoed:
+        # break_vetoed may be a bool flag or an explanatory string
+        reasons.append(
+            'break_vetoed' if break_vetoed is True else str(break_vetoed)
+        )
+
+    if time_spread_sec is not None and time_spread_sec > SYNC_SPREAD_MAX_SEC:
+        reasons.append(f'time_sync({time_spread_sec:.0f}s)')
+
+    if robustness_check is not None and robustness_check.get('is_robust') is False:
+        change = robustness_check.get('change_pct')
+        reasons.append(
+            f'robustness({change:.0f}%)' if change is not None else 'robustness'
+        )
+
+    # De-duplicate by reason KIND, not by exact string. The same finding can
+    # arrive twice in different detail - break detection reports a bare
+    # 'robustness' while the robustness check reports 'robustness(36%)' - and
+    # comparing full strings let both through as 'robustness+robustness(36%)'.
+    # Keep the most detailed variant of each kind, in order of first appearance.
+    best: dict[str, str] = {}
+    order: list[str] = []
+    for r in reasons:
+        kind = r.split('(')[0].strip()
+        if kind not in best:
+            order.append(kind)
+            best[kind] = r
+        elif len(r) > len(best[kind]):
+            best[kind] = r
+    unique = [best[k] for k in order]
+
+    return {
+        'quality_ok': not unique,
+        'veto_reason': '+'.join(unique) if unique else None,
     }

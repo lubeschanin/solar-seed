@@ -34,7 +34,11 @@ from .constants import (
     classify_phase_parallel,
     classify_divergence_type,
 )
-from .validation import validate_roi_variance, validate_mi_measurement
+from .validation import (
+    validate_roi_variance,
+    validate_mi_measurement,
+    assess_measurement_quality,
+)
 from .detection import (
     AnomalyStatus,
     BreakType,
@@ -75,6 +79,7 @@ __all__ = [
     'classify_divergence_type',       # Categorize divergences for validation
     # Validation
     'validate_roi_variance',
+    'assess_measurement_quality',
     'validate_mi_measurement',
     # Detection
     'AnomalyStatus',

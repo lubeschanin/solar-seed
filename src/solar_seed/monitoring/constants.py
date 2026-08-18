@@ -35,6 +35,28 @@ EXTREME_LOW_BASELINE_FRACTION = 0.3
 MIN_ROI_STD = 0.5        # DN - minimum std dev in residual ROI (after geometry subtraction)
 
 
+# Artifact Test A: channel time alignment
+# =======================================
+# The reviewer-proof artifact test requires the channels of a pair to be
+# observed within this many seconds of each other. It is a published pass
+# criterion, so the number does not move without the paper moving with it.
+#
+# This is deliberately NOT resolution-dependent. The stored spread is bimodal:
+# ~5 s when every channel is served from the same synoptic slot, and discrete
+# multiples of ~180 s when one channel's slot file is missing and the loader
+# falls back to a neighbouring slot. That is a real desync of the observation
+# times, not a property of 1k vs 4k - the 4k rows only appear to share the 1k
+# distribution because backfill used to leave sync_delta_s untouched.
+#
+# Failing this test marks the measurement, it does not delete it: the reason is
+# recorded in veto_reason so an analysis can decide for itself whether a 3-minute
+# channel offset matters for the question it is asking.
+SYNC_SPREAD_MAX_SEC = 60.0
+
+# Artifact Test C: 2x2 binning sensitivity (see validation/detection)
+ROBUSTNESS_MAX_CHANGE_PCT = 20.0
+
+
 # Status Thresholds (in sigma)
 # ============================
 # Status is decided on z = (ΔMI - baseline_mean) / baseline_sigma, NOT on a
